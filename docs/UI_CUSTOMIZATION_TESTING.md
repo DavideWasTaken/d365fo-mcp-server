@@ -2,7 +2,7 @@
 
 This fork adds **`verify_ui_customization`**, a local MCP tool for requirement-based UI cases. Two cases are recommended; one to five are supported. Build, synchronize and deploy the customization before explicitly requesting verification.
 
-**Experimental AI-guided verification** lets the AI already calling MCP inspect the application, choose observed controls and adapt its journey through short calls. **Deterministic `run`** executes a complete plan with selectors, bounded actions and assertions; existing plans remain supported. Neither workflow embeds a second model, requires another LLM API key or starts automatically after a build. Guided observations and optional screenshots are read by the client AI and consume its normal quota. Passing declared cases is evidence for those cases, not complete regression coverage.
+**AI-guided verification** lets the AI already calling MCP inspect the application, choose observed controls and adapt its journey through short calls. **Deterministic `run`** executes a complete plan with selectors, bounded actions and assertions; existing plans remain supported. Neither workflow embeds a second model, requires another LLM API key or starts automatically after a build. Guided observations and optional screenshots are read by the client AI and consume its normal quota. Passing declared cases is evidence for those cases, not complete regression coverage.
 
 ## Install this fork
 
@@ -75,7 +75,7 @@ Paths inside the profile resolve relative to the profile file. `headless:false` 
 
 An omitted channel now uses auto launch selection (Chromium first, then installed Edge on launch failure); use `channel:"chromium"` to disable fallback.
 
-## AI-guided first verification (experimental)
+## AI-guided first verification
 
 The existing client AI drives this workflow; no additional Playwright MCP server, embedded model or MCP sampling is needed. Keep your local MCP endpoint, for example **`http://localhost:8080/mcp`**. That address is the MCP server, not the Dynamics environment URL; D365 still comes from setup or the profile. Guided sessions persist across local HTTP requests and also support stdio. Remote/hosted guided access is rejected. Local HTTP retains the existing API-key configuration and verifies the real socket, Host and Origin; proxy headers do not grant local access.
 
@@ -227,7 +227,7 @@ Local HTTP cancellation supports aborting the active POST or calling `finish` wi
 
 The local report records the mission, declared build, actual journey, expected/observed outcomes, stopping reasons, counters and evidence identifiers. Measured criteria are labelled `MEASURED`. Criteria declared `kind:"ai_review"` at start can receive client-AI judgement with a reason and captured evidence IDs from the same case, taken after its latest interaction; they are labelled `AI_REVIEWED`. The server checks provenance and freshness, not the semantic correctness of that judgement. Choosing which control represents a requirement is still the calling AI's responsibility. PASS requires every precondition and criterion, with no uncertain writes; confirmed FAIL takes precedence over NOT_VERIFIED and PASS.
 
-This first version supports observed DOM controls, application dialogs and screenshots. Arbitrary coordinate clicks, desktop control, drag-and-drop, canvas-only controls without DOM targets, popup workflows and automatic acceptance of native browser confirmations are unsupported. Lookup/grid behavior must be observed on the actual page. Live D365FO, Edge, Entra/MFA and the chosen MCP client's cancellation behavior still need acceptance testing; local Chromium fixtures do not establish that compatibility. SQL remains optional for debug or unrelated prerequisites, never a substitute for a UI/X++ creation, defaulting or validation path under test.
+The tool supports observed DOM controls, application dialogs and screenshots. Arbitrary coordinate clicks, desktop control, drag-and-drop, canvas-only controls without DOM targets, popup workflows and automatic acceptance of native browser confirmations are unsupported. Lookup/grid behavior must be observed on the actual page. The maintainer confirmed successful use on the D365FO development VM; see [validation status](TESTING.md#fork-validation-status). SQL remains optional for debug or unrelated prerequisites, never a substitute for a UI/X++ creation, defaulting or validation path under test.
 
 ## Invoke the deterministic runner
 
@@ -334,16 +334,16 @@ This detects the listed DOM signatures, not every possible D365 error or a prove
 
 ## Validation scope
 
-### Retest after the dev feedback fixes
+### Troubleshooting
 
 Update the checkout, run `npm ci` and `npm run build`, then restart the local MCP. Configure `environment.uiBrowserChannel` as `msedge` on a dev machine that requires Edge. Fetch the guided contract again.
 
-1. Verify the existing order `G000260436` with a criterion declared `check:"value"` on its native field; expect PASS if that value is present. A separate deliberately incompatible `text` check must give `CHECK_NOT_APPLICABLE` / NOT_VERIFIED, never FAIL.
-2. Verify the empty-result alert with `check:"text"` and its observed exact text (or `match:"contains"` for additional message text), scoped to the intended grid. Compare against a deliberately different expected message to confirm a genuine mismatch still produces FAIL.
-3. Repeat human login in Edge. If it fails, return the tool's safe `diagnostic` and message: they report phase/code, attempted browser and blocked origin where applicable, excluding URL paths, query tokens, browser logs and credentials. Report files include the actual browser choice and available stopping reason.
+1. Use `check:"value"` to verify a native input field. An incompatible `text` check returns `CHECK_NOT_APPLICABLE` / NOT_VERIFIED; bind the criterion to a compatible observed control.
+2. Use `check:"text"` on an empty-result alert, with the observed exact text or `match:"contains"` for additional message text, scoped to the intended grid. A genuine mismatch produces FAIL.
+3. If human login in Edge fails, inspect the tool's safe `diagnostic` and message: they report phase/code, attempted browser and blocked origin where applicable, excluding URL paths, query tokens, browser logs and credentials. Report files include the actual browser choice and available stopping reason.
 
-Do not replay an uncertain write merely to repeat this acceptance check. The default is now 30 calls per case; reduce `limits.calls` when a shorter test suffices and prefer scoped observations. Measured `rowCount` is available with explicit rendered/total semantics above. Automatic active-form selection and dedicated column-filter actions remain outside this release.
+Do not replay an uncertain write during troubleshooting. The default is 30 calls per case; reduce `limits.calls` when a shorter test suffices and prefer scoped observations. Measured `rowCount` is available with explicit rendered/total semantics above. Automatic active-form selection and dedicated column-filter actions remain outside this release.
 
 Run the browser fixture checks with `npm run test:ui` after installing Chromium. Run the input/report tests with `npm run test:run -- tests/tools/verify-ui-customization.test.ts`.
 
-Automated fixture tests exercise guided snapshots, retained references, scope and row identity, password masking, company gates, cancellation, case isolation and the HTTP protocol, as well as Chromium interaction, same-origin and blocked redirects, native POST redirects/cookies, popup blocking, timeout behavior, visible scoping, text matching, saved plans and a simulated identity provider with session reuse. They do not prove compatibility with live D365FO, Edge-specific tenant policies or real Entra ID/MFA. Before relying on this fork for a real customization, run its cases against the deployed D365FO environment and inspect the evidence. Uncovered requirement criteria remain outside the verdict.
+Automated fixture tests exercise guided snapshots, retained references, scope and row identity, password masking, company gates, cancellation, case isolation and the HTTP protocol, as well as Chromium interaction, same-origin and blocked redirects, native POST redirects/cookies, popup blocking, timeout behavior, visible scoping, text matching, saved plans and a simulated identity provider with session reuse. Live development-machine validation is recorded in [Testing](TESTING.md#fork-validation-status). Each customization is still checked against its own deployed build and requirement criteria; uncovered criteria remain outside the verdict.

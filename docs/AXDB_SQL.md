@@ -87,7 +87,7 @@ Read-only metadata functions `COLLATIONPROPERTY`, `DATABASEPROPERTYEX` and `DB_N
 
 Use `schema` and the actual custom metadata before naming physical columns. Values are bound SQL parameters. Parameters are named without `@` in JSON and referenced with `@` in SQL. `bigint`/RecId and `decimal` use strings to preserve precision; decimal requires precision/scale, nvarchar requires size. Include explicit company filters where applicable; SQL does not inherit the active UI company. The SQL server/database and UI URL are separate configuration values: establish that they belong to the same environment before using SQL as UI test evidence.
 
-The first version supports local physical tables and SQL system catalog views. It excludes DDL, stored-procedure execution, dynamic SQL, transaction commands, cross-database references, SELECT INTO, user OUTPUT, query/table hints, user-defined functions, application views/synonyms and external tables. These restrictions are parsed as T-SQL syntax rather than guessed from the first word. Database permissions remain the authority; database triggers can have additional effects.
+The tool supports local physical tables and SQL system catalog views. It excludes DDL, stored-procedure execution, dynamic SQL, transaction commands, cross-database references, SELECT INTO, user OUTPUT, query/table hints, user-defined functions, application views/synonyms and external tables. These restrictions are parsed as T-SQL syntax rather than guessed from the first word. Database permissions remain the authority; database triggers can have additional effects.
 
 ## Results and execution semantics
 
@@ -99,6 +99,6 @@ A transaction belongs to one SQL connection, not to the browser. The SQL tool do
 
 ## Verification
 
-TypeScript tests cover optional setup, instance isolation, strict contracts, no-cache/no-retry behavior and bounded JSON. The standalone C# SQL host covers parser/parameters/serialization without D365 DLLs; optional integration tests require an explicitly configured disposable SQL fixture database. These checks do not prove access to your AxDB. Validate `status`, a SELECT and a targeted development write on the actual VM after building/configuring the bridge.
+TypeScript tests cover optional setup, instance isolation, strict contracts, no-cache/no-retry behavior and bounded JSON. The standalone C# SQL host covers parser/parameters/serialization without D365 DLLs; optional integration tests require an explicitly configured disposable SQL fixture database. The maintainer has validated the SQL workflow on the development VM; see [validation status](TESTING.md#fork-validation-status). On a new installation, use `status` to confirm the configured database and Windows identity before issuing queries or writes.
 
 For the SequentialAccess regression, [the SQL host's read-only smoke mode](../tests/axdb-sql-host/README.md#read-only-smoke-test-on-the-developer-vm) checks the real driver on your VM using `status` and constant SELECTs without modifying or reading business records. It covers text/binary streaming, NULL/empty values, mixed columns and size limits. After pulling a C# fix, rebuild/deploy the bridge and restart MCP; updating TypeScript alone leaves the old executable in use.

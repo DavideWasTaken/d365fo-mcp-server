@@ -2,6 +2,12 @@
 
 The project uses [Vitest](https://vitest.dev/). ~5,450 tests across ~370 files run without a live D365FO environment — all external dependencies (SQLite, filesystem, bridge, cache) are mocked.
 
+## Fork validation status
+
+On 2026-09-26, the maintainer confirmed that the updated fork worked end to end on the D365FO development VM after updating `main` through commit `a38669b3`. The confirmed workflow includes the UI customization tool, optional local AxDB SQL, and the build-to-UI flow with the matching IIS Express runtime restart. The local MCP endpoint is `http://localhost:8080/mcp`.
+
+This records the maintainer's live validation of that environment. Automated unit and browser fixtures provide separate regression coverage; supported operations and environment prerequisites are described in [UI customization testing](UI_CUSTOMIZATION_TESTING.md), [AxDB SQL](AXDB_SQL.md), and [build/runtime behavior](BUILD_FEEDBACK.md).
+
 ## Running tests
 
 ```bash
