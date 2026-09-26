@@ -31,6 +31,7 @@ const DEDUP_MAX_ENTRIES = 200;
  * the same read re-issued seconds apart with no write between — is unaffected.
  */
 export const MUTATING_TOOLS = new Set([
+  'axdb_sql',
   'verify_ui_customization',
   'd365fo_file',            // create / modify / delete / generate
   'generate_object',        // mode="scaffold" writes to disk
@@ -56,6 +57,7 @@ export function bumpWriteEpoch(): number {
 
 /** Tools whose repeated identical calls are legitimate — never dedup, never loop-hint. */
 export const DEDUP_EXCLUDED_TOOLS = new Set([
+  'axdb_sql',
   'verify_ui_customization',
   'd365fo_file', // create/modify/generate — never dedup writes
   'labels', 'undo_last_modification',

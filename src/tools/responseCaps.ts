@@ -57,6 +57,7 @@ const TOOL_CAP_SIZES: Record<string, number | 'uncapped'> = {
   get_workspace_info:               20000,
   // Strict contract JSON and bounded two-case evidence must stay complete.
   verify_ui_customization:          24000,
+  axdb_sql:                        'uncapped', // handler caps complete JSON, never cuts commit status or a row mid-value
   default:                          5000,
 };
 

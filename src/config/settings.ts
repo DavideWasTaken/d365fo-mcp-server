@@ -16,6 +16,8 @@
  * inputs, not configuration.
  */
 
+import { SQL_SETTINGS } from './sqlSettings.js';
+
 export type SettingType = 'string' | 'path' | 'boolean' | 'int' | 'list' | 'enum';
 
 /**
@@ -26,6 +28,7 @@ export type SettingType = 'string' | 'path' | 'boolean' | 'int' | 'list' | 'enum
 export type SettingTier = 'basic' | 'advanced' | 'secret' | 'env-only';
 
 export type SectionId =
+  | 'sql'
   | 'environment'
   | 'workspace'
   | 'naming'
@@ -87,6 +90,7 @@ export interface Section {
 }
 
 export const SECTIONS: Section[] = [
+  { id: 'sql', title: 'AxDB SQL (optional)', description: 'Windows-authenticated SQL access for development debugging and targeted data changes.' },
   {
     id: 'environment',
     title: 'D365FO environment',
@@ -130,6 +134,7 @@ export const SECTIONS: Section[] = [
 ];
 
 export const SETTINGS: Setting[] = [
+  ...SQL_SETTINGS,
   // ── environment ──────────────────────────────────────────────────────────
   {
     path: 'environment.uiTestUrl',
@@ -572,15 +577,15 @@ export const SETTINGS: Setting[] = [
     type: 'enum',
     label: 'Tool profile',
     description:
-      'How many tools this server advertises. "full" publishes all 21. "core" publishes only the plan → discover → ' +
-      'write → build → verify loop (16 tools) and leaves out the specialist ones (extension_info, analyze_code, ' +
+      'How many tools this server advertises. "full" publishes up to 22 tools (SQL only when configured). "core" publishes only the plan → discover → ' +
+      'write → build → verify loop (17 tools) and leaves out the specialist ones (extension_info, analyze_code, ' +
       'validate_code, security_info, run_systest_class). Worth switching ' +
       'when the workspace runs several MCP servers at once: hosts stop sending the tool catalogue inline past a ' +
       'limit (VS Code: ~100 tools) and make the model search for tools first, which costs a round trip per tool.',
     default: 'full',
     choices: [
-      { value: 'full', hint: 'all 21 tools' },
-      { value: 'core', hint: '16-tool create-build-and-verify loop' },
+      { value: 'full', hint: 'all 22 tools' },
+      { value: 'core', hint: '17-tool create-build-and-verify loop' },
     ],
   },
   {

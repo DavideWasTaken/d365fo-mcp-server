@@ -185,7 +185,8 @@ export function loadEnv(callerImportMetaUrl: string): void {
   // explicit config selects a different instance. Deliberate shell/ENV_FILE
   // overrides still apply; only the other installation's ambient fallback is dropped.
   if (!process.env.ENV_FILE && resolve(files.baseDir) !== resolve(envDir)) {
-    for (const key of ['D365FO_UI_TEST_URL', 'D365FO_UI_STORAGE_STATE', 'D365FO_UI_OUTPUT_DIR']) {
+    for (const key of ['D365FO_UI_TEST_URL', 'D365FO_UI_STORAGE_STATE', 'D365FO_UI_OUTPUT_DIR',
+      ...Object.keys(process.env).filter(key => key.startsWith('D365FO_SQL_'))]) {
       if (!fromRealEnv.has(key)) delete process.env[key];
     }
   }

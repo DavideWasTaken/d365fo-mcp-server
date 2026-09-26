@@ -80,7 +80,7 @@ describe('tool profile', () => {
     // trigger_db_sync were folded into d365fo_file(action="undo"),
     // get_workspace_info(changes=true) and build_d365fo_project(dbSync), all
     // three of which are already core. The loop lost no capability.
-    expect(core).toHaveLength(16);
+    expect(core).toHaveLength(17);
   });
 
   it('every CORE_TOOLS entry is a published tool (no ghosts after a rename)', () => {

@@ -35,6 +35,8 @@ import { buildProjectTool } from './sdlc/buildProject.js';
 import { dbSyncTool } from './sdlc/dbSync.js';
 import { runBpCheckTool } from './sdlc/runBpCheck.js';
 import { verifyUiCustomizationTool } from './sdlc/verifyUiCustomization.js';
+import { axdbSqlTool } from './sdlc/axdbSql.js';
+import { isAxDbConfigured } from '../config/axdbSql.js';
 import { sysTestRunnerTool } from './sdlc/sysTestRunner.js';
 import { reviewWorkspaceChangesTool } from './sdlc/reviewWorkspaceChanges.js';
 import { undoLastModificationTool } from './sdlc/undoLastModification.js';
@@ -145,13 +147,9 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
       configManager.setRuntimeContext({ workspacePath });
     }
 
-    // The C# bridge starts out-of-band, so the tool list can be live while
-    // `context.bridge` is still undefined. Wait for a startup that is in flight
-    // before the tool decides anything — otherwise a 2-second cold-start race is
-    // reported as "the object does not exist" / "check your config" (issue #826).
-    // Started here, awaited after the dbReady block, so the two waits overlap and
-    // a cold start costs max(db, bridge) rather than their sum.
+    // Overlap bridge startup with DB readiness; SQL contract/disabled calls need neither.
     const bridgeWait = BRIDGE_BACKED_TOOLS.has(toolName)
+      && (toolName !== 'axdb_sql' || (isAxDbConfigured() && request.params.arguments?.action !== 'contract'))
       ? { t0: Date.now(), outcome: awaitBridgeReady(context) }
       : null;
 
@@ -375,6 +373,7 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
       case 'run_bp_check':
         return await runBpCheckTool(request.params.arguments as any, context);
       case 'verify_ui_customization': return await verifyUiCustomizationTool(request.params.arguments, { signal: extra.signal });
+      case 'axdb_sql': return await axdbSqlTool(request.params.arguments, context);
       case 'run_systest_class':
         return await sysTestRunnerTool(request.params.arguments as any, context);
       case 'review_workspace_changes':

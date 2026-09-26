@@ -25,6 +25,7 @@ import { validateCodeTool } from './validateCode.js';
 import { prepareTool } from './prepare.js';
 
 import { verifyUiCustomizationTool } from './verifyUiCustomization.js';
+import { axdbSqlTool } from './axdbSql.js';
 
 export const toolSchemas = [
   searchTool,
@@ -48,4 +49,5 @@ export const toolSchemas = [
   validateCodeTool,
   prepareTool,
   verifyUiCustomizationTool,
+  axdbSqlTool,
 ];
