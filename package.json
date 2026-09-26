@@ -46,7 +46,7 @@
     "start": "node dist/index.js",
     "test": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:ui": "vitest run --config vitest.integration.config.ts tests/tools/ui-verification.integration.test.ts tests/tools/ui-authentication.integration.test.ts",
+    "test:ui": "vitest run --config vitest.integration.config.ts tests/tools/ui-verification.integration.test.ts tests/tools/ui-authentication.integration.test.ts tests/tools/ui-guided tests/server/ui-guided --maxWorkers=1",
     "extract-metadata": "tsx scripts/extract-metadata.ts",
     "build-database": "node --max-old-space-size=6144 --import tsx/esm scripts/build-database.ts",
     "build-fts": "node --max-old-space-size=6144 --import tsx/esm scripts/build-fts.ts",

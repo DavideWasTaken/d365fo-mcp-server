@@ -12,6 +12,7 @@ import { dirname, resolve } from 'path';
 import express from 'express';
 import compression from 'compression';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { GuidedSessionManager } from './tools/sdlc/uiVerification/guided/sessionManager.js';
 import { createXppMcpServer } from './server/mcpServer.js';
 import { createStreamableHttpTransport } from './server/transport.js';
 import { XppSymbolIndex } from './metadata/symbolIndex.js';
@@ -217,6 +218,8 @@ const shutdownCoordinator = createShutdownCoordinator({
   deadlineMs: Math.max(1_000, parseInt(process.env.SHUTDOWN_TIMEOUT_MS || '5000', 10) || 5_000),
 });
 const onShutdown = shutdownCoordinator.onShutdown;
+const uiGuidedManager = new GuidedSessionManager();
+onShutdown('guided UI browsers', () => uiGuidedManager.dispose());
 
 async function initializeServices() {
   // Attribution for "the first call took seconds" — off unless DEBUG_LOGGING is
@@ -254,7 +257,7 @@ async function initializeServices() {
     serverState.symbolIndex = symbolIndex;
     serverState.parser = parser;
 
-    const context: import('./types/context.js').XppServerContext = { symbolIndex, parser, workspaceScanner, hybridSearch };
+    const context: import('./types/context.js').XppServerContext = { symbolIndex, parser, workspaceScanner, hybridSearch, uiGuidedManager, uiTransport: isStdioMode ? 'stdio' : 'http' };
     const mcpServer = createXppMcpServer(context);
     log.ok('MCP Server initialized (write-only mode)');
     return { mcpServer, symbolIndex, parser, workspaceScanner, hybridSearch, context };
@@ -452,6 +455,8 @@ async function initializeServices() {
       parser,
       workspaceScanner,
       hybridSearch,
+      uiGuidedManager,
+      uiTransport: isStdioMode ? 'stdio' : 'http',
     };
     const mcpServer = createXppMcpServer(context);
 
@@ -730,6 +735,8 @@ async function main() {
       workspaceScanner: stubScanner,
       hybridSearch: stubHybrid,
       dbReady: dbReadyPromise,
+      uiGuidedManager,
+      uiTransport: 'stdio',
     };
     const mcpServer = createXppMcpServer(stubContext);
 

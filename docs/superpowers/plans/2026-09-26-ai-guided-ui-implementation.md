@@ -10,7 +10,7 @@
 
 ---
 
-Spec: [disegno dettagliato](../specs/2026-09-26-ai-guided-ui-design.md). Base: `a768940a`. Piano solamente: non eseguire ora modifiche funzionali. L'utente preferisce lavorare sul proprio `main`, senza nuove branch/worktree; questa preferenza prevale sul default della skill.
+Spec: [disegno dettagliato](../specs/2026-09-26-ai-guided-ui-design.md). Base: `a768940a`. Implementazione successivamente autorizzata con "procedi e pubblica". L'utente preferisce lavorare sul proprio `main`, senza nuove branch/worktree; questa preferenza prevale sul default della skill.
 
 ## Chunk 1: Fondazioni e contratto
 
@@ -214,3 +214,11 @@ MCP -> report dei casi, evidenze e contatori; browser chiuso
 ## Confini del primo rilascio
 
 Inclusi: esplorazione adattiva di controlli osservabili, screenshot per lettura/giudizio, lookup e griglie tramite passi generici, login/Edge, endpoint HTTP localhost con sessioni distinte, stdio, report e recuperi limitati. Non inclusi: modello interno, automazione credenziali/MFA, catalogo completo di ogni controllo D365, click libero a coordinate, UI desktop, accesso guidato HTTP remoto/hosted, conversione automatica dei percorsi in script stabili, nuove funzioni SQL. Questi confini evitano di ricostruire un intero prodotto computer-use prima di verificare il valore su due casi reali.
+
+## Registro di implementazione — 26 settembre 2026
+
+Implementati contratto guidato, manager persistente HTTP/stdio, browser osservabile Chromium/Edge, login umano, riferimenti freschi, azioni con ricevute, criteri immutabili, journal, report e documentazione. I file/test previsti sopra sono stati consolidati nei moduli `guided/` e nelle suite `ui-guided-contract`, `ui-guided-session`, `ui-guided-journal`, `ui-guided-observation`, `ui-guided-checks`, `ui-guided-http` e `uiRequestContext`; la checklist originale conserva il dettaglio del progetto, non un verbale di esecuzione comando per comando. Le modifiche sono raccolte in un commit di implementazione su main invece di singoli commit per modulo.
+
+Validazione: build, lint e controllo della documentazione configurazione con exit 0; suite unitaria completa disponibile con 6.532 test passati e 3 saltati; escluso esplicitamente il solo test `tests/bridge/formAuthoringDefaults.test.ts` perché qui manca .NET 8. Ulteriori regressioni mirate coprono prove AI obsolete, shutdown durante start e ricevute disponibili anche con disco non scrivibile. Suite integrazione completa: 62 test passati, 2 saltati, con Chromium reale e percorso HTTP fino al report. Revisione indipendente completata; corretti riferimenti obsoleti, risultati PASS precedenti a nuove azioni, assenza in iframe, letture credenziali, annullamenti, report dopo crash, ricevute e limiti del JSON.
+
+Accettazione reale D365/Edge/Entra e pulsante Stop del client sulla dev ancora pendenti: nessun accesso alla macchina di sviluppo da questa sessione. Pubblicazione come funzionalità sperimentale richiesta dall'utente. I test locali non dimostrano tutti i controlli/lookup/griglie di D365. La prima versione offre screenshot viewport (non ritagli arbitrari), nessuna esecuzione a coordinate e nessuna esportazione automatica dei percorsi guidati in piani deterministici.

@@ -4,7 +4,7 @@
 
 **Up to 22 AI tools for grounded X++ development, browser verification and optional AxDB SQL debugging**
 
-> **Both additional tools are included on this fork's `main`: `verify_ui_customization` and optional `axdb_sql`.** Run requirement-based browser cases after deployment (two recommended, one to five supported); use live SQL independently for debugging and targeted development data changes. SQL setup can be left blank and never replaces a UI creation/validation path under test. See [UI setup](docs/UI_CUSTOMIZATION_TESTING.md) and [SQL setup](docs/AXDB_SQL.md). The runners make no LLM calls. Install or update this fork from `main` using [Quick Start](#quick-start); no feature branch is needed. Live D365FO acceptance testing is still required.
+> **Both additional tools are included on this fork's `main`: `verify_ui_customization` and optional `axdb_sql`.** Use experimental AI-guided browser discovery or reusable deterministic plans after deployment (two cases recommended, one to five supported); use live SQL independently for debugging and targeted development data changes. SQL setup can be left blank and never replaces a UI creation/validation path under test. See [UI setup](docs/UI_CUSTOMIZATION_TESTING.md) and [SQL setup](docs/AXDB_SQL.md). Guided verification uses the AI already in your client; the server makes no LLM calls. Install or update this fork from `main` using [Quick Start](#quick-start); no feature branch is needed. Live D365FO acceptance testing is still required.
 
 [![npm](https://img.shields.io/npm/v/d365fo-mcp.svg?logo=npm&color=cb3837)](https://www.npmjs.com/package/d365fo-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -55,13 +55,13 @@ This server pre-indexes your entire D365FO installation (580 000+ symbols across
 | 🧩 **Form pattern engine** | Complete catalog of Microsoft form patterns and sub-patterns: recommends the right pattern, clones reference forms with datasource re-binding, **deterministically expands** patterns that have no reference form, **auto-repairs** a form's missing required controls, validates structure and blocks invalid writes |
 | ✍️ **Safe metadata writes** | C# bridge uses Microsoft's own `IMetadataProvider` wherever it can express the object; the few types and ops it cannot go through structured XML writers with ambiguity guards — never blind string replacement. Automatic `.rnrproj` registration, one-call undo |
 | 🏗️ **SDLC integration** | MSBuild compilation with structured diagnostics, DB sync, xppbp best practices, SysTestRunner — all from chat |
-| **Browser customization tests — `verify_ui_customization`** | One to five requirement-based cases (two recommended), reusable saved plans, configurable timeouts, visible form scoping and text `contains` checks. Short reports give steps, evidence and PASS / FAIL / NOT_VERIFIED. Separate interactive login supports Chromium or Microsoft Edge; test navigation allows same-origin redirects. The runner makes no LLM calls. [Setup](docs/UI_CUSTOMIZATION_TESTING.md) |
+| **Browser customization tests — `verify_ui_customization`** | Experimental guided sessions let your existing client AI observe controls, choose actions and check immutable requirement criteria. Deterministic saved plans remain supported. Both produce evidence and PASS / FAIL / NOT_VERIFIED for one to five cases. Human login works in owned Chromium/Edge; local HTTP and stdio are supported, with no embedded model. [Setup](docs/UI_CUSTOMIZATION_TESTING.md) |
 | **Optional AxDB SQL — `axdb_sql`** | Live queries, table columns/keys/defaults and transactional INSERT/UPDATE/DELETE for development debugging. No result cache or automatic write retry. Independent of browser tests: use UI/X++ when creation, validation or CoC is under test. [Setup](docs/AXDB_SQL.md) |
 | 📐 **X++ knowledge base** | Queryable rules: select grammar, CoC authoring, financial dimensions, the posting engine (`LedgerVoucher`), number sequences, `SysExtension`, Electronic Reporting, AX2012→D365FO migration — prevents deprecated APIs |
 
 ### Configure this fork's additional tools
 
-The UI tool needs the environment URL and an authenticated browser session; a missing URL is requested when a test runs. SQL is separately optional: leave the SQL server blank in setup to hide the tool and skip the remaining SQL questions.
+The UI tool needs the Dynamics environment URL; a missing URL is requested when a test starts. Guided mode opens a visible browser for human login and company discovery. Keep your local MCP endpoint, such as `http://localhost:8080/mcp`: it is separate from the Dynamics URL. Fetch `action="contract", topic="guided"` for the guided protocol; existing `run` plans retain their deterministic behavior. SQL is separately optional: leave the SQL server blank in setup to hide the tool and skip the remaining SQL questions.
 
 For SQL on a developer VM, the wizard asks for the server/instance (for example `localhost`), database (normally `AxDB`), whether to allow writes, and whether to trust a self-signed SQL certificate. Authentication uses the Windows account running MCP; it needs the corresponding database permissions. SQL username/password authentication is not implemented. The updated C# bridge must be built and deployed on the D365FO VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge). Full bridge compilation and live AxDB acceptance testing are still pending for this addition.
 
@@ -108,7 +108,7 @@ npx playwright install chromium
 npm run setup
 ```
 
-Setup asks for the optional UI environment URL and SQL connection settings. For browser tests, also [save an authenticated session](docs/UI_CUSTOMIZATION_TESTING.md#save-a-local-browser-login); Microsoft Edge can be selected through the browser profile. Point your editor's local MCP configuration at **this checkout's `dist/index.js`**, following [setup scenarios](docs/SETUP.md).
+Setup asks for the optional UI environment URL and SQL connection settings. For deterministic browser tests, also [save an authenticated session](docs/UI_CUSTOMIZATION_TESTING.md#save-a-local-browser-login); [guided mode](docs/UI_CUSTOMIZATION_TESTING.md#ai-guided-first-verification-experimental) handles human login in its owned visible browser. Microsoft Edge can be selected through the browser profile. Point your editor's local MCP configuration at **this checkout's `dist/index.js`**, following [setup scenarios](docs/SETUP.md).
 
 ### Update an existing checkout of this fork
 

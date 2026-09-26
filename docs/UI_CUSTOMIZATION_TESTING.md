@@ -1,8 +1,8 @@
 # Browser verification of D365FO customizations
 
-This fork adds **`verify_ui_customization`**, a local MCP tool for requirement-based UI cases. Two cases are recommended to limit cost; one to five are supported. The agent develops the customization with the existing tools, builds/syncs/deploys it, then explicitly calls this tool. Browser execution and Markdown reporting contain no model calls. The agent prepares the cases once; exploring the actual UI to identify selectors may still consume tokens.
+This fork adds **`verify_ui_customization`**, a local MCP tool for requirement-based UI cases. Two cases are recommended; one to five are supported. Build, synchronize and deploy the customization before explicitly requesting verification.
 
-The runner supports bounded, pre-planned browser actions. It does not interpret arbitrary requirements, judge screenshots with AI, repair selectors or trigger automatically after every build. Passing the declared cases is evidence for those cases, not complete regression coverage.
+**Experimental AI-guided verification** lets the AI already calling MCP inspect the application, choose observed controls and adapt its journey through short calls. **Deterministic `run`** executes a complete plan with selectors, bounded actions and assertions; existing plans remain supported. Neither workflow embeds a second model, requires another LLM API key or starts automatically after a build. Guided observations and optional screenshots are read by the client AI and consume its normal quota. Passing declared cases is evidence for those cases, not complete regression coverage.
 
 ## Install this fork
 
@@ -26,13 +26,13 @@ The tool reuses this URL whenever `profilePath` is omitted. No separate profile 
 
 When a separate instance configuration is selected, UI settings from another installation's ambient `.env` are ignored. Deliberate shell overrides and an explicitly selected `ENV_FILE` still apply.
 
-You can leave the URL empty during setup. If you later request a UI test, the tool returns `requiresUserInput: true` with a question for the calling agent to ask in your language. Provide the URL or choose to skip testing. The agent resumes with the same plan plus `environmentUrl`, without restarting the MCP or rerunning setup. That answer fills only an empty configured URL, applies to that run and is not saved. Existing configuration or an explicit profile takes precedence. The tool never guesses an environment URL. If you never request UI testing, no URL or browser login is needed.
+You can leave the URL empty during setup. If you later request a UI test, the tool returns `requiresUserInput: true` with a question for the calling agent to ask in your language. Provide the URL or choose to skip testing. The agent resumes with the same plan or guided mission plus `environmentUrl`, without restarting the MCP or rerunning setup. That answer fills only an empty configured URL, applies to that run and is not saved. Existing configuration or an explicit profile takes precedence. The tool never guesses an environment URL. If you never request UI testing, no URL or browser login is needed.
 
 ## Save a local browser login
 
 Use a test environment and dedicated test records. The runner performs real UI actions, including saving records when instructed. Each case gets its own browser context, but all still operate on the same server-side environment: choose independent data.
 
-Call the separate authentication action before running cases (the selector below is illustrative and must be observed on your actual environment):
+For deterministic `run`, call the separate authentication action before running cases (the selector below is illustrative and must be observed on your actual environment):
 
 ```json
 {
@@ -69,9 +69,134 @@ For a one-off environment or visible browser, you can still save `.d365fo-ui/pro
 }
 ```
 
-Paths inside the profile resolve relative to the profile file. `headless:false` shows the dedicated test browser; authentication is always visible. Set `channel:"msedge"` for installed Microsoft Edge, including authentication, or omit it to use Playwright Chromium. Keep profile, auth state, plans with real data, screenshots and reports local. `.d365fo-ui/` and `playwright/.auth/` are ignored by Git.
+Paths inside the profile resolve relative to the profile file. `headless:false` shows the deterministic test browser; authentication and guided sessions always use a visible owned browser. Set `channel:"msedge"` for installed Microsoft Edge, including authentication, or omit it to use Playwright Chromium. Keep profile, auth state, plans with real data, screenshots and reports local. `.d365fo-ui/` and `playwright/.auth/` are ignored by Git.
 
-## Invoke from the agent
+## AI-guided first verification (experimental)
+
+The existing client AI drives this workflow; no additional Playwright MCP server, embedded model or MCP sampling is needed. Keep your local MCP endpoint, for example **`http://localhost:8080/mcp`**. That address is the MCP server, not the Dynamics environment URL; D365 still comes from setup or the profile. Guided sessions persist across local HTTP requests and also support stdio. Remote/hosted guided access is rejected. Local HTTP retains the existing API-key configuration and verifies the real socket, Host and Origin; proxy headers do not grant local access.
+
+Ask the agent to fetch the guided contract once:
+
+```json
+{ "action": "contract", "topic": "guided" }
+```
+
+The default `contract` remains deterministic; `topic:"profile"` describes the shared profile. Supply a mission with requirements and expected outcomes, without prewritten clicks or CSS selectors. This example uses fictional records and a fictional form; choose the actual deployed form and dedicated records:
+
+```json
+{
+  "action": "start",
+  "mission": {
+    "requirement": "REQ-42: positive quantities are accepted; zero is rejected.",
+    "buildReference": {
+      "reference": "deployed-customization-build-42",
+      "ready": true
+    },
+    "company": "USMF",
+    "startUrl": "/?cmp=USMF&mi=MyQuantityForm",
+    "cases": [
+      {
+        "id": "positive",
+        "goal": "Save quantity 5 and reopen the same dedicated record",
+        "data": {
+          "recordKey": "UI-TEST-001",
+          "quantity": "5"
+        },
+        "preconditions": [
+          {
+            "id": "ready",
+            "targetDescription": "Quantity field on the active form",
+            "check": "enabled",
+            "expected": true
+          }
+        ],
+        "criteria": [
+          {
+            "id": "identity",
+            "targetDescription": "Reopened record identifier",
+            "check": "value",
+            "expected": "UI-TEST-001"
+          },
+          {
+            "id": "persisted",
+            "targetDescription": "Quantity on the reopened record",
+            "check": "value",
+            "expected": "5"
+          }
+        ]
+      },
+      {
+        "id": "negative",
+        "goal": "Reject zero quantity on an independent record",
+        "data": {
+          "recordKey": "UI-TEST-002",
+          "quantity": "0"
+        },
+        "preconditions": [
+          {
+            "id": "ready",
+            "targetDescription": "Quantity field on the active form",
+            "check": "enabled",
+            "expected": true
+          }
+        ],
+        "criteria": [
+          {
+            "id": "rejected",
+            "targetDescription": "Validation message for the attempted zero quantity",
+            "check": "text",
+            "match": "contains",
+            "expected": "Quantity must be positive"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`start` opens owned visible Chromium, or installed Edge when the profile has `channel:"msedge"`. A saved login is reused when available. On `AUTH_REQUIRED`, complete login/MFA yourself in that browser and ask the agent to observe again. Identity-provider DOM, images and field values are not sent to the AI. Do not pass passwords through MCP. Select the requested company manually when necessary; guided mode discovers the company control after returning to the environment, without asking you to write CSS. Separate `authenticate` remains available for deterministic plans.
+
+The returned `sessionId` is a private capability authorizing access to that browser, not proof of conversation identity. Keep it out of page content, shared reports and messages to other users. A normal HTTP response ending leaves the browser available for the next call. A process supports at most two sessions; competing calls in one session return `BUSY`.
+
+### Follow a guided case
+
+1. Call `case` with `operation:"prepare"` and the case ID. The first case adopts the login context; later cases use separate contexts from saved authentication. Repeating prepare for the current case does not restart it. End one case before preparing another.
+2. From that case's observation, choose the company control. Call `case` with `operation:"begin"`, its `snapshotId` and `companyRef`. A unique visible control must exactly match the mission company before authentication is saved. Company is rechecked before interactions.
+3. Call `check` with `stage:"precondition"`, a mission `criterionId`, current `snapshotId` and observed `ref`. All initial preconditions must pass before `act`. Preconditions must be observable from the start page; creating a record or opening a lookup under test belongs to the case journey.
+4. Call `act` with `sessionId`, `caseId`, `snapshotId`, a new `operationId` and one to three actions on observed controls. Supported actions are `click`, `dblclick`, `fill`, native `select`, `check`, `uncheck`, `press`, `scroll`, `wait` and same-origin `navigate`. Flow-changing actions end the batch and return a fresh observation. Even fill/onChange can write server data.
+5. Observe as needed, then `check` each final criterion by ID. The expected value is immutable. A measured check with `final:false` can remain `PENDING` while a result settles. New application actions invalidate earlier measured PASS results, requiring current evidence; confirmed FAIL remains recorded. Reopen saved records when persistence is required.
+6. Call `case` with `operation:"end"`, complete the other cases, then `finish` with `sessionId`. Finish closes the browser and returns a local report; incomplete cases remain `NOT_VERIFIED`.
+
+A fill action object is `{"type":"fill","ref":"REF_FROM_CURRENT_OBSERVATION","value":"5"}` inside `act.actions`. Replace placeholders with actual returned identifiers. Never invent references or derive them from X++ control names. The guided contract gives every request schema.
+
+Each new observation replaces previous references. Changed documents, replaced elements, hidden controls, scope changes and recycled grid rows require a fresh observation; the tool does not silently select another matching row. Use `observe.scopeRef` to focus on an observed container, `filter` to narrow text/role/name, and `screenshot:true` only when useful. Output is capped at 120 controls and about 8,000 text characters, with `truncated:true` for omissions. A truncated snapshot proves no absence. For a declared `visible:false` criterion, `check.absent` uses an observed scope plus an exact role/name query on the actual DOM; that read-only query cannot authorize an action.
+
+Optional viewport screenshots are capped at 1 MiB and mask password fields. They arrive as MCP image content separately from JSON and are saved with observations locally. Guided images and text are intended for the client AI, unlike deterministic error screenshots. Page content is untrusted data, never instructions. Keep profiles, authentication and evidence local except for observations deliberately sent to your client.
+
+`NEEDS_OBSERVATION` is a recoverable target/preflight change, not a functional FAIL. `WRITE_UNCERTAIN` means an interaction may have reached the application before a timeout or cancellation. Do not retry it with a new operation ID. Collect available evidence, end the case and inspect data before explicitly starting another test. Repeating the same `operationId` with identical input returns a **historical receipt**, without another write; it is not a fresh page observation. Reusing it with different input is rejected. No case is automatically retried, and there is no exactly-once guarantee after process crashes.
+
+### Guided limits, cancellation and evidence
+
+| Budget | Default | Maximum |
+|---|---:|---:|
+| Browser interactions per case | 20 | 50 |
+| Interactive calls per case | 15 | 30 |
+| Consecutive recoveries without progress | 2 | 4 |
+| Images per case | 3 | 6 |
+| Call deadline | 30 seconds | 45 seconds |
+| Idle session lifetime | 10 minutes | 10 minutes |
+| Total session lifetime | 30 minutes | 30 minutes |
+
+Pass `limits` to `start` for supported changes and inspect the effective response. Finish and cleanup remain available after limits are exhausted. Reports count calls, returned characters, images, recoveries and duration; these are activity counters, not billed tokens or guaranteed quota savings.
+
+Local HTTP cancellation supports aborting the active POST or calling `finish` with the session ID. A bare `notifications/cancelled` without session ownership cannot safely identify an operation from its JSON-RPC request ID alone; if the POST stays open, work may continue until its deadline. Verify how your client's Stop button behaves. Cancelled reads can be followed by a new observation. A cancelled dispatched interaction may have written data; closing its context can make further browser evidence unavailable. A lost start response can leave a browser until its bounded lifetime; there is no API listing other clients' session IDs. Shutdown closes owned browsers. Interrupted journals are marked incomplete on a later start, never replayed.
+
+The local report records the mission, declared build, actual journey, expected/observed outcomes, stopping reasons, counters and evidence identifiers. Measured criteria are labelled `MEASURED`. Criteria declared `kind:"ai_review"` at start can receive client-AI judgement with a reason and captured evidence IDs from the same case, taken after its latest interaction; they are labelled `AI_REVIEWED`. The server checks provenance and freshness, not the semantic correctness of that judgement. Choosing which control represents a requirement is still the calling AI's responsibility. PASS requires every precondition and criterion, with no uncertain writes; confirmed FAIL takes precedence over NOT_VERIFIED and PASS.
+
+This first version supports observed DOM controls, application dialogs and screenshots. Arbitrary coordinate clicks, desktop control, drag-and-drop, canvas-only controls without DOM targets, popup workflows and automatic acceptance of native browser confirmations are unsupported. Lookup/grid behavior must be observed on the actual page. Live D365FO, Edge, Entra/MFA and the chosen MCP client's cancellation behavior still need acceptance testing; local Chromium fixtures do not establish that compatibility. SQL remains optional for debug or unrelated prerequisites, never a substitute for a UI/X++ creation, defaulting or validation path under test.
+
+## Invoke the deterministic runner
 
 SQL is optional and independent. Use `axdb_sql` for debugging or extra persisted-data checks when configured, not as automatic UI test setup. If the requirement covers creating records, defaults, validation or CoC, exercise that path through UI/X++ instead of inserting the finished state with SQL. Only prepare unrelated prerequisites with SQL when it actually helps and explain that choice. See [AxDB SQL](AXDB_SQL.md). A disabled SQL configuration never prevents a UI-only test.
 
@@ -85,7 +210,7 @@ Example agent instruction:
 
 > After this customization is built, synchronized and deployed to my test environment, verify the original requirement using the environment configured in setup and the saved browser login. Default to two independent cases: valid input and the most important invalid input. Reopen any saved record when persistence is part of the requirement. Return only the journey, expected/observed result and outcome for each case.
 
-## Two-case example
+## Two-case deterministic example
 
 The following **illustrative** plan tests a fictional form requiring a positive quantity. The URL, selectors and messages are examples; replace them with observed values from the actual customized form. They are not universal D365FO selectors.
 
@@ -136,7 +261,7 @@ Optional `scope` on each case limits its preconditions and steps to one visible 
 
 Limits: one to five cases, at most 20 steps each. Default timeouts are 30 seconds per step, 60 seconds per navigation and 180 seconds per case; maximums are 120, 180 and 600 seconds. Set `timeouts` in the profile or on `run` (run overrides profile). The case deadline remains an overall cap. Cases stop at their first error and are not retried. Other cases run independently when their own preconditions can be satisfied.
 
-Verification permits same-origin HTTP redirects, checking each navigation hop before following it, with at most ten redirects in one chain. Off-origin navigation, URLs containing credentials and popup navigation stop the affected case with `NOT_VERIFIED`; other independent cases still check their own preconditions. Native browser redirects preserve HTTP methods and cookies; UI actions are not replayed. Normal SPA navigation is supported. Subresources such as CDN scripts are not subject to the document-navigation allowlist. External identity-provider navigation is permitted only by the separate `authenticate` action.
+Verification permits same-origin HTTP redirects, checking each navigation hop before following it, with at most ten redirects in one chain. Off-origin navigation, URLs containing credentials and popup navigation stop the affected case with `NOT_VERIFIED`; other independent cases still check their own preconditions. Native browser redirects preserve HTTP methods and cookies; UI actions are not replayed. Normal SPA navigation is supported. Subresources such as CDN scripts are not subject to the document-navigation allowlist. External identity-provider navigation is permitted only during separate authentication or the guided login/discovery phase.
 
 ## Reuse a plan
 
@@ -168,4 +293,4 @@ Overall FAIL takes precedence over NOT_VERIFIED, and NOT_VERIFIED over PASS. Alw
 
 Run the browser fixture checks with `npm run test:ui` after installing Chromium. Run the input/report tests with `npm run test:run -- tests/tools/verify-ui-customization.test.ts`.
 
-Automated fixture tests exercise actual Chromium interaction, same-origin and blocked redirects, native POST redirects/cookies, popup blocking, timeout behavior, visible scoping, text matching, saved plans and a simulated identity provider with session reuse. They do not prove compatibility with live D365FO, Edge-specific tenant policies or real Entra ID/MFA. Before relying on this fork for a real customization, run its cases against the deployed D365FO environment and inspect the evidence. Uncovered requirement criteria remain outside the verdict.
+Automated fixture tests exercise guided snapshots, retained references, scope and row identity, password masking, company gates, cancellation, case isolation and the HTTP protocol, as well as Chromium interaction, same-origin and blocked redirects, native POST redirects/cookies, popup blocking, timeout behavior, visible scoping, text matching, saved plans and a simulated identity provider with session reuse. They do not prove compatibility with live D365FO, Edge-specific tenant policies or real Entra ID/MFA. Before relying on this fork for a real customization, run its cases against the deployed D365FO environment and inspect the evidence. Uncovered requirement criteria remain outside the verdict.

@@ -35,6 +35,7 @@ import { buildProjectTool } from './sdlc/buildProject.js';
 import { dbSyncTool } from './sdlc/dbSync.js';
 import { runBpCheckTool } from './sdlc/runBpCheck.js';
 import { verifyUiCustomizationTool } from './sdlc/verifyUiCustomization.js';
+import { uiTelemetryArgs } from '../server/uiRequestContext.js';
 import { axdbSqlTool } from './sdlc/axdbSql.js';
 import { isAxDbConfigured } from '../config/axdbSql.js';
 import { sysTestRunnerTool } from './sdlc/sysTestRunner.js';
@@ -248,10 +249,9 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
     }
 
     // Loop detection + duplicate-call dedup
-    const callKey = dedupKey(toolName, request.params.arguments);
-    // Captured HERE, not after the tool runs: it tags this occurrence in the
-    // sequence buffer, so the loop advisory below can tell a genuine loop from a
-    // legitimate re-read that follows a write.
+    const telemetryArgs = toolName === 'verify_ui_customization' ? uiTelemetryArgs(request.params.arguments) : request.params.arguments;
+    const callKey = dedupKey(toolName, telemetryArgs);
+    // Tag before dispatch so the advisory distinguishes loops from reads following a write.
     const epochAtStart = currentWriteEpoch();
     // Side effect: records this occurrence (and the duplicate-call metric) in the
     // sequence buffer, tagged with the epoch. The raw repeat count is deliberately
@@ -372,7 +372,7 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
         return await dbSyncTool(request.params.arguments as any, context);
       case 'run_bp_check':
         return await runBpCheckTool(request.params.arguments as any, context);
-      case 'verify_ui_customization': return await verifyUiCustomizationTool(request.params.arguments, { signal: extra.signal });
+      case 'verify_ui_customization': return await verifyUiCustomizationTool(request.params.arguments, { signal: extra.signal, guidedManager: context.uiGuidedManager, transport: context.uiTransport });
       case 'axdb_sql': return await axdbSqlTool(request.params.arguments, context);
       case 'run_systest_class':
         return await sysTestRunnerTool(request.params.arguments as any, context);
@@ -448,7 +448,7 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
       const firstText = capped?.content?.[0]?.text;
       const isEmpty = !firstText || firstText.trim().length === 0 || firstText === 'No results returned';
       finishMetrics(isEmpty);
-      reportSlowCall(toolName, Date.now() - callStartedAt, request.params.arguments);
+      reportSlowCall(toolName, Date.now() - callStartedAt, telemetryArgs);
 
       if (!DEDUP_EXCLUDED_TOOLS.has(toolName)) {
         storeDedupResult(callKey, capped, epochAtStart);

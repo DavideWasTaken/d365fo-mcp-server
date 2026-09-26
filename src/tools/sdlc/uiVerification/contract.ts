@@ -119,7 +119,7 @@ export const ProfileSchema = z
   })
   .strict();
 export const InputSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('contract') }).strict(),
+  z.object({ action: z.literal('contract'), topic: z.enum(['deterministic', 'guided', 'profile']).optional() }).strict(),
   z
     .object({
       action: z.literal('run'),

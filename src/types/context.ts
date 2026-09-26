@@ -31,6 +31,8 @@ export interface EditorContext {
 }
 
 export interface XppServerContext {
+  uiGuidedManager?: import('../tools/sdlc/uiVerification/guided/sessionManager.js').GuidedSessionManager;
+  uiTransport?: 'http' | 'stdio';
   symbolIndex: XppSymbolIndex;
   parser: XppMetadataParser;
   workspaceScanner: WorkspaceScanner;
@@ -58,5 +60,4 @@ export interface XppServerContext {
    */
   dbReady?: Promise<void>;
 }
-
 
