@@ -70,6 +70,40 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 describe('guided browser observed targets', () => {
+  it('publishes native field values with a value check hint, never as misleading text', async () => {
+    const browser = await open();
+    try {
+      const snapshot = await browser.observe();
+      const quantity = snapshot.nodes.find(n => n.name === 'Quantity')!;
+      expect(quantity.value).toBe('1');
+      expect(quantity.recommendedCheck).toBe('value');
+      expect(quantity.text).toBeUndefined();
+    } finally {
+      await browser.close();
+    }
+  });
+  it('distinguishes select values, textarea contents, empty inputs and checkbox checks', async () => {
+    const browser = await open();
+    try {
+      await browser.page.setContent(
+        '<label>Choice<select><option value="A">Visible label</option></select></label><label>Notes<textarea>Edited notes</textarea></label><label>Empty<input value=""></label><label>Flag<input type="checkbox"></label>',
+      );
+      const snapshot = await browser.observe();
+      for (const [name, value, hint] of [
+        ['Choice', 'A', 'value'],
+        ['Notes', 'Edited notes', 'value'],
+        ['Empty', '', 'value'],
+        ['Flag', 'on', 'checked'],
+      ]) {
+        const node = snapshot.nodes.find(n => n.name === name)!;
+        expect(node.value).toBe(value);
+        expect(node.recommendedCheck).toBe(hint);
+        expect(node.text).toBeUndefined();
+      }
+    } finally {
+      await browser.close();
+    }
+  });
   it('supports public AI JSON snapshots and reference lookup with installed Chromium', async () => {
     const browser = await chromium.launch({ headless: true });
     try {

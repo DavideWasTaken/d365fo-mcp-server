@@ -155,6 +155,21 @@ export const SETTINGS: Setting[] = [
     },
   },
   {
+    path: 'environment.uiBrowserChannel',
+    env: 'D365FO_UI_BROWSER_CHANNEL',
+    section: 'environment',
+    tier: 'basic',
+    type: 'enum',
+    label: 'Browser for UI tests',
+    description: 'Auto prefers Playwright Chromium and tries installed Microsoft Edge if Chromium cannot launch. Explicit Chromium or Edge never switches browsers. Applies to normal setup; explicit UI profiles keep their own browser choice.',
+    default: 'auto',
+    choices: [
+      { value: 'auto', hint: 'Chromium, then installed Edge on launch failure' },
+      { value: 'chromium', hint: 'Playwright Chromium only' },
+      { value: 'msedge', hint: 'Installed Microsoft Edge only' },
+    ],
+  },
+  {
     path: 'environment.uiStorageState',
     env: 'D365FO_UI_STORAGE_STATE',
     section: 'environment',

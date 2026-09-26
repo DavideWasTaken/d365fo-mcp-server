@@ -1,11 +1,13 @@
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { type Browser, type BrowserContext, type Page } from 'playwright';
 import { PlanSchema, type Plan, type Assertion, type Step } from './contract.js';
 import { allowedNavigationUrl, installNavigationGuard } from './navigation.js';
 import { uniqueVisible, visibleMatches } from './locators.js';
 import { resolveUiProfile } from './profile.js';
+import { assertCheckApplicable } from './checkApplicability.js';
+import { launchUiBrowser } from './browserLaunch.js';
 import { aggregateStatus, renderReport, type CaseResult, type VerificationReport, type StepResult } from './report.js';
 
 export interface RunOptions {
@@ -32,6 +34,7 @@ async function observe(page: Page, a: Assertion, scope?: string): Promise<string
     return count === 1;
   }
   const l = await uniqueVisible(page, a.selector, scope);
+  await assertCheckApplicable(l, a.check);
   switch (a.check) {
     case 'enabled':
       return l.isEnabled();
@@ -185,7 +188,15 @@ export async function runVerification(
       (!state.cookies.length && !state.origins.length)
     )
       throw new Error('Saved authentication state is missing or empty');
-    browser = await chromium.launch({ headless: profile.headless ?? true, channel: profile.channel, timeout: stepMs });
+    const launched = await launchUiBrowser({
+      headless: profile.headless ?? true,
+      channel: profile.channel,
+      signal: options.signal,
+      deadline: Date.now() + stepMs,
+    });
+    browser = launched.browser;
+    report.browserChannel = launched.browserChannel;
+    report.browserFallback = launched.browserFallback;
     for (const [index, c] of plan.cases.entries()) {
       const caseStart = Date.now();
       const result: CaseResult = { name: c.name, status: 'NOT_VERIFIED', durationMs: 0, steps: [] };

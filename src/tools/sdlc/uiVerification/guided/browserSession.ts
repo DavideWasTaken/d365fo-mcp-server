@@ -2,9 +2,11 @@ import { readFile, mkdir, writeFile, rm } from 'node:fs/promises';
 import { renameSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { chromium, type Browser, type BrowserContext, type ElementHandle, type Page } from 'playwright';
+import { type Browser, type BrowserContext, type ElementHandle, type Page } from 'playwright';
 import { MissingUiEnvironmentUrl, resolveUiProfile } from '../profile.js';
-import { allowedNavigationUrl, installNavigationGuard } from '../navigation.js';
+import { allowedNavigationUrl, defaultAuthenticationOrigins, installNavigationGuard } from '../navigation.js';
+import { launchUiBrowser } from '../browserLaunch.js';
+import { formatUiDiagnostic, safeUiDiagnostic, type UiDiagnostic, type UiPhase } from '../diagnostics.js';
 import {
   ObservedTargets,
   GuidedBrowserError,
@@ -40,6 +42,8 @@ export class GuidedBrowser {
   private cleanupGuard?: () => Promise<void>;
   private closing?: Promise<void>;
   private stopped?: string;
+  private stoppedDiagnostic?: UiDiagnostic;
+  private phase: UiPhase = 'context';
   private caseId?: string;
   private operation?: { signal?: AbortSignal; deadline: number };
   private seenCases = new Set<string>();
@@ -51,6 +55,8 @@ export class GuidedBrowser {
     readonly profile: Profile,
     private readonly browser: Browser,
     private readonly options: GuidedBrowserOptions,
+    readonly browserChannel: string,
+    readonly browserFallback?: string,
   ) {
     this.origin = new URL(profile.baseUrl).origin;
     this.startUrl = allowedNavigationUrl(options.startUrl ?? profile.baseUrl, [this.origin], profile.baseUrl);
@@ -65,6 +71,8 @@ export class GuidedBrowser {
     let browser: Browser | undefined;
     let expired = false;
     const timeoutMs = Math.max(1, Math.min(options.timeoutMs ?? 30000, 45000));
+    const deadline = Date.now() + timeoutMs;
+    let phase: UiPhase = 'profile';
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
@@ -72,18 +80,21 @@ export class GuidedBrowser {
           const profile = await resolveUiProfile(profilePath, environmentUrl);
           if (expired || options.signal?.aborted)
             throw new GuidedBrowserError('NOT_VERIFIED', 'Guided browser start cancelled');
-          browser = await chromium.launch({
+          phase = 'launch';
+          const launched = await launchUiBrowser({
             headless: options.headless ?? false,
             channel: profile.channel,
-            timeout: timeoutMs,
+            signal: options.signal,
+            deadline,
           });
+          browser = launched.browser;
           if (expired || options.signal?.aborted) {
             await browser.close();
             throw new GuidedBrowserError('NOT_VERIFIED', 'Guided browser start cancelled');
           }
-          result = new GuidedBrowser(profile, browser, options);
-          result.setOperation(options.signal, timeoutMs);
-          await result.newContext(() => result!.checkOperation(), timeoutMs);
+          result = new GuidedBrowser(profile, browser, options, launched.browserChannel, launched.browserFallback);
+          result.setOperation(options.signal, Math.max(1, deadline - Date.now()));
+          await result.newContext(() => result!.checkOperation(), Math.max(1, deadline - Date.now()));
           result.setOperation();
           result.ensureOpen();
           return result;
@@ -100,10 +111,8 @@ export class GuidedBrowser {
     } catch (error) {
       await browser?.close().catch(() => {});
       if (error instanceof GuidedBrowserError || error instanceof MissingUiEnvironmentUrl) throw error;
-      throw new GuidedBrowserError(
-        'NOT_VERIFIED',
-        'Guided browser could not start; check the profile, saved authentication and browser installation',
-      );
+      const diagnostic = result?.stoppedDiagnostic ?? safeUiDiagnostic(error, result?.phase ?? phase);
+      throw new GuidedBrowserError('NOT_VERIFIED', result?.stopped ?? formatUiDiagnostic(diagnostic), diagnostic);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -111,9 +120,10 @@ export class GuidedBrowser {
   private ensureOpen(): void {
     if (this.options.signal?.aborted) this.abort();
     if (this.stopped || this.page?.isClosed())
-      throw new GuidedBrowserError('NOT_VERIFIED', this.stopped ?? 'Guided browser is closed');
+      throw new GuidedBrowserError('NOT_VERIFIED', this.stopped ?? 'Guided browser is closed', this.stoppedDiagnostic);
   }
-  private stop(reason: string): void {
+  private stop(reason: string, diagnostic?: UiDiagnostic): void {
+    if (!this.stopped) this.stoppedDiagnostic = diagnostic;
     this.stopped ??= reason;
     this.closing ??= this.browser.close().catch(() => {});
   }
@@ -128,7 +138,7 @@ export class GuidedBrowser {
   }
   private checkOperation(operation = this.operation, deadline = operation?.deadline ?? Infinity): void {
     if (this.options.signal?.aborted) this.abort();
-    if (this.stopped) throw new GuidedBrowserError('NOT_VERIFIED', this.stopped);
+    if (this.stopped) throw new GuidedBrowserError('NOT_VERIFIED', this.stopped, this.stoppedDiagnostic);
     if (operation?.signal?.aborted || (operation && operation !== this.operation) || Date.now() >= deadline)
       throw new GuidedBrowserError('CANCELLED', 'Guided browser operation cancelled or its deadline expired');
   }
@@ -153,18 +163,17 @@ export class GuidedBrowser {
       this.ensureOpen();
       return value;
     } catch (error) {
-      if (this.stopped) throw new GuidedBrowserError('NOT_VERIFIED', this.stopped);
+      if (this.stopped) throw new GuidedBrowserError('NOT_VERIFIED', this.stopped, this.stoppedDiagnostic);
       if (error instanceof GuidedBrowserError) throw error;
-      throw new GuidedBrowserError(
-        'NOT_VERIFIED',
-        'Browser operation could not be completed; request a fresh observation or restart the session',
-      );
+      const diagnostic = safeUiDiagnostic(error, 'operation');
+      throw new GuidedBrowserError('NOT_VERIFIED', formatUiDiagnostic(diagnostic), diagnostic);
     } finally {
       if (timer) clearTimeout(timer);
       if (abort) operation?.signal?.removeEventListener('abort', abort);
     }
   }
   private async newContext(check = () => this.checkOperation(), timeoutMs = 30000): Promise<void> {
+    this.phase = 'storage';
     let state: Awaited<ReturnType<BrowserContext['storageState']>> | undefined;
     try {
       state = JSON.parse(await readFile(this.profile.storageState, 'utf8'));
@@ -172,6 +181,7 @@ export class GuidedBrowser {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     check();
+    this.phase = 'context';
     this.context = await this.browser.newContext({
       storageState: state,
       serviceWorkers: 'block',
@@ -205,10 +215,11 @@ export class GuidedBrowser {
     this.registry = new ObservedTargets(this.page);
     this.cleanupGuard = await installNavigationGuard(
       this.page,
-      [this.origin, ...(this.profile.authenticationOrigins ?? ['https://login.microsoftonline.com'])],
-      reason => this.stop(reason),
+      [this.origin, ...(this.profile.authenticationOrigins ?? defaultAuthenticationOrigins)],
+      (reason, diagnostic) => this.stop(reason, diagnostic),
     );
     check();
+    this.phase = 'navigation';
     await this.page.goto(this.startUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     check();
   }
@@ -315,7 +326,9 @@ export class GuidedBrowser {
       const binding = await cloneTarget(target);
       let temporaryPath: string | undefined;
       try {
-        const newGuard = await installNavigationGuard(this.page, [this.origin], reason => this.stop(reason));
+        const newGuard = await installNavigationGuard(this.page, [this.origin], (reason, diagnostic) =>
+          this.stop(reason, diagnostic),
+        );
         await this.cleanupGuard?.();
         this.cleanupGuard = newGuard;
         check();

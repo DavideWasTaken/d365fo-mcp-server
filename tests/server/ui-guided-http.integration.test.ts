@@ -129,6 +129,7 @@ it('drives a real browser over independent HTTP POSTs, rejects foreign origins a
     ];
     const start = await parsed({ action: 'start', mission, profilePath });
     expect(start.sessionId).toMatch(/^[a-f0-9]{64}$/);
+    expect(start.browserChannel).toBe('chromium');
     expect(signals[0].aborted).toBe(false);
     const sessionId = start.sessionId,
       base = { sessionId, caseId: 'save' };
@@ -177,6 +178,7 @@ it('drives a real browser over independent HTTP POSTs, rejects foreign origins a
     const finished = await parsed({ action: 'finish', sessionId });
     expect(finished.status).toBe('PASS');
     expect(await readFile(finished.reportPath, 'utf8')).toContain('Saved');
+    expect(await readFile(finished.reportPath, 'utf8')).toContain('Browser: chromium');
     expect(signals.every(s => !s.aborted)).toBe(true);
   } finally {
     await manager.dispose();

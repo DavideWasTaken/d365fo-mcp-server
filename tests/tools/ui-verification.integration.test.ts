@@ -171,6 +171,16 @@ afterAll(async () => {
 const plan = (): Plan => structuredClone(examplePlan);
 const options = { stepTimeoutMs: 1000, caseTimeoutMs: 5000 };
 describe('real browser UI verification fixture', () => {
+  it('classifies a text assertion on an input as unavailable rather than functional failure', async () => {
+    const p = plan();
+    p.cases = p.cases.slice(0, 1);
+    p.cases[0].steps = [{ action: 'assert', selector: '#quantity', check: 'text', expected: '1', match: 'exact' }];
+    const result = await runVerification(profilePath, p, options);
+    expect(result.status).toBe('NOT_VERIFIED');
+    expect(result.cases[0].reason).toContain('value');
+    p.cases[0].steps = [{ action: 'assert', selector: '#quantity', check: 'value', expected: '1' }];
+    expect((await runVerification(profilePath, p, options)).status).toBe('PASS');
+  });
   it('waits for a missing URL and resumes the test with the user answer without restarting', async () => {
     vi.stubEnv('D365FO_UI_TEST_URL', '');
     vi.stubEnv('D365FO_UI_STORAGE_STATE', path.join(dir, 'auth.json'));
@@ -501,7 +511,11 @@ describe('child guard lifecycle', () => {
         });
       await new Promise(resolve => setImmediate(resolve));
       if (detached) expect(blocked).toEqual([]);
-      else expect(blocked).toEqual(['Navigation blocked: Fetch interception unavailable']);
+      else {
+        expect(blocked).toHaveLength(1);
+        expect(blocked[0]).toContain('NAVIGATION_GUARD_FAILED');
+        expect(blocked[0]).toContain('navigation guard could not initialize or communicate with a frame');
+      }
       await cleanup();
     }
   });

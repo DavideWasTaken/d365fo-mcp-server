@@ -23,6 +23,8 @@ export interface VerificationReport {
   status: Status;
   cases: CaseResult[];
   planPath?: string;
+  browserChannel?: string;
+  browserFallback?: string;
   timeouts?: { stepTimeoutMs: number; navigationTimeoutMs: number; caseTimeoutMs: number };
 }
 export function aggregateStatus(statuses: Status[]): Status {
@@ -51,6 +53,9 @@ export function renderReport(r: VerificationReport): string {
     `Company: ${safeText(r.company)}`,
     `Started: ${safeText(r.startedAt)}; duration: ${r.durationMs} ms`,
     `Overall: **${r.status}**`,
+    ...(r.browserChannel
+      ? [`Browser: ${safeText(r.browserChannel)}${r.browserFallback ? `; ${safeText(r.browserFallback)}` : ''}`]
+      : []),
     ...(r.timeouts
       ? [
           `Timeouts: step ${r.timeouts.stepTimeoutMs} ms; navigation ${r.timeouts.navigationTimeoutMs} ms; case ${r.timeouts.caseTimeoutMs} ms`,
@@ -86,6 +91,8 @@ export function summarizeReport(result: VerificationReport & { reportPath: strin
   const summary = () =>
     JSON.stringify({
       status: result.status,
+      browserChannel: result.browserChannel,
+      browserFallback: result.browserFallback,
       cases: result.cases.map(c => ({
         name: c.name.slice(0, limit),
         status: c.status,

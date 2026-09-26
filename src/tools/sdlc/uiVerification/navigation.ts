@@ -1,11 +1,29 @@
 import type { Page } from 'playwright';
+import {
+  safeUiDiagnostic,
+  formatUiDiagnostic,
+  UiDiagnosticError,
+  safeBlockedOrigin,
+  type UiDiagnostic,
+} from './diagnostics.js';
+
+export const defaultAuthenticationOrigins = ['https://login.microsoftonline.com', 'https://login.windows.net'];
 
 class ChildTargetDetached extends Error {}
 
 export function allowedNavigationUrl(raw: string, origins: string[], base?: string): string {
-  const url = new URL(raw, base);
+  let url: URL;
+  try {
+    url = new URL(raw, base);
+  } catch {
+    throw new UiDiagnosticError({ phase: 'navigation', code: 'INVALID_URL' });
+  }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !origins.includes(url.origin))
-    throw new Error('URL is outside the configured exact HTTP(S) origins or contains embedded credentials');
+    throw new UiDiagnosticError({
+      phase: 'navigation',
+      code: 'NAVIGATION_BLOCKED',
+      blockedOrigin: safeBlockedOrigin(url.href),
+    });
   return url.href;
 }
 
@@ -13,7 +31,7 @@ export function allowedNavigationUrl(raw: string, origins: string[], base?: stri
 export async function installNavigationGuard(
   page: Page,
   allowedOrigins: string[],
-  onBlocked: (reason: string) => void,
+  onBlocked: (reason: string, diagnostic?: UiDiagnostic) => void,
 ): Promise<() => Promise<void>> {
   const origins = allowedOrigins.map(value => {
     const url = new URL(value);
@@ -39,7 +57,9 @@ export async function installNavigationGuard(
   const block = (error: unknown) => {
     if (error instanceof ChildTargetDetached || blocked || disposed || page.isClosed()) return;
     blocked = true;
-    onBlocked(`Navigation blocked: ${error instanceof Error ? error.message : String(error)}`);
+    const diagnostic = safeUiDiagnostic(error, 'navigation');
+    if (diagnostic.code === 'NAVIGATION_FAILED') diagnostic.code = 'NAVIGATION_GUARD_FAILED';
+    onBlocked(`Navigation blocked: ${formatUiDiagnostic(diagnostic)}`, diagnostic);
   };
   const paused = async (send: Command, redirects: Map<string, number>, event: PausedRequest) => {
     try {
@@ -50,7 +70,7 @@ export async function installNavigationGuard(
       allowedNavigationUrl(event.request.url, origins);
       const depth = event.redirectedRequestId ? (redirects.get(event.redirectedRequestId) ?? 0) + 1 : 0;
       if (event.redirectedRequestId) redirects.delete(event.redirectedRequestId);
-      if (depth > 10) throw new Error('Navigation redirect limit exceeded (maximum 10 redirects)');
+      if (depth > 10) throw new UiDiagnosticError({ phase: 'navigation', code: 'REDIRECT_LIMIT' });
       redirects.set(event.requestId, depth);
       await send('Fetch.continueRequest', { requestId: event.requestId });
     } catch (error) {

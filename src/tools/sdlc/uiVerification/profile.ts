@@ -1,9 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ProfileSchema } from './contract.js';
+import { z } from 'zod';
 
 export class MissingUiEnvironmentUrl extends Error {
-  constructor() { super('UI test environment URL is required'); }
+  constructor() {
+    super('UI test environment URL is required');
+  }
 }
 
 /** Explicit profiles replace setup configuration; never mix authentication across environments. */
@@ -23,5 +26,6 @@ export async function resolveUiProfile(profilePath?: string, environmentUrl?: st
   const outputDir = process.env.D365FO_UI_OUTPUT_DIR;
   if (!storageState || !outputDir || !path.isAbsolute(storageState) || !path.isAbsolute(outputDir))
     throw new Error('UI test paths are not initialized; restart the MCP after setup to load its configuration');
-  return ProfileSchema.parse({ baseUrl, storageState, outputDir });
+  const channel = z.enum(['auto', 'chromium', 'msedge']).parse(process.env.D365FO_UI_BROWSER_CHANNEL?.trim() || 'auto');
+  return ProfileSchema.parse({ baseUrl, storageState, outputDir, channel });
 }

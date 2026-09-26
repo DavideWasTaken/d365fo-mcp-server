@@ -24,6 +24,8 @@ Run `npm run setup` in this fork and fill in **Environment URL for UI tests**. T
 
 The tool reuses this URL whenever `profilePath` is omitted. No separate profile file is required. The advanced environment settings `uiStorageState` and `uiOutputDir` default to `.d365fo-ui/auth.json` and `.d365fo-ui/reports`, relative to the installation or instance directory, independent of the MCP process working directory. Environment-variable overrides are `D365FO_UI_TEST_URL`, `D365FO_UI_STORAGE_STATE` and `D365FO_UI_OUTPUT_DIR`.
 
+**Browser for UI tests** is available in setup and per-instance configuration as `environment.uiBrowserChannel` (`D365FO_UI_BROWSER_CHANNEL`). Choose `msedge` for installed Microsoft Edge, `chromium` for Playwright Chromium only, or `auto` (default). Auto tries Edge only if Chromium fails to launch, within the same deadline. It never switches browsers after a navigation, login or test failure; explicit choices never fall back. Responses and reports identify the actual browser and any fallback. An explicit profile remains authoritative, including its own `channel`; an omitted profile channel uses auto rather than another installation's setting.
+
 When a separate instance configuration is selected, UI settings from another installation's ambient `.env` are ignored. Deliberate shell overrides and an explicitly selected `ENV_FILE` still apply.
 
 You can leave the URL empty during setup. If you later request a UI test, the tool returns `requiresUserInput: true` with a question for the calling agent to ask in your language. Provide the URL or choose to skip testing. The agent resumes with the same plan or guided mission plus `environmentUrl`, without restarting the MCP or rerunning setup. That answer fills only an empty configured URL, applies to that run and is not saved. Existing configuration or an explicit profile takes precedence. The tool never guesses an environment URL. If you never request UI testing, no URL or browser login is needed.
@@ -45,7 +47,7 @@ For deterministic `run`, call the separate authentication action before running 
 
 This opens an owned visible browser. Complete normal login/MFA yourself and select the requested company. The tool saves cookies, local storage and IndexedDB only after returning to the environment and observing the exact company text; it then closes the browser and returns `AUTHENTICATED`. Failure or cancellation preserves the previous auth file. The deadline defaults to 180 seconds and can be raised to 300 seconds. No passwords are passed through MCP and no personal browser profile is read.
 
-Authentication permits navigation to the environment origin and, by default, `https://login.microsoftonline.com`. If your tenant uses a different federated identity provider, explicitly set its exact HTTPS origin in `authenticationOrigins` in a profile (include Microsoft too if needed). Wildcards are rejected. Popup login is unsupported; the tool stops instead of saving an uncertain session. Browser session storage is not persisted, so sessionStorage-only authentication is unsupported. Tenant policies or complex login flows can still require manual setup. See [Playwright authentication](https://playwright.dev/docs/auth).
+Authentication permits navigation to the environment origin and, by default, `https://login.microsoftonline.com` and `https://login.windows.net`. If your tenant uses a different federated identity provider, explicitly set its exact HTTPS origin in `authenticationOrigins` in a profile (include the Microsoft origins you need too). Explicit lists replace the defaults. Wildcards are rejected. These authentication origins are allowed during human login, not as application destinations after company binding. Popup login is unsupported; the tool stops instead of saving an uncertain session. Browser session storage is not persisted, so sessionStorage-only authentication is unsupported. Tenant policies or complex login flows can still require manual setup. See [Playwright authentication](https://playwright.dev/docs/auth).
 
 If a test later redirects to a login origin, it stops with `NOT_VERIFIED`. Authenticate again separately, inspect any writes already performed and explicitly choose whether to rerun. Authentication never automatically resumes or replays a case.
 
@@ -69,7 +71,9 @@ For a one-off environment or visible browser, you can still save `.d365fo-ui/pro
 }
 ```
 
-Paths inside the profile resolve relative to the profile file. `headless:false` shows the deterministic test browser; authentication and guided sessions always use a visible owned browser. Set `channel:"msedge"` for installed Microsoft Edge, including authentication, or omit it to use Playwright Chromium. Keep profile, auth state, plans with real data, screenshots and reports local. `.d365fo-ui/` and `playwright/.auth/` are ignored by Git.
+Paths inside the profile resolve relative to the profile file. `headless:false` shows the deterministic test browser; authentication and guided sessions always use a visible owned browser. Set `channel:"msedge"` for installed Microsoft Edge, including authentication, use `channel:"chromium"` for Chromium only, or omit it for auto launch selection. Keep profile, auth state, plans with real data, screenshots and reports local. `.d365fo-ui/` and `playwright/.auth/` are ignored by Git.
+
+An omitted channel now uses auto launch selection (Chromium first, then installed Edge on launch failure); use `channel:"chromium"` to disable fallback.
 
 ## AI-guided first verification (experimental)
 
@@ -169,6 +173,10 @@ The returned `sessionId` is a private capability authorizing access to that brow
 6. Call `case` with `operation:"end"`, complete the other cases, then `finish` with `sessionId`. Finish closes the browser and returns a local report; incomplete cases remain `NOT_VERIFIED`.
 
 A fill action object is `{"type":"fill","ref":"REF_FROM_CURRENT_OBSERVATION","value":"5"}` inside `act.actions`. Replace placeholders with actual returned identifiers. Never invent references or derive them from X++ control names. The guided contract gives every request schema.
+
+Native input/textarea/select observations carry `value` and a `recommendedCheck` hint, without presenting the value as element `text`. Use `check:"value"` for the exact field value, and `check:"text"` for actual text elements such as alerts or labels. A select's value is its option value, not necessarily its visible option label. `CHECK_NOT_APPLICABLE` returns `NOT_VERIFIED` for incompatible bindings, including value checks on labels/containers and boolean checked checks on mixed or unspecified states. It does not freeze a functional FAIL or rewrite the mission. You may bind the unchanged criterion to a compatible observed element; changing its check type requires a new mission after inspecting any writes already made. An unresolved criterion prevents PASS.
+
+For an empty grid exposing `role="alert"` with “Niente da visualizzare”, declare a measured text criterion for that alert and bind it within the intended active form/grid. No AI screenshot judgement is required. This checks the displayed empty-state message; it is not a total-record count. Counting rendered rows alone cannot prove the total of a paged or virtualized grid.
 
 Each new observation replaces previous references. Changed documents, replaced elements, hidden controls, scope changes and recycled grid rows require a fresh observation; the tool does not silently select another matching row. Use `observe.scopeRef` to focus on an observed container, `filter` to narrow text/role/name, and `screenshot:true` only when useful. Output is capped at 120 controls and about 8,000 text characters, with `truncated:true` for omissions. A truncated snapshot proves no absence. For a declared `visible:false` criterion, `check.absent` uses an observed scope plus an exact role/name query on the actual DOM; that read-only query cannot authorize an action.
 
@@ -290,6 +298,16 @@ The response gives the overall result, the case outcomes, a bounded journey with
 Overall FAIL takes precedence over NOT_VERIFIED, and NOT_VERIFIED over PASS. Always inspect the individual outcomes. An expected business rejection is a **passing negative case** if the expected rejection actually appears.
 
 ## Validation scope
+
+### Retest after the dev feedback fixes
+
+Update the checkout, run `npm ci` and `npm run build`, then restart the local MCP. Configure `environment.uiBrowserChannel` as `msedge` on a dev machine that requires Edge. Fetch the guided contract again.
+
+1. Verify the existing order `G000260436` with a criterion declared `check:"value"` on its native field; expect PASS if that value is present. A separate deliberately incompatible `text` check must give `CHECK_NOT_APPLICABLE` / NOT_VERIFIED, never FAIL.
+2. Verify the empty-result alert with `check:"text"` and its observed exact text (or `match:"contains"` for additional message text), scoped to the intended grid. Compare against a deliberately different expected message to confirm a genuine mismatch still produces FAIL.
+3. Repeat human login in Edge. If it fails, return the tool's safe `diagnostic` and message: they report phase/code, attempted browser and blocked origin where applicable, excluding URL paths, query tokens, browser logs and credentials. Report files include the actual browser choice and available stopping reason.
+
+Do not replay an uncertain write merely to repeat this acceptance check. `limits.calls:30` is already supported when needed; the default remains 15 to preserve the existing quota limit. Prefer scoped observations before increasing it. Grid totals, automatic active-form selection and dedicated column-filter actions are not introduced by this corrective release.
 
 Run the browser fixture checks with `npm run test:ui` after installing Chromium. Run the input/report tests with `npm run test:run -- tests/tools/verify-ui-customization.test.ts`.
 

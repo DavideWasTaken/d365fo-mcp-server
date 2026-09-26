@@ -1,11 +1,13 @@
 /// <reference lib="dom" />
 import { createHash, randomUUID } from 'node:crypto';
 import type { ElementHandle, Frame, Locator, Page } from 'playwright';
+import type { UiDiagnostic } from '../diagnostics.js';
 
 export class GuidedBrowserError extends Error {
   constructor(
     public readonly code: 'NEEDS_OBSERVATION' | 'NOT_VERIFIED' | 'AUTH_REQUIRED' | 'CANCELLED',
     message: string,
+    public readonly diagnostic?: UiDiagnostic,
   ) {
     super(message);
   }
@@ -17,6 +19,7 @@ export interface ObservedNode {
   text?: string;
   value?: string;
   disabled?: boolean;
+  recommendedCheck?: 'value' | 'text' | 'checked';
 }
 interface AriaNode {
   ref?: string;
@@ -266,8 +269,11 @@ export class ObservedTargets {
               );
           const ref = `r-${randomUUID()}`;
           const node: ObservedNode = { ref, role: raw.role ?? 'generic', name: redact(raw.name) ?? '' };
-          if (raw.text !== undefined && !sensitive) node.text = redact(raw.text);
-          if (value !== undefined) node.value = redact(value);
+          if (raw.text !== undefined && !sensitive && value === undefined) node.text = redact(raw.text);
+          if (value !== undefined) {
+            node.value = redact(value);
+            node.recommendedCheck = ['checkbox', 'radio'].includes(raw.role ?? '') ? 'checked' : 'value';
+          }
           if (raw.disabled !== undefined) node.disabled = raw.disabled;
           if (JSON.stringify([...nodes, node]).length > 8000) {
             truncated = true;

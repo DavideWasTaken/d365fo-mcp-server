@@ -52,6 +52,131 @@ describe('guided checks in real frames', () => {
     return element;
   }
   it.each([
+    '<input value="G000260436">',
+    '<textarea>G000260436</textarea>',
+    '<select><option value="G000260436">Order</option></select>',
+  ])('rejects text on a value control before comparing: %s', async html => {
+    await withPage(async page => {
+      await page.setContent(html);
+      await expect(
+        measureCheck(
+          page,
+          () => resolveElement(page, 'input,textarea,select'),
+          {
+            id: 'result',
+            targetDescription: 'Order identifier',
+            check: 'text',
+            expected: 'G000260436',
+            match: 'exact',
+          },
+          { ...common, ref: 'field' },
+        ),
+      ).rejects.toMatchObject({ code: 'CHECK_NOT_APPLICABLE', message: expect.stringMatching(/value/) });
+      expect(
+        (
+          await measureCheck(
+            page,
+            () => resolveElement(page, 'input,textarea,select'),
+            { id: 'result', targetDescription: 'Order identifier', check: 'value', expected: 'G000260436' },
+            { ...common, ref: 'field' },
+          )
+        ).passed,
+      ).toBe(true);
+    });
+  });
+  it('rejects value on ordinary text without waiting for a browser timeout', async () => {
+    await withPage(async page => {
+      await page.setContent('<span>G000260436</span>');
+      await expect(
+        measureCheck(
+          page,
+          () => resolveElement(page, 'span'),
+          { id: 'result', targetDescription: 'Order', check: 'value', expected: 'G000260436' },
+          { ...common, ref: 'field' },
+        ),
+      ).rejects.toMatchObject({ code: 'CHECK_NOT_APPLICABLE', message: expect.stringMatching(/text/) });
+    });
+  });
+  it('does not retarget a value check from a label to its associated input', async () => {
+    await withPage(async page => {
+      await page.setContent('<label for="field">Order</label><input id="field" value="G000260436">');
+      await expect(
+        measureCheck(
+          page,
+          () => resolveElement(page, 'label'),
+          { id: 'result', targetDescription: 'Order', check: 'value', expected: 'G000260436' },
+          { ...common, ref: 'field' },
+        ),
+      ).rejects.toMatchObject({ code: 'CHECK_NOT_APPLICABLE' });
+    });
+  });
+  it.each([
+    '<div role="checkbox">Check</div>',
+    '<div role="checkbox" aria-checked="mixed">Check</div>',
+    '<div role="switch" aria-checked="unknown">Check</div>',
+    '<span>Not a checkbox</span>',
+  ])('does not coerce an unsupported checkbox state to false: %s', async html => {
+    await withPage(async page => {
+      await page.setContent(html);
+      await expect(
+        measureCheck(
+          page,
+          () => resolveElement(page, 'body > *'),
+          { id: 'result', targetDescription: 'Checkbox', check: 'checked', expected: false },
+          { ...common, ref: 'field' },
+        ),
+      ).rejects.toMatchObject({ code: 'CHECK_NOT_APPLICABLE' });
+    });
+  });
+  it('checks binary native and ARIA states and rejects a native indeterminate state', async () => {
+    await withPage(async page => {
+      await page.setContent('<input type="checkbox"><div role="switch" aria-checked="false">Switch</div>');
+      const criterion: Criterion = {
+        id: 'result',
+        targetDescription: 'Checkable control',
+        check: 'checked',
+        expected: false,
+      };
+      for (const selector of ['input', '[role=switch]'])
+        expect(
+          (await measureCheck(page, () => resolveElement(page, selector), criterion, { ...common, ref: 'field' }))
+            .passed,
+        ).toBe(true);
+      await page.locator('input').evaluate((element: HTMLInputElement) => {
+        element.indeterminate = true;
+      });
+      await expect(
+        measureCheck(page, () => resolveElement(page, 'input'), criterion, { ...common, ref: 'field' }),
+      ).rejects.toMatchObject({ code: 'CHECK_NOT_APPLICABLE' });
+    });
+  });
+  it('measures an empty-grid alert without AI review and still detects a genuine text mismatch', async () => {
+    await withPage(async page => {
+      await page.setContent('<div role="grid"><div role="alert">Niente da visualizzare</div></div>');
+      const criterion: Criterion = {
+        id: 'result',
+        targetDescription: 'Empty grid alert',
+        check: 'text',
+        match: 'exact',
+        expected: 'Niente da visualizzare',
+      };
+      expect(
+        (await measureCheck(page, () => resolveElement(page, '[role=alert]'), criterion, { ...common, ref: 'alert' }))
+          .passed,
+      ).toBe(true);
+      expect(
+        (
+          await measureCheck(
+            page,
+            () => resolveElement(page, '[role=alert]'),
+            { ...criterion, expected: 'Saved' },
+            { ...common, ref: 'alert' },
+          )
+        ).passed,
+      ).toBe(false);
+    });
+  });
+  it.each([
     'type="password"',
     'autocomplete="current-password"',
     'autocomplete="section-login new-password"',

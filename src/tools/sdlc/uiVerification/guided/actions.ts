@@ -1,6 +1,7 @@
 import type { ElementHandle, Page } from 'playwright';
 import type { BrowserAction } from './contract.js';
 import { allowedNavigationUrl } from '../navigation.js';
+import { GuidedBrowserError } from './targets.js';
 
 export async function preflightAction(
   _page: Page,
@@ -12,17 +13,19 @@ export async function preflightAction(
     allowedNavigationUrl(action.url, [new URL(baseUrl).origin], baseUrl);
     return;
   }
-  if (!element || !(await element.isVisible())) throw new Error('Observed control is no longer visible');
+  if (!element || !(await element.isVisible()))
+    throw new GuidedBrowserError('NEEDS_OBSERVATION', 'Observed control is no longer visible');
   if (
     (await element.getAttribute('type')) === 'password' ||
     /(?:^|\s)(current-password|new-password|one-time-code)(?:\s|$)/i.test(
       (await element.getAttribute('autocomplete')) ?? '',
     )
   )
-    throw new Error('Password entry requires the human login flow');
+    throw new GuidedBrowserError('NEEDS_OBSERVATION', 'Password entry requires the human login flow');
   if (action.type === 'wait' || action.type === 'scroll') return;
-  if (!(await element.isEnabled())) throw new Error('Control is disabled');
-  if (action.type === 'fill' && !(await element.isEditable())) throw new Error('Control is not editable');
+  if (!(await element.isEnabled())) throw new GuidedBrowserError('NEEDS_OBSERVATION', 'Control is disabled');
+  if (action.type === 'fill' && !(await element.isEditable()))
+    throw new GuidedBrowserError('NEEDS_OBSERVATION', 'Control is not editable');
   // Trial performs actionability checks without dispatching a click. No modifiers.
   await element.click({ trial: true, timeout: 1000 });
 }

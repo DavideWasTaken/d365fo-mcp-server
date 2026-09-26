@@ -5,6 +5,7 @@ import path from 'node:path';
 import { GuidedSessionManager } from '../../src/tools/sdlc/uiVerification/guided/sessionManager.js';
 import { exampleMission } from '../../src/tools/sdlc/uiVerification/guided/contract.js';
 import { GuidedJournal } from '../../src/tools/sdlc/uiVerification/guided/journal.js';
+import { UiDiagnosticError } from '../../src/tools/sdlc/uiVerification/diagnostics.js';
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -82,6 +83,69 @@ async function ready(f: Awaited<ReturnType<typeof fixture>>) {
   return { ...base, snapshotId };
 }
 describe('guided session workflow', () => {
+  it('keeps trusted disabled-control guidance instead of a generic browser error', async () => {
+    const f = await fixture();
+    const base = await ready(f);
+    f.handle.isEnabled = async () => false;
+    const result = await f.manager.call({
+      action: 'act',
+      ...base,
+      operationId: 'disabled',
+      actions: [{ type: 'click', ref: 'e1' }],
+    });
+    expect(result.payload.code).toBe('NEEDS_OBSERVATION');
+    expect(result.payload.message).toContain('disabled');
+    expect(f.clicks()).toBe(0);
+  });
+  it('returns a safe structured startup cause including blocked origin but no authentication query', async () => {
+    const manager = new GuidedSessionManager({
+      openBrowser: async () => {
+        throw new UiDiagnosticError({
+          phase: 'navigation',
+          code: 'NAVIGATION_BLOCKED',
+          blockedOrigin: 'https://login.windows.net/tenant?code=private-token',
+        });
+      },
+    });
+    try {
+      const result = await manager.call({ action: 'start', mission: exampleMission });
+      expect(result.payload.diagnostic).toMatchObject({
+        phase: 'navigation',
+        code: 'NAVIGATION_BLOCKED',
+        blockedOrigin: 'https://login.windows.net',
+      });
+      expect(JSON.stringify(result)).not.toContain('private-token');
+      expect(result.payload.message).toContain('login.windows.net');
+    } finally {
+      await manager.dispose();
+    }
+  });
+  it('allows rebinding an incompatible text criterion to actual text without changing the mission', async () => {
+    const f = await fixture();
+    const base = await ready(f);
+    f.handle.evaluate = async (_fn: any, ...args: any[]) =>
+      args.length ? false : ({ nativeValue: true, tag: 'input', checked: false } as any);
+    expect((await f.manager.call({ action: 'check', ...base, criterionId: 'result', ref: 'e1' })).payload.code).toBe(
+      'CHECK_NOT_APPLICABLE',
+    );
+    f.handle.evaluate = async () => false;
+    const result = await f.manager.call({ action: 'check', ...base, criterionId: 'result', ref: 'e1' });
+    expect(result.payload.check.status).toBe('PASS');
+    expect(result.payload.counters.recoveries).toBe(0);
+    expect((await f.manager.call({ action: 'finish', sessionId: f.sessionId })).payload.status).toBe('PASS');
+  });
+  it('reports an incompatible criterion as NOT_VERIFIED without creating a terminal functional FAIL', async () => {
+    const f = await fixture();
+    const base = await ready(f);
+    f.handle.evaluate = async (_fn: any, ...args: any[]) =>
+      args.length ? false : ({ nativeValue: true, tag: 'input', checked: false } as any);
+    const result = await f.manager.call({ action: 'check', ...base, criterionId: 'result', ref: 'e1' });
+    expect(result.payload.status).toBe('NOT_VERIFIED');
+    expect(result.payload.code).toBe('CHECK_NOT_APPLICABLE');
+    const finished = await f.manager.call({ action: 'finish', sessionId: f.sessionId });
+    expect(finished.payload.status).toBe('NOT_VERIFIED');
+    expect(await readFile(finished.payload.reportPath, 'utf8')).toContain('value');
+  });
   it('can retrieve an existing receipt even when report persistence is unavailable', async () => {
     const f = await fixture();
     const base = await ready(f);

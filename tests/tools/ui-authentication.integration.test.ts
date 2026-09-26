@@ -142,7 +142,12 @@ describe('owned browser authentication', () => {
     const { profilePath, storageStatePath } = await profile('success', '/login');
     const beforeIdentity = identityHits;
     const result = await authenticateUi(profilePath, input, options);
-    expect(result, JSON.stringify(result)).toEqual({ status: 'AUTHENTICATED', storageStatePath });
+    expect(result, JSON.stringify(result)).toEqual({
+      status: 'AUTHENTICATED',
+      storageStatePath,
+      browserChannel: 'chromium',
+      browserFallback: undefined,
+    });
     expect(identityHits).toBeGreaterThan(beforeIdentity);
     const state = JSON.parse(await readFile(storageStatePath, 'utf8'));
     expect(state.cookies.some((cookie: any) => cookie.name === 'fixture-auth')).toBe(true);

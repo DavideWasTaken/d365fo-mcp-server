@@ -164,6 +164,7 @@ function openRootStore(): SettingsStore {
 async function configureEnvironment(store: SettingsStore, scenario: Scenario): Promise<'traditional' | 'ude'> {
   p.log.step('D365FO environment');
   await askSetting(store, setting('environment.uiTestUrl'));
+  await askSetting(store, setting('environment.uiBrowserChannel'));
   await configureSql(store);
 
   let envType: string;

@@ -2,12 +2,14 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { GuidedInputSchema, LimitsSchema, type GuidedInput, type Mission } from './contract.js';
-import { GuidedBrowser } from './browserSession.js';
+import { GuidedBrowser, GuidedBrowserError } from './browserSession.js';
 import { GuidedJournal, recoverInterruptedReports } from './journal.js';
 import { caseStatus, expectedText, guidedReport, type GuidedCase, type CheckEvidence } from './report.js';
 import { preflightAction, dispatchAction } from './actions.js';
 import { measureCheck } from './checks.js';
 import { MissingUiEnvironmentUrl } from '../profile.js';
+import { CheckNotApplicable } from '../checkApplicability.js';
+import { safeUiDiagnostic, formatUiDiagnostic, type UiDiagnostic } from '../diagnostics.js';
 
 export interface GuidedReply {
   payload: Record<string, any>;
@@ -38,9 +40,30 @@ interface Session {
   finishing?: Promise<GuidedReply>;
 }
 const counters = () => ({ calls: 0, interactions: 0, images: 0, recoveries: 0, characters: 0 });
-const fault = (code: string, message: string) => Object.assign(new Error(message), { code });
-const shortError = (e: unknown) => (e instanceof Error ? e.message.slice(0, 500) : 'Browser operation failed');
-const failed = (code: string, message: string): GuidedReply => ({ payload: { code, message, status: 'NOT_VERIFIED' } });
+const fault = (code: string, message: string, diagnostic?: UiDiagnostic) =>
+  Object.assign(new Error(message), { code, publicReason: true, diagnostic });
+const diagnosticFor = (e: unknown) =>
+  (e as { diagnostic?: unknown })?.diagnostic
+    ? safeUiDiagnostic(e, 'operation')
+    : e instanceof GuidedBrowserError ||
+        e instanceof CheckNotApplicable ||
+        (e as { publicReason?: boolean })?.publicReason
+      ? undefined
+      : safeUiDiagnostic(e, 'operation');
+const shortError = (e: unknown) => {
+  if ((e as { diagnostic?: unknown })?.diagnostic)
+    return formatUiDiagnostic(safeUiDiagnostic(e, 'operation')).slice(0, 500);
+  if (
+    e instanceof CheckNotApplicable ||
+    e instanceof GuidedBrowserError ||
+    (e as { publicReason?: boolean })?.publicReason
+  )
+    return (e as Error).message.slice(0, 500);
+  return formatUiDiagnostic(safeUiDiagnostic(e, 'operation')).slice(0, 500);
+};
+const failed = (code: string, message: string, diagnostic?: UiDiagnostic): GuidedReply => ({
+  payload: { code, message, status: 'NOT_VERIFIED', ...(diagnostic ? { diagnostic } : {}) },
+});
 
 export class GuidedSessionManager {
   private sessions = new Map<string, Session>();
@@ -123,7 +146,11 @@ export class GuidedSessionManager {
       }
       await s.journal.append('blocked', { code, message }).catch(() => {});
       await this.persist(s).catch(() => {});
-      return failed(code, message);
+      return failed(
+        code,
+        message,
+        (e as { diagnostic?: unknown })?.diagnostic ? safeUiDiagnostic(e, 'operation') : undefined,
+      );
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener('abort', abort);
@@ -159,14 +186,16 @@ export class GuidedSessionManager {
     if (signal?.aborted) abort();
     const timer = setTimeout(abort, Math.min(input.limits?.callTimeoutMs ?? 30000, 45000));
     try {
-      if (controller.signal.aborted || this.disposed) throw new Error('Start cancelled');
+      if (controller.signal.aborted || this.disposed)
+        throw fault('CANCELLED', 'Start cancelled', { phase: 'launch', code: 'CANCELLED' });
       browser = await (this.options.openBrowser ?? GuidedBrowser.open)(input.profilePath, input.environmentUrl, {
         headless: this.options.headless,
         signal: controller.signal,
         timeoutMs: input.limits?.callTimeoutMs,
         startUrl: input.mission.startUrl,
       });
-      if (controller.signal.aborted || this.disposed) throw new Error('Start cancelled');
+      if (controller.signal.aborted || this.disposed)
+        throw fault('CANCELLED', 'Start cancelled', { phase: 'launch', code: 'CANCELLED' });
       if (!this.recovered.has(browser.profile.outputDir)) {
         this.recovered.add(browser.profile.outputDir);
         await recoverInterruptedReports(browser.profile.outputDir);
@@ -203,15 +232,26 @@ export class GuidedSessionManager {
       token = randomBytes(32).toString('hex');
       this.sessions.set(token, s);
       const reply = await this.observe(s, {});
-      if (controller.signal.aborted || this.disposed) throw new Error('Start cancelled');
+      if (controller.signal.aborted || this.disposed)
+        throw fault('CANCELLED', 'Start cancelled', { phase: 'launch', code: 'CANCELLED' });
       await this.persist(s);
       this.arm(s);
-      return { ...reply, payload: { sessionId: token, ...reply.payload, limits: s.limits } };
+      return {
+        ...reply,
+        payload: {
+          sessionId: token,
+          ...reply.payload,
+          limits: s.limits,
+          browserChannel: browser.browserChannel,
+          browserFallback: browser.browserFallback,
+        },
+      };
     } catch (e) {
       await browser?.close().catch(() => {});
       if (token) this.sessions.delete(token);
       if (e instanceof MissingUiEnvironmentUrl) throw e;
-      return failed('NOT_VERIFIED', 'Unable to start guided browser: ' + shortError(e));
+      const diagnostic = diagnosticFor(e);
+      return failed('NOT_VERIFIED', 'Unable to start guided browser: ' + shortError(e), diagnostic);
     } finally {
       this.starts--;
       this.startControllers.delete(controller);
@@ -377,7 +417,16 @@ export class GuidedSessionManager {
       try {
         result = await measureCheck(s.browser.page, (a, b) => s.browser.resolve(a, b), criterion, input);
       } catch (e) {
-        throw fault('NEEDS_OBSERVATION', shortError(e));
+        if ((e as { code?: string }).code === 'CHECK_NOT_APPLICABLE') {
+          c.steps.push({
+            label: `Incompatible check ${criterion.id}`,
+            expected: expectedText(criterion),
+            observed: shortError(e),
+            completed: false,
+          });
+          throw e;
+        }
+        throw fault('NEEDS_OBSERVATION', shortError(e), diagnosticFor(e));
       }
       passed = result.passed;
       const value = String(result.actual);
@@ -445,7 +494,7 @@ export class GuidedSessionManager {
         await preflightAction(s.browser.page, element, action, s.browser.profile.baseUrl);
       } catch (e) {
         receipt.payload = { ...receipt.payload, code: 'NEEDS_OBSERVATION', message: shortError(e) };
-        throw fault('NEEDS_OBSERVATION', shortError(e));
+        throw fault('NEEDS_OBSERVATION', shortError(e), diagnosticFor(e));
       }
       this.checkAbort(s);
       this.charge(s, 'interactions');
@@ -483,7 +532,7 @@ export class GuidedSessionManager {
           message: 'Interaction may have reached the server; never replay',
         };
         c.steps.push({ label: action.type, expected: 'Execute once', observed: 'Outcome uncertain', completed: false });
-        throw fault('WRITE_UNCERTAIN', shortError(e));
+        throw fault('WRITE_UNCERTAIN', shortError(e), diagnosticFor(e));
       }
       if (action.type !== 'fill' && action.type !== 'wait') break;
     }
@@ -495,7 +544,10 @@ export class GuidedSessionManager {
   }
   private async persist(s: Session, closed = false) {
     for (const c of s.cases) if (c.startedAt && !c.ended) c.durationMs = Date.now() - c.startedAt;
-    const report = guidedReport(s.mission, s.cases, s.started, new URL(s.browser.profile.baseUrl).origin);
+    const report = guidedReport(s.mission, s.cases, s.started, new URL(s.browser.profile.baseUrl).origin, {
+      browserChannel: s.browser.browserChannel,
+      browserFallback: s.browser.browserFallback,
+    });
     await s.journal.saveReport(report.markdown, report.status, closed);
     return report;
   }

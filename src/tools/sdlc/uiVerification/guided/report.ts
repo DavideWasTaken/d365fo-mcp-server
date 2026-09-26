@@ -36,11 +36,18 @@ export function caseStatus(c: GuidedCase, definition: Mission['cases'][number]):
     return 'NOT_VERIFIED';
   return 'PASS';
 }
-export function guidedReport(mission: Mission, cases: GuidedCase[], started: number, environment: string) {
+export function guidedReport(
+  mission: Mission,
+  cases: GuidedCase[],
+  started: number,
+  environment: string,
+  browser: { browserChannel?: string; browserFallback?: string } = {},
+) {
   const resolved = cases.map((c, i) => ({ ...c, status: caseStatus(c, mission.cases[i]) }));
   const status = aggregateStatus(resolved.map(c => c.status));
   const markdown =
     renderReport({
+      ...browser,
       requirement: mission.requirement,
       buildReference: mission.buildReference,
       company: mission.company,
@@ -88,13 +95,11 @@ export function guidedReport(mission: Mission, cases: GuidedCase[], started: num
           };
         }),
         journeyTotal: c.steps.length,
-        journey: c.steps
-          .slice(-5)
-          .map(step => ({
-            action: step.label.slice(0, Math.min(limit, 60)),
-            completed: step.completed,
-            observed: step.observed.slice(0, Math.min(limit, 60)),
-          })),
+        journey: c.steps.slice(-5).map(step => ({
+          action: step.label.slice(0, Math.min(limit, 60)),
+          completed: step.completed,
+          observed: step.observed.slice(0, Math.min(limit, 60)),
+        })),
         abbreviated: true,
       };
     });

@@ -1,5 +1,6 @@
 import type { ElementHandle, Frame, Page } from 'playwright';
 import type { Criterion, GuidedInput } from './contract.js';
+import { assertCheckApplicable } from '../checkApplicability.js';
 
 type CheckInput = Extract<GuidedInput, { action: 'check' }>;
 const credentialSelector =
@@ -93,6 +94,7 @@ export async function measureCheck(
   const element = await resolve(input.snapshotId!, input.ref!);
   if (await element.evaluate((node, selector) => node instanceof Element && node.matches(selector), credentialSelector))
     throw new Error('Sensitive credential controls cannot be checked');
+  await assertCheckApplicable(element, criterion.check);
   switch (criterion.check) {
     case 'visible':
       actual = await element.isVisible();

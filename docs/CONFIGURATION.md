@@ -61,6 +61,7 @@ Which developer box this is and where its X++ packages live.
 | Key | Asked | Env var | Default | Description |
 | --- | --- | --- | --- | --- |
 | `environment.uiTestUrl` | setup | `D365FO_UI_TEST_URL` | — | Optional D365FO test environment URL used by verify_ui_customization. Leave empty to be asked only when requesting a UI test. Not needed if you do not test. A saved Playwright login is also required (docs/UI_CUSTOMIZATION_TESTING.md). |
+| `environment.uiBrowserChannel` | setup | `D365FO_UI_BROWSER_CHANNEL` | `auto` | Auto prefers Playwright Chromium and tries installed Microsoft Edge if Chromium cannot launch. Explicit Chromium or Edge never switches browsers. Applies to normal setup; explicit UI profiles keep their own browser choice. Values: `auto` — Chromium, then installed Edge on launch failure; `chromium` — Playwright Chromium only; `msedge` — Installed Microsoft Edge only. |
 | `environment.uiStorageState` | advanced | `D365FO_UI_STORAGE_STATE` | `.d365fo-ui/auth.json` | Local Playwright storage-state JSON. Relative paths resolve from the installation or instance directory. Keep this file private. |
 | `environment.uiOutputDir` | advanced | `D365FO_UI_OUTPUT_DIR` | `.d365fo-ui/reports` | Local reports and error screenshots. Relative paths resolve from the installation or instance directory. |
 | `environment.type` | setup | `D365FO_DEV_ENVIRONMENT_TYPE` | — | Classic AOSService VM ("traditional") or Unified Developer Experience / Power Platform Tools ("ude"). The wizard preselects the one it detects — UDE when XPP config files exist in %LOCALAPPDATA%\\Microsoft\\Dynamics365\\XPPConfig. Left unset, the server falls back to that same detection. Values: `traditional` — classic AOSService VM with PackagesLocalDirectory; `ude` — Unified Developer Experience / Power Platform Tools. |
@@ -196,6 +197,7 @@ Downloading a pre-built index from blob storage instead of building it locally.
   },
   "environment": {
     "uiTestUrl": "https://your-test-env.operations.dynamics.com",
+    "uiBrowserChannel": "auto",
     "uiStorageState": ".d365fo-ui/auth.json",
     "uiOutputDir": ".d365fo-ui/reports",
     "type": "traditional",
