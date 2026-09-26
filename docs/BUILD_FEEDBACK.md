@@ -28,6 +28,8 @@ Keep the MCP server running until finalization completes. Compiler execution, ru
 
 A successful compile does not prove that the AOS runtime loaded the new objects. The build-before-UI-test workflow requires `restartAos:true` on the initial build and collection of an `AOS runtime ready` result before starting UI tests. Without that option, successful single-model and recovered queue responses retain the restart advisory. This is a workflow requirement, not a new cross-tool UI session gate.
 
+If restart is blocked, fails, or readiness cannot be verified, the result carries `isError:true` and a prominent **USER ACTION REQUIRED** warning instead of an overall green build heading. The calling AI is explicitly instructed to inform the user of the cause, stop before UI tests, and request manual host inspection/restart if needed plus readiness confirmation. The warning remains on saved-result collection; collecting it never retries the restart. The notification is delivered through the MCP response and client conversation, not a Windows popup.
+
 The environment root comes from `D365FO_UI_TEST_URL`, or an explicit `aosUrl` on the build. Restart occurs only after runtime metadata generation and any requested database sync succeeded; skipped metadata generation or an empty requested sync scope blocks it. The configured hostname must resolve exclusively to local addresses, and exactly one running host's root application binding must match the URL's scheme, port, host, and local IP binding.
 
 For full IIS, only the matching, running `AOSService` application pool/site is eligible, and the Windows session must be administrative. The tool recycles that pool and verifies a new worker process. A stopped `W3SVC` is not treated as a live full IIS host.

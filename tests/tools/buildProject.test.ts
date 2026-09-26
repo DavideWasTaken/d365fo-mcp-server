@@ -833,6 +833,31 @@ describe('build_d365fo_project', () => {
     expect(text).toContain('does not prove');
   });
 
+  it.each([
+    ['blocked', false], ['failed', false], ['not-ready', false],
+    ['blocked', true], ['failed', true], ['not-ready', true],
+  ])('requires a user-facing warning for runtime %s (queued=%s)', async (status, queued) => {
+    const logFile = 'C:\\Temp\\d365build_log_prev.log';
+    serveState(finishedState({
+      postBuildResult: { bpSection: '', syncSection: '', syncFailed: false,
+        runtimeRestart: { status, message: 'Specific runtime failure reason' } },
+      ...(queued ? { buildQueue: ['Dep', MODEL_NAME], queueResults: [
+        { modelName: 'Dep', status: 'succeeded', duration: 1, logFile },
+        { modelName: MODEL_NAME, status: 'succeeded', duration: 2, logFile },
+      ] } : {}),
+    }));
+    readdirMock.mockResolvedValue([]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    const text = result.content[0].text;
+    expect(result.isError).toBe(true);
+    expect(text).toContain('USER ACTION REQUIRED');
+    expect(text).toContain('Inform the user');
+    expect(text).toContain('Do not start UI tests');
+    expect(text).toContain('Specific runtime failure reason');
+    expect(text).not.toMatch(/✅ Build (?:succeeded|complete)/);
+    expect(restartMock).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('keeps failure logs without claiming runtime readiness (queued=%s)', async queued => {
     const logFile = 'C:\\Temp\\d365build_log_prev.log';
     serveState(finishedState({ status: 'failed', ...(queued ? {

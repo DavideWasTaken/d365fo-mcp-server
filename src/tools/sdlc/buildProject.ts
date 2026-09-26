@@ -1232,10 +1232,15 @@ async function renderFinishedBuildResult(
     : '';
   const runtimeNote = runtimeRestart ? `\nAOS runtime ${runtimeRestart.status}: ${runtimeRestart.message}\n`
     : succeeded ? runtimeRestartGuidance() : '';
+  const userAction = restartFailed
+    ? '⚠️ USER ACTION REQUIRED: AOS restart/readiness was not confirmed. Inform the user of the cause below. ' +
+      'Do not start UI tests or declare the deployed build ready. Ask the user to inspect the actual IIS/IIS Express host, ' +
+      'restart it manually if needed, and confirm readiness before continuing. Do not automatically retry an uncertain restart.\n\n'
+    : '';
 
   if (isQueued) {
     const totalDuration = allResults.reduce((sum, r) => sum + r.duration, 0);
-    const statusIcon    = succeeded ? '✅ Build complete' : '❌ Build failed';
+    const statusIcon    = !succeeded ? '❌ Build failed' : restartFailed ? '⚠️ Compilation complete; AOS runtime not ready' : '✅ Build complete';
     const modelLines    = allResults
       .map(r => `  ${r.status === 'succeeded' ? '✅' : '❌'} ${r.modelName}: ${r.duration}s — Log: ${r.logFile}`)
       .join('\n');
@@ -1257,7 +1262,7 @@ async function renderFinishedBuildResult(
     return {
       content: [{
         type: 'text',
-        text: `${statusIcon} — ${allResults.length} models, ${totalDuration}s total\n\n${modelLines}\nLog: ${relevantLogFile}\n` +
+        text: userAction + `${statusIcon} — ${allResults.length} models, ${totalDuration}s total\n\n${modelLines}\nLog: ${relevantLogFile}\n` +
           runtimeNote + requestNote + '\n' +
           (unexplained ? `${unexplained}\n\n` : '') +
           (structured ? `${structured}\n\n` : '') +
@@ -1269,7 +1274,7 @@ async function renderFinishedBuildResult(
 
   const logTail       = await readLogTail(finalState.logFile);
   const hasWarnings   = succeeded && logTail.split(/\r?\n/).some(l => /Warning:\s/.test(l) && DIAG_LINE_TEST.test(l.trim()));
-  const statusIcon    = !succeeded ? '❌ Build FAILED' : hasWarnings ? '⚠️ Build succeeded with warnings' : '✅ Build succeeded';
+  const statusIcon    = !succeeded ? '❌ Build FAILED' : restartFailed ? '⚠️ Compilation succeeded; AOS runtime not ready' : hasWarnings ? '⚠️ Build succeeded with warnings' : '✅ Build succeeded';
   const buildMode     = finalState.fullBuild ? 'full build (target), incremental (deps)' : 'incremental';
   const duration      = finalState.endTime
     ? Math.round((new Date(finalState.endTime).getTime() - new Date(finalState.startTime).getTime()) / 1000)
@@ -1297,7 +1302,7 @@ async function renderFinishedBuildResult(
   return {
     content: [{
       type: 'text',
-      text: `${statusIcon} (${finalState.tool}, ${buildMode}, ${duration}s)\n\nModel: ${targetModel}\nLog: ${finalState.logFile}\n` +
+      text: userAction + `${statusIcon} (${finalState.tool}, ${buildMode}, ${duration}s)\n\nModel: ${targetModel}\nLog: ${finalState.logFile}\n` +
         runtimeNote + requestNote +
         incrementalScopeCaveat(succeeded, !!finalState.fullBuild) + '\n' +
         (unexplained ? `${unexplained}\n\n` : '') +
