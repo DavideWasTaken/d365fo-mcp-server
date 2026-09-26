@@ -76,6 +76,8 @@ export interface Setting {
   placeholder?: string;
   /** Wizard refuses an empty answer. */
   required?: boolean;
+  /** Optional text validation in the interactive configuration prompts. */
+  validate?: (value: string) => string | undefined;
 }
 
 export interface Section {
@@ -129,6 +131,44 @@ export const SECTIONS: Section[] = [
 
 export const SETTINGS: Setting[] = [
   // ── environment ──────────────────────────────────────────────────────────
+  {
+    path: 'environment.uiTestUrl',
+    env: 'D365FO_UI_TEST_URL',
+    section: 'environment',
+    tier: 'basic',
+    type: 'string',
+    label: 'Environment URL for UI tests',
+    description: 'Optional D365FO test environment URL used by verify_ui_customization. Enter once; leave empty to skip browser tests. A saved Playwright login is also required (docs/UI_CUSTOMIZATION_TESTING.md).',
+    placeholder: 'https://your-test-env.operations.dynamics.com',
+    validate: value => {
+      if (!value.trim()) return undefined;
+      try {
+        const url = new URL(value);
+        if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) return undefined;
+      } catch { /* invalid URL */ }
+      return 'Enter an HTTP(S) environment URL without embedded credentials, or leave empty.';
+    },
+  },
+  {
+    path: 'environment.uiStorageState',
+    env: 'D365FO_UI_STORAGE_STATE',
+    section: 'environment',
+    tier: 'advanced',
+    type: 'path',
+    label: 'Saved UI test login',
+    description: 'Local Playwright storage-state JSON. Relative paths resolve from the installation or instance directory. Keep this file private.',
+    default: '.d365fo-ui/auth.json',
+  },
+  {
+    path: 'environment.uiOutputDir',
+    env: 'D365FO_UI_OUTPUT_DIR',
+    section: 'environment',
+    tier: 'advanced',
+    type: 'path',
+    label: 'UI test reports directory',
+    description: 'Local reports and error screenshots. Relative paths resolve from the installation or instance directory.',
+    default: '.d365fo-ui/reports',
+  },
   {
     path: 'environment.type',
     env: 'D365FO_DEV_ENVIRONMENT_TYPE',

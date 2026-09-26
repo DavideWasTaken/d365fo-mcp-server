@@ -53,7 +53,7 @@ export const PlanSchema = z
   .strict();
 export const ProfileSchema = z
   .object({
-    baseUrl: z.url().regex(/^https?:\/\//, 'HTTP(S) URL required'),
+    baseUrl: z.url().regex(/^[hH][tT][tT][pP][sS]?:\/\//, 'HTTP(S) URL required'),
     storageState: short,
     outputDir: short,
     headless: z.boolean().optional(),
@@ -62,7 +62,7 @@ export const ProfileSchema = z
   .strict();
 export const InputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('contract') }).strict(),
-  z.object({ action: z.literal('run'), profilePath: short, plan: PlanSchema }).strict(),
+  z.object({ action: z.literal('run'), profilePath: short.optional(), plan: PlanSchema }).strict(),
 ]);
 export type Plan = z.infer<typeof PlanSchema>;
 export type Assertion = z.infer<typeof AssertionSchema>;
@@ -112,8 +112,9 @@ export function getContract() {
       '15 seconds per step, 120 seconds per case; no whole-case retry. Only the two declared scenarios are covered.',
       'Only navigation to the configured exact HTTP(S) origin is allowed. All HTTP navigation redirects are NOT_VERIFIED; use the final application URL and refresh saved login.',
       'Profile paths resolve relative to the profile file. Auth state is loaded into separate sequential browser contexts; never a personal browser.',
+      'Omit profilePath to use environment.uiTestUrl and the saved login/report paths from normal MCP setup. An explicit profile replaces these settings entirely.',
     ],
-    example: { action: 'run', profilePath: '.d365fo-ui/profile.json', plan: examplePlan },
+    example: { action: 'run', plan: examplePlan },
     profileExample: {
       baseUrl: 'https://your-test-env.operations.dynamics.com',
       storageState: 'auth.json',

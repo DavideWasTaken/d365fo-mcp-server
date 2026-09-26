@@ -1,10 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runVerification } from '../../src/tools/sdlc/uiVerification/runner.js';
 import { examplePlan, type Plan } from '../../src/tools/sdlc/uiVerification/contract.js';
+import { verifyUiCustomizationTool } from '../../src/tools/sdlc/verifyUiCustomization.js';
+import { loadEnv } from '../../src/utils/loadEnv.js';
 let server: Server, dir: string, baseUrl: string, profilePath: string;
 let foreignHits = 0;
 let writes = 0;
@@ -89,6 +91,37 @@ afterAll(async () => {
 const plan = (): Plan => structuredClone(examplePlan);
 const options = { stepTimeoutMs: 1000, caseTimeoutMs: 5000 };
 describe('real browser UI verification fixture', () => {
+  it('loads setup configuration and executes both cases without a profile file', async () => {
+    const configPath = path.join(dir, 'd365fo-mcp.json');
+    await writeFile(configPath, JSON.stringify({ environment: { uiTestUrl: baseUrl, uiStorageState: 'auth.json', uiOutputDir: 'configured-reports' } }));
+    const originalEnv = { ...process.env };
+    try {
+      delete process.env.D365FO_UI_TEST_URL;
+      delete process.env.D365FO_UI_STORAGE_STATE;
+      delete process.env.D365FO_UI_OUTPUT_DIR;
+      process.env.D365FO_CONFIG = configPath;
+      loadEnv(import.meta.url);
+      const result = await verifyUiCustomizationTool({ action: 'run', plan: plan() }, options);
+      const report = JSON.parse(result.content[0].text);
+      expect(report.status, result.content[0].text).toBe('PASS');
+      expect(report.cases.map((c: any) => c.status)).toEqual(['PASS', 'PASS']);
+      expect(report.reportPath).toContain(path.join(dir, 'configured-reports'));
+      expect(await readFile(report.reportPath, 'utf8')).toContain('Quantity must be positive');
+    } finally {
+      for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
+      Object.assign(process.env, originalEnv);
+    }
+  });
+  it('keeps explicit profiles authoritative over another configured environment', async () => {
+    vi.stubEnv('D365FO_UI_TEST_URL', foreignUrl);
+    vi.stubEnv('D365FO_UI_STORAGE_STATE', path.join(dir, 'nonexistent-auth.json'));
+    try {
+      const result = await runVerification(profilePath, plan(), options);
+      expect(result.status).toBe('PASS');
+      expect(result.environment).toBe(baseUrl);
+      expect(foreignHits).toBe(0);
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('verifies positive and negative business outcomes with isolated auth contexts', async () => {
     const p = plan();
     p.cases.forEach(c => c.preconditions.push({ selector: '#result', check: 'text', expected: 'Fresh' }));

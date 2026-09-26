@@ -18,11 +18,19 @@ npm run build
 
 Point the local MCP configuration at this checkout's `dist/index.js`, following [local setup](SETUP.md). The tool is included in the `full` and `core` tool profiles, in `full` or `write-only` server mode; it is excluded from `read-only` mode. It does not need the symbol database to execute.
 
-## Prepare a local browser profile
+## Configure the environment once
+
+Run `npm run setup` in this fork and fill in **Environment URL for UI tests**. The optional answer is saved as `environment.uiTestUrl` in the existing `config/d365fo-mcp.json`. Per-instance setup stores its own URL. Existing installations can instead run `npx tsx src/cli/index.ts config environment` (add `--instance NAME` for an instance). Restart the MCP after changing configuration.
+
+The tool reuses this URL whenever `profilePath` is omitted. No separate profile file is required. The advanced environment settings `uiStorageState` and `uiOutputDir` default to `.d365fo-ui/auth.json` and `.d365fo-ui/reports`, relative to the installation or instance directory, independent of the MCP process working directory. Environment-variable overrides are `D365FO_UI_TEST_URL`, `D365FO_UI_STORAGE_STATE` and `D365FO_UI_OUTPUT_DIR`.
+
+When a separate instance configuration is selected, UI settings from another installation's ambient `.env` are ignored. Deliberate shell overrides and an explicitly selected `ENV_FILE` still apply. Leaving the URL unset gives NOT_VERIFIED with setup instructions; the tool never guesses an environment URL.
+
+## Save a local browser login
 
 Use a test environment and dedicated test records. The runner performs real UI actions, including saving records when instructed. Each case gets its own browser context, but both still operate on the same server-side environment: choose independent data.
 
-Create a local, ignored directory and sign in once using Playwright's browser:
+From the installation directory (or instance directory), create a local, ignored directory and sign in once using Playwright's browser, using the same URL entered in setup. If you customized `uiStorageState`, save to that path instead:
 
 ```powershell
 New-Item -ItemType Directory -Force .d365fo-ui
@@ -31,7 +39,9 @@ npx playwright codegen --save-storage=.d365fo-ui/auth.json https://YOUR-TEST-ENV
 
 Complete the normal login/MFA yourself, wait for the D365FO application, then close the browser to save state. This does not read your personal Chrome profile. Expired sessions require repeating this step. Some authentication policies require additional setup; the tool reports a block if the saved state cannot reach the application. See [Playwright authentication](https://playwright.dev/docs/auth).
 
-Save `.d365fo-ui/profile.json`:
+### Optional profile override
+
+For a one-off environment or visible browser, you can still save `.d365fo-ui/profile.json` and pass its absolute path as `profilePath`. It completely replaces the configured URL and paths for that run:
 
 ```json
 {
@@ -50,11 +60,11 @@ Paths inside the profile resolve relative to the profile file. `headless:false` 
 2. Fetch `verify_ui_customization` with `{"action":"contract"}` once. This returns the complete validated contract and example, keeping the ordinary MCP tool catalogue small.
 3. Derive two cases from the **original requirement**, not from the generated implementation: one happy path and the most important negative/boundary case. Each case needs executable preconditions and at least one functional assertion.
 4. Observe the actual DOM to identify unambiguous selectors, including the active company indicator. Do not infer working browser selectors from X++ control names alone.
-5. Call `action="run"` with the absolute `profilePath` and the plan. Read the compact response and local report. Investigate a failure before choosing to rerun; the tool does not automatically repeat writes.
+5. Call `action="run"` with the plan; the tool uses the environment saved in setup. Supply `profilePath` only for an explicit override. Read the compact response and local report. Investigate a failure before choosing to rerun; the tool does not automatically repeat writes.
 
 Example agent instruction:
 
-> After this customization is built, synchronized and deployed to my test environment, verify the original requirement using the saved UI profile. Run exactly two independent cases: valid input and the most important invalid input. Reopen any saved record when persistence is part of the requirement. Return only the journey, expected/observed result and outcome for each case.
+> After this customization is built, synchronized and deployed to my test environment, verify the original requirement using the environment configured in setup and the saved browser login. Run exactly two independent cases: valid input and the most important invalid input. Reopen any saved record when persistence is part of the requirement. Return only the journey, expected/observed result and outcome for each case.
 
 ## Two-case example
 
@@ -63,12 +73,11 @@ The following **illustrative** plan tests a fictional form requiring a positive 
 ```json
 {
   "action": "run",
-  "profilePath": "C:/work/d365fo-mcp-server/.d365fo-ui/profile.json",
   "plan": {
     "requirement": "REQ-42: quantities greater than zero are accepted; zero is rejected with a validation message.",
     "buildReference": { "reference": "my-customization-build-42", "ready": true },
     "company": "USMF",
-    "startUrl": "https://YOUR-TEST-ENVIRONMENT.operations.dynamics.com/?cmp=USMF&mi=MyQuantityForm",
+    "startUrl": "/?cmp=USMF&mi=MyQuantityForm",
     "companySelector": "[data-testid='active-company']",
     "cases": [
       {

@@ -14,11 +14,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const multiselect = vi.fn();
 const confirm = vi.fn();
+const text = vi.fn();
 
 vi.mock('@clack/prompts', () => ({
   multiselect,
   confirm,
-  text: vi.fn(),
+  text,
   password: vi.fn(),
   select: vi.fn(),
   isCancel: (v: unknown) => typeof v === 'symbol',
@@ -26,8 +27,9 @@ vi.mock('@clack/prompts', () => ({
   log: { step: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 
-const { askAdvanced } = await import('../../src/cli/settingsPrompt.js');
-const { openStore } = await import('../../src/cli/settingsStore.js');
+const { askAdvanced, askSetting } = await import('../../src/cli/settingsPrompt.js');
+const { openStore, writeSetting, readSetting } = await import('../../src/cli/settingsStore.js');
+const { settingByPath } = await import('../../src/config/settings.js');
 
 function store() {
   return openStore(fs.mkdtempSync(join(os.tmpdir(), 'd365fo-prompt-')), null);
@@ -36,6 +38,21 @@ function store() {
 beforeEach(() => {
   multiselect.mockReset();
   confirm.mockReset();
+  text.mockReset();
+});
+
+it('prefills the saved UI URL and validates it in the normal text prompt', async () => {
+  const target = store();
+  const setting = settingByPath('environment.uiTestUrl')!;
+  writeSetting(target, setting, 'https://existing.example');
+  text.mockImplementationOnce(async (opts: any) => {
+    expect(opts.initialValue).toBe('https://existing.example');
+    expect(opts.validate('ftp://wrong.example')).toBeTruthy();
+    expect(opts.validate('')).toBeUndefined();
+    return opts.initialValue;
+  });
+  await askSetting(target, setting);
+  expect(readSetting(target, setting)).toBe('https://existing.example');
 });
 
 describe('askAdvanced', () => {

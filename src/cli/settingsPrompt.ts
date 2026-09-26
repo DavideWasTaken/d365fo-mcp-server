@@ -128,6 +128,7 @@ export async function askSetting(
         initialValue: initialText(store, setting) || opts?.initial || '',
         placeholder: setting.placeholder,
         required,
+        validate: setting.validate,
       });
       writeSetting(store, setting, raw || undefined);
       return raw || undefined;

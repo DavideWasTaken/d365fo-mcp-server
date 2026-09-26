@@ -2,7 +2,8 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { chromium, type Browser, type BrowserContext, type Page, type Locator } from 'playwright';
-import { PlanSchema, ProfileSchema, type Plan, type Assertion, type Step } from './contract.js';
+import { PlanSchema, type Plan, type Assertion, type Step } from './contract.js';
+import { resolveUiProfile } from './profile.js';
 import { aggregateStatus, renderReport, type CaseResult, type VerificationReport, type StepResult } from './report.js';
 
 export interface RunOptions {
@@ -93,14 +94,14 @@ async function execute(page: Page, s: Step, base: string, evidence: StepResult, 
 
 /** Bounds can only be lowered by internal tests; callers cannot extend either deadline. */
 export async function runVerification(
-  profilePath: string,
+  profilePath: string | undefined,
   rawPlan: Plan,
   options: RunOptions = {},
 ): Promise<RunResult> {
   const plan = PlanSchema.parse(rawPlan);
-  const profile = ProfileSchema.parse(JSON.parse(await readFile(profilePath, 'utf8')));
+  const profile = await resolveUiProfile(profilePath);
   const base = allowedUrl(profile.baseUrl, profile.baseUrl);
-  const outputDir = path.resolve(path.dirname(profilePath), profile.outputDir, `run-${Date.now()}-${randomUUID()}`);
+  const outputDir = path.resolve(profile.outputDir, `run-${Date.now()}-${randomUUID()}`);
   await mkdir(outputDir, { recursive: true });
   const started = Date.now();
   const stepMs = Math.max(1, Math.min(options.stepTimeoutMs ?? 15000, 15000));
@@ -122,7 +123,7 @@ export async function runVerification(
     if (!plan.buildReference.ready) throw new Error('Build/deployment readiness was not declared');
     allowedUrl(plan.startUrl, base);
     for (const c of plan.cases) for (const s of c.steps) if (s.action === 'navigate') allowedUrl(s.url, base);
-    const statePath = path.resolve(path.dirname(profilePath), profile.storageState);
+    const statePath = profile.storageState;
     const state = JSON.parse(await readFile(statePath, 'utf8'));
     if (
       !Array.isArray(state.cookies) ||

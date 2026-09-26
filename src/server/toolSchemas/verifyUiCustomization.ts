@@ -6,7 +6,7 @@ export const verifyUiCustomizationTool = {
     type: 'object',
     properties: {
       action: { type: 'string', enum: ['contract', 'run'] },
-      profilePath: { type: 'string', description: 'Local JSON profile path; required for run.' },
+      profilePath: { type: 'string', description: 'Optional JSON profile; defaults to MCP setup.' },
       plan: {
         type: 'object',
         additionalProperties: true,

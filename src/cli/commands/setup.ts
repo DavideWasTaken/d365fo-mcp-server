@@ -162,6 +162,7 @@ function openRootStore(): SettingsStore {
 /** D365FO environment: type, then the paths/models that type needs. */
 async function configureEnvironment(store: SettingsStore, scenario: Scenario): Promise<'traditional' | 'ude'> {
   p.log.step('D365FO environment');
+  await askSetting(store, setting('environment.uiTestUrl'));
 
   let envType: string;
   if (scenario === 'ude') {

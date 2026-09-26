@@ -94,6 +94,7 @@ export async function instanceAddCommand(name: string | undefined, portArg: stri
   // told where it is for the same reason the root config does.
   pinBridgeExe(store);
   p.log.step('D365FO environment — where this instance reads its X++ packages');
+  await askSetting(store, settingByPath('environment.uiTestUrl')!);
   const envType = String(await askSetting(store, envTypeSetting, {
     initial: listXppConfigs().length > 0 ? 'ude' : 'traditional',
   }));
