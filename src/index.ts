@@ -780,7 +780,7 @@ async function main() {
     const toolDesc = SERVER_MODE === 'write-only' ? `(${Array.from(LOCAL_TOOLS).join(', ')})` :
                     SERVER_MODE === 'read-only' ? '(all except local tools)' :
                     TOOL_PROFILE === 'core' ? `(core profile${EXTRA_TOOLS.size ? ` + ${EXTRA_TOOLS.size} extra` : ''}; MCP_TOOL_PROFILE=full for all ${Object.keys(TOOL_ANNOTATIONS).length})` :
-                    '(1 discovery + 1 labels + 3 object-info + 2 intelligent + 2 smart-gen + 1 file-ops + 1 pattern-analysis + 5 security-ext + 5 sdlc-build + 2 code-review + 2 code-quality)';
+                    '(1 discovery + 1 labels + 2 object-info + 2 intelligent + 1 smart-gen + 1 file-ops + 1 pattern-analysis + 5 security-ext + 5 sdlc-build + 2 code-quality)';
     log.ok(`Registered ${toolCount} X++ MCP tools ${toolDesc}`);
     serverState.isReady = true;
     serverState.isHealthy = true;
@@ -953,6 +953,7 @@ async function main() {
           { name: 'update_symbol_index',          desc: 'Re-index a file changed outside this server (create/modify refresh it themselves)' },
           { name: 'build_d365fo_project',         desc: 'Compile the model locally; bpCheck/dbSync fold the BP check and the database sync into the same call' },
           { name: 'run_bp_check',                 desc: 'Run Microsoft Best Practices (xppbp.exe) analysis' },
+          { name: 'verify_ui_customization',     desc: 'Verify two requirement-based UI cases in a local browser' },
           { name: 'run_systest_class',            desc: 'Execute unit tests using SysTestConsole.exe' },
         ]},
         { icon: '🧪', category: 'Code Quality & Grounding', tools: [

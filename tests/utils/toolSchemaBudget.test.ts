@@ -184,7 +184,9 @@ const CHARS_PER_TOKEN = 4;
 // src/Metadata the server could read and not write, so every <ModuleReferences>
 // entry — a mandatory step before code that names a type from another model —
 // was a hand-edited XML carve-out. Parameters stay in the op-spec registry.
-const TOTAL_BUDGET = 45_100;
+// UI verification adds 738 chars including its comma: 44,822 -> 45,560.
+// Full 7,492-char contract is returned only on demand, outside tools/list.
+const TOTAL_BUDGET = 45_650;
 const LARGEST_TOOL_BUDGET = 5_780;
 
 async function getTools(): Promise<Array<{ name: string }>> {
@@ -205,7 +207,7 @@ describe('tool schema token budget', () => {
       `[tool-budget] ${tools.length} tools · ${chars} chars ≈ ${Math.round(chars / CHARS_PER_TOKEN)} tokens ` +
       `(budget ${TOTAL_BUDGET} chars)`,
     );
-    expect(tools.length).toBe(20);
+    expect(tools.length).toBe(21);
     expect(chars).toBeLessThan(TOTAL_BUDGET);
   });
 

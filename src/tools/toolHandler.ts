@@ -34,6 +34,7 @@ import { updateSymbolIndexTool } from './sdlc/updateSymbolIndex.js';
 import { buildProjectTool } from './sdlc/buildProject.js';
 import { dbSyncTool } from './sdlc/dbSync.js';
 import { runBpCheckTool } from './sdlc/runBpCheck.js';
+import { verifyUiCustomizationTool } from './sdlc/verifyUiCustomization.js';
 import { sysTestRunnerTool } from './sdlc/sysTestRunner.js';
 import { reviewWorkspaceChangesTool } from './sdlc/reviewWorkspaceChanges.js';
 import { undoLastModificationTool } from './sdlc/undoLastModification.js';
@@ -58,7 +59,6 @@ const WRITE_CAPABLE_TOOLS = new Set(['d365fo_file', 'labels']);
 import { buildProgressMessage } from '../utils/toolProgressMessage.js';
 import { createProgressReporter, startProgressHeartbeat } from '../utils/progressReporter.js';
 import { describeDbWait } from '../utils/startupProgress.js';
-
 
 /**
  * Extract workspace path from GitHub Copilot _meta.
@@ -374,6 +374,7 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
         return await dbSyncTool(request.params.arguments as any, context);
       case 'run_bp_check':
         return await runBpCheckTool(request.params.arguments as any, context);
+      case 'verify_ui_customization': return await verifyUiCustomizationTool(request.params.arguments, { signal: extra.signal });
       case 'run_systest_class':
         return await sysTestRunnerTool(request.params.arguments as any, context);
       case 'review_workspace_changes':

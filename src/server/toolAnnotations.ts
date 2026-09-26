@@ -100,6 +100,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotations> = {
   labels:                           write('Label operations', { destructive: true }),
   generate_object:                         write('Generate code (pattern/scaffold)'),
 
+  verify_ui_customization: { title: 'Verify UI customization', destructiveHint: true, openWorldHint: true },
+
   // SDLC operations
   update_symbol_index:              write('Update symbol index', { idempotent: true }),
   build_d365fo_project:             write('Build D365FO project', { idempotent: true }),

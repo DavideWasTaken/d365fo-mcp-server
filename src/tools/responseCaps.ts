@@ -55,6 +55,8 @@ const TOOL_CAP_SIZES: Record<string, number | 'uncapped'> = {
   // whole point is the full dump — truncating that at 5000 hid the stdio
   // handshake section behind the project table.
   get_workspace_info:               20000,
+  // Strict contract JSON and bounded two-case evidence must stay complete.
+  verify_ui_customization:          24000,
   default:                          5000,
 };
 

@@ -60,3 +60,7 @@ Test mirati per limiti del piano, aggregazione degli esiti e distinzione tra err
 ## Esclusioni
 
 Nessun modello giudice, conversione RSAT, suite di regressione estesa, dashboard, test di performance, self-healing dei selettori o supporto universale di tutti i controlli D365FO nella prima versione. Controlli complessi non supportati devono produrre un blocco esplicito, non un PASS.
+
+## Decisione di implementazione
+
+La prima versione blocca tutti i redirect HTTP di navigazione, anche sullo stesso dominio, con NON VERIFICATO e istruzione di usare l’URL finale e aggiornare la sessione salvata. Questo limite esplicito evita che una catena di redirect raggiunga un altro ambiente prima del controllo. Le normali risorse della pagina (ad esempio script CDN) sono consentite; il vincolo riguarda la navigazione.

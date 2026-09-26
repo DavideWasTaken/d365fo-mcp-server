@@ -125,5 +125,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Install Chromium for UI fixture tests
+        # The UI verification fixture uses a real browser, but no D365FO account.
+        # Install both Chromium and its Linux system dependencies for this tier.
+        run: npx playwright install --with-deps chromium
       - name: Integration tier (VM-free)
         run: npm run test:integration

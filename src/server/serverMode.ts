@@ -31,6 +31,7 @@
  */
 export const LOCAL_TOOLS = new Set([
   'verify_d365fo_project',
+  'verify_ui_customization',
   'update_symbol_index',
   'build_d365fo_project',
   'run_bp_check',
@@ -190,6 +191,7 @@ export const CORE_TOOLS = new Set([
   'build_d365fo_project',
   'run_bp_check',
   'verify_d365fo_project',
+  'verify_ui_customization',
 ]);
 
 /**

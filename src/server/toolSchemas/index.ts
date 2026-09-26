@@ -24,6 +24,8 @@ import { getKnowledgeTool } from './getKnowledge.js';
 import { validateCodeTool } from './validateCode.js';
 import { prepareTool } from './prepare.js';
 
+import { verifyUiCustomizationTool } from './verifyUiCustomization.js';
+
 export const toolSchemas = [
   searchTool,
   generateObjectTool,
@@ -45,4 +47,5 @@ export const toolSchemas = [
   getKnowledgeTool,
   validateCodeTool,
   prepareTool,
+  verifyUiCustomizationTool,
 ];

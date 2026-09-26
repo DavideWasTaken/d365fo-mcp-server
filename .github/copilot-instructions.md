@@ -42,6 +42,7 @@ PowerShell / any terminal command **WILL HANG** in VS 2022 / VS 2026 MCP integra
 | Validate form XML against its pattern | `object_patterns(domain="form", action="validate", xml \| formName \| filePath)` — structural errors block form writes (FORM_PATTERN_ENFORCE) |
 | Resolve label / EDT / class refs | `validate_code(mode="references", code)` |
 | Build / BP / Sync | `build_d365fo_project(bpCheck: true, dbSync: true)` — ONE call compiles, runs the best-practice check and syncs AxDB |
+| Verify a deployed customization in the browser | `verify_ui_customization(action="contract")` once, then `action="run", profilePath, plan` — exactly two cases from the original requirement; inspect actual DOM selectors first; report PASS / FAIL / NOT_VERIFIED |
 | Error diagnosis | `get_knowledge(kind="error", errorText)` |
 | Parameters for a `d365fo_file` operation / `generate_object` mode | `get_knowledge(kind="op-spec", topic="add-index" \| "table" \| "scaffold:form")` — those two tools keep their parameters OUT of the tool schema; look the contract up once for the operation you picked, then nest the values in `params` (`properties` for `action="create"`) |
 
@@ -102,4 +103,3 @@ PowerShell / any terminal command **WILL HANG** in VS 2022 / VS 2026 MCP integra
 ## Full Instructions
 
 The complete X++ rules, query grammar, CoC authoring rules, and workflow details are delivered via the MCP prompt `xpp_system_instructions`. If that prompt is not loaded, request it or consult [src/prompts/systemInstructions.ts](../src/prompts/systemInstructions.ts) directly.
-

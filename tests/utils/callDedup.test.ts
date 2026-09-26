@@ -276,6 +276,7 @@ describe('dedup cache — invalidation on write', () => {
     expect([...MUTATING_TOOLS].sort()).toEqual([
       'd365fo_file', 'generate_object', 'labels',
       'trigger_db_sync', 'undo_last_modification', 'update_symbol_index',
+      'verify_ui_customization',
     ]);
   });
 });

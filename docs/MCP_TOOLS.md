@@ -1,16 +1,18 @@
-# Tool Reference — 20 tools
+# Tool Reference — 21 tools
 
 Every tool the server exposes, grouped by purpose. The AI agent picks tools automatically — the *example prompts* show what to ask to trigger them; you never name tools yourself.
 
 > Several tools are **unified** behind a discriminator parameter (`action` / `mode` / `domain` / `kind` / `objectType` / `include`) instead of one tool per variant — e.g. `search`, `d365fo_file`, `analyze_code`, `object_patterns`, `prepare`, `security_info`, `extension_info`, `get_knowledge`, `labels`, `get_object_info`, `generate_object`, `validate_code`. Fewer tools to choose from, same coverage.
 
-> **C# bridge first:** on Windows D365FO VMs, the bridge-backed read tools (marked †) query the live `IMetadataProvider` (always-fresh metadata) and `DYNAMICSXREFDB` (compiler-resolved cross-references), falling back to SQLite transparently on Azure/Linux. All write operations go exclusively through the bridge. See [ARCHITECTURE.md](ARCHITECTURE.md).
+> **C# bridge first:** on Windows D365FO VMs, the bridge-backed read tools (marked †) query the live `IMetadataProvider` (always-fresh metadata) and `DYNAMICSXREFDB` (compiler-resolved cross-references), falling back to SQLite transparently on Azure/Linux. All AOT metadata writes go exclusively through the bridge. See [ARCHITECTURE.md](ARCHITECTURE.md).
 >
-> **Server modes:** `full` = all 20 tools · `read-only` (Azure) = everything except the six local build/verify tools · `write-only` (hybrid companion) = those six local tools plus the three always-on ones (`get_object_info`, `labels`, `d365fo_file`). Independently, **`MCP_TOOL_PROFILE=core`** publishes only the 15-tool create-and-build loop, for workspaces that already run other MCP servers. See [MCP_CONFIG.md](MCP_CONFIG.md).
+> **Server modes:** `full` = all 21 tools · `read-only` (Azure) = everything except the seven local build/verify tools · `write-only` (hybrid companion) = those seven local tools plus the three always-on ones (`get_object_info`, `labels`, `d365fo_file`). Independently, **`MCP_TOOL_PROFILE=core`** publishes only the 16-tool create-build-and-verify loop, for workspaces that already run other MCP servers. See [MCP_CONFIG.md](MCP_CONFIG.md).
 
 ---
 
 ## Recommended workflows
+
+**Browser verification in this fork:** generate code → build/sync/deploy → prepare two cases from the original requirement → `verify_ui_customization(action="run", profilePath, plan)`. Fetch `action="contract"` once for the full input schema and example. The runner does not call a model for each click. See [UI customization testing](UI_CUSTOMIZATION_TESTING.md).
 
 The grounding chain is what makes generated code compile on the first try:
 
@@ -159,15 +161,16 @@ Two things shared by `create` and `modify`:
 | `get_workspace_info` | Detected paths, model, project, server mode + **index staleness warning** — call first in every session · `diagnostics: true` additionally lists the model's `<ModuleReferences>` — the packages xppc will resolve types against · `changes: true` returns the uncommitted X++ diff (`git diff HEAD`) plus per-file rollback hints instead of the configuration, and says so plainly when the workspace is not a git work tree | *"Check my workspace configuration"* · *"Review my changes"* |
 | `verify_d365fo_project` | Objects exist on disk and in the `.rnrproj` | *"Verify everything we created is in the project"* |
 
-## 🏗️ SDLC & Build (4)
+## 🏗️ SDLC & Build (5)
 
-> Local-only — require a Windows D365FO VM; excluded from the Azure `read-only` mode.
+> Local-only — excluded from the Azure `read-only` mode. Build/SysTest operations require a Windows D365FO VM; browser verification requires a local Playwright installation and access to the deployed test environment.
 
 | Tool | What it does | Example prompt |
 |------|--------------|----------------|
 | `build_d365fo_project` | MSBuild compilation with structured xppc diagnostics (severity, object, line, fix hints for the first errors). `bpCheck: true` appends the best-practice report to a GREEN build, saving the usual follow-up `run_bp_check`; advisory, never fails the build. `dbSync: true` runs the database sync (SyncEngine.exe) on a GREEN build — partial over the project's syncable objects, full-model when it has none; `dbSync: ["CustTable"]` syncs exactly those. Also advisory. A green build returns its diagnostics and summary rather than the raw phase-timing table | *"Build the project and show the errors"* · *"Build and sync the database"* |
 | `run_bp_check` | Microsoft Best Practices (xppbp.exe) analysis — `objects: [{objectType, objectName}]` checks several objects in one call (shared preamble once, findings grouped per object) | *"Run a BP check on my model"* · *"BP check the table, its extension class and the enum"* |
 | `run_systest_class` | Execute SysTest unit tests via SysTestConsole.exe, run with `/unattended` and reported per method. Reads the red-first phase off the results rather than asking for a flag: while the scaffold's `this.fail(...)` lines are still there it reports **Red phase confirmed**, and if every method passes on a class created in this session it warns that a test passing on its first run has proven nothing about its assertion. When the runner cannot start at all, it names the assembly-binding fault behind it instead of blaming the test model | *"Run the MyServiceTest class"* |
+| `verify_ui_customization` | `action="contract"` returns the profile/plan schemas and example. `action="run"` takes `profilePath` and `plan`, executes exactly two browser cases after deployment, and returns PASS / FAIL / NOT_VERIFIED plus a local Markdown report. The runner makes no model calls; UI actions can modify test records. [Setup and complete example](UI_CUSTOMIZATION_TESTING.md) | *"Check the deployed customization against the requirement with a happy path and one negative case; give me a short report of what you did."* |
 | `update_symbol_index` | Re-index file(s) changed **outside** this server, without a restart — `d365fo_file` create/modify already refresh the index themselves, so no follow-up call is needed after a write | *"I edited that table in Visual Studio — re-index it"* |
 
 ## ✅ Quality & Grounding (2)
