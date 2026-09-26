@@ -22,11 +22,13 @@ export interface VerificationReport {
   durationMs: number;
   status: Status;
   cases: CaseResult[];
+  planPath?: string;
+  timeouts?: { stepTimeoutMs: number; navigationTimeoutMs: number; caseTimeoutMs: number };
 }
 export function aggregateStatus(statuses: Status[]): Status {
   return statuses.includes('FAIL')
     ? 'FAIL'
-    : statuses.length !== 2 || statuses.includes('NOT_VERIFIED')
+    : statuses.length < 1 || statuses.length > 5 || statuses.includes('NOT_VERIFIED')
       ? 'NOT_VERIFIED'
       : 'PASS';
 }
@@ -49,6 +51,11 @@ export function renderReport(r: VerificationReport): string {
     `Company: ${safeText(r.company)}`,
     `Started: ${safeText(r.startedAt)}; duration: ${r.durationMs} ms`,
     `Overall: **${r.status}**`,
+    ...(r.timeouts
+      ? [
+          `Timeouts: step ${r.timeouts.stepTimeoutMs} ms; navigation ${r.timeouts.navigationTimeoutMs} ms; case ${r.timeouts.caseTimeoutMs} ms`,
+        ]
+      : []),
     '',
   ];
   for (const c of r.cases) {
@@ -69,7 +76,7 @@ export function renderReport(r: VerificationReport): string {
     lines.push('');
   }
   lines.push(
-    'Coverage: only these two scenarios and their explicit assertions. Unexecuted steps and other requirement criteria are not covered.',
+    `Coverage: only these ${r.cases.length} scenarios and their explicit assertions. Unexecuted steps and other requirement criteria are not covered.`,
   );
   return lines.join('\n');
 }
@@ -93,13 +100,22 @@ export function summarizeReport(result: VerificationReport & { reportPath: strin
       })),
       durationMs: result.durationMs,
       reportPath: result.reportPath,
+      planPath: result.planPath,
       buildAttestation: 'Caller-declared; not browser-attested',
       evidenceNote: 'Inline evidence is abbreviated; the local report contains full bounded evidence.',
     });
   let text = summary();
-  while (text.length > 20000 && limit > 10) {
+  while (text.length > 20000 && limit > 0) {
     limit = Math.floor(limit / 2);
     text = summary();
   }
+  if (text.length > 20000)
+    return JSON.stringify({
+      status: result.status,
+      cases: result.cases.map(c => ({ name: c.name.slice(0, 80), status: c.status, durationMs: c.durationMs })),
+      reportPath: result.reportPath,
+      planPath: result.planPath,
+      evidenceNote: 'Detailed evidence is in the local report.',
+    });
   return text;
 }

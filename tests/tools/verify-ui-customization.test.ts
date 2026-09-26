@@ -13,7 +13,7 @@ describe('UI verification contract', () => {
   it('accepts the executable two-case example and rejects unsafe/unbounded plans', () => {
     expect(PlanSchema.safeParse(examplePlan).success).toBe(true);
     for (const plan of [
-      { ...examplePlan, cases: [examplePlan.cases[0]] },
+      { ...examplePlan, cases: [] },
       { ...examplePlan, code: 'run()' },
       { ...examplePlan, cases: examplePlan.cases.map(c => ({ ...c, preconditions: [] })) },
       {
@@ -38,7 +38,7 @@ describe('UI verification contract', () => {
     const result = await verifyUiCustomizationTool({ action: 'contract' });
     const contract = JSON.parse(result.content[0].text);
     expect(contract.planSchema.additionalProperties).toBe(false);
-    expect(contract.planSchema.properties.cases.minItems).toBe(2);
+    expect(contract.planSchema.properties.cases.minItems).toBe(1);
     expect(PlanSchema.safeParse(contract.example.plan).success).toBe(true);
     const schema = toolSchemas.find(t => t.name === 'verify_ui_customization');
     expect(schema).toBeDefined();

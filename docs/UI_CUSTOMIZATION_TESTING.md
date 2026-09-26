@@ -1,8 +1,8 @@
 # Browser verification of D365FO customizations
 
-This fork adds **`verify_ui_customization`**, a local MCP tool for two requirement-based UI cases. The agent develops the customization with the existing tools, builds/syncs/deploys it, then explicitly calls this tool. Browser execution and Markdown reporting contain no model calls. The agent prepares the cases once; exploring the actual UI to identify selectors may still consume tokens.
+This fork adds **`verify_ui_customization`**, a local MCP tool for requirement-based UI cases. Two cases are recommended to limit cost; one to five are supported. The agent develops the customization with the existing tools, builds/syncs/deploys it, then explicitly calls this tool. Browser execution and Markdown reporting contain no model calls. The agent prepares the cases once; exploring the actual UI to identify selectors may still consume tokens.
 
-The first version supports bounded, pre-planned browser actions. It does not interpret arbitrary requirements, judge screenshots with AI, repair selectors or trigger automatically after every build. Passing two cases is evidence for those cases, not complete regression coverage.
+The runner supports bounded, pre-planned browser actions. It does not interpret arbitrary requirements, judge screenshots with AI, repair selectors or trigger automatically after every build. Passing the declared cases is evidence for those cases, not complete regression coverage.
 
 ## Install this fork
 
@@ -30,16 +30,24 @@ You can leave the URL empty during setup. If you later request a UI test, the to
 
 ## Save a local browser login
 
-Use a test environment and dedicated test records. The runner performs real UI actions, including saving records when instructed. Each case gets its own browser context, but both still operate on the same server-side environment: choose independent data.
+Use a test environment and dedicated test records. The runner performs real UI actions, including saving records when instructed. Each case gets its own browser context, but all still operate on the same server-side environment: choose independent data.
 
-From the installation directory (or instance directory), create a local, ignored directory and sign in once using Playwright's browser, using the same URL entered in setup. If you customized `uiStorageState`, save to that path instead:
+Call the separate authentication action before running cases (the selector below is illustrative and must be observed on your actual environment):
 
-```powershell
-New-Item -ItemType Directory -Force .d365fo-ui
-npx playwright codegen --save-storage=.d365fo-ui/auth.json https://YOUR-TEST-ENVIRONMENT.operations.dynamics.com
+```json
+{
+  "action": "authenticate",
+  "company": "USMF",
+  "companySelector": "[data-testid='active-company']",
+  "timeoutMs": 180000
+}
 ```
 
-Complete the normal login/MFA yourself, wait for the D365FO application, then close the browser to save state. This does not read your personal Chrome profile. Expired sessions require repeating this step. Some authentication policies require additional setup; the tool reports a block if the saved state cannot reach the application. See [Playwright authentication](https://playwright.dev/docs/auth).
+This opens an owned visible browser. Complete normal login/MFA yourself and select the requested company. The tool saves cookies, local storage and IndexedDB only after returning to the environment and observing the exact company text; it then closes the browser and returns `AUTHENTICATED`. Failure or cancellation preserves the previous auth file. The deadline defaults to 180 seconds and can be raised to 300 seconds. No passwords are passed through MCP and no personal browser profile is read.
+
+Authentication permits navigation to the environment origin and, by default, `https://login.microsoftonline.com`. If your tenant uses a different federated identity provider, explicitly set its exact HTTPS origin in `authenticationOrigins` in a profile (include Microsoft too if needed). Wildcards are rejected. Popup login is unsupported; the tool stops instead of saving an uncertain session. Browser session storage is not persisted, so sessionStorage-only authentication is unsupported. Tenant policies or complex login flows can still require manual setup. See [Playwright authentication](https://playwright.dev/docs/auth).
+
+If a test later redirects to a login origin, it stops with `NOT_VERIFIED`. Authenticate again separately, inspect any writes already performed and explicitly choose whether to rerun. Authentication never automatically resumes or replays a case.
 
 ### Optional profile override
 
@@ -50,11 +58,18 @@ For a one-off environment or visible browser, you can still save `.d365fo-ui/pro
   "baseUrl": "https://YOUR-TEST-ENVIRONMENT.operations.dynamics.com",
   "storageState": "auth.json",
   "outputDir": "reports",
-  "headless": true
+  "headless": true,
+  "channel": "msedge",
+  "authenticationOrigins": ["https://login.microsoftonline.com"],
+  "timeouts": {
+    "stepTimeoutMs": 30000,
+    "navigationTimeoutMs": 60000,
+    "caseTimeoutMs": 180000
+  }
 }
 ```
 
-Paths inside the profile resolve relative to the profile file. `headless:false` shows the dedicated test browser. The optional browser `channel` can select an installed supported browser; omit it to use Playwright Chromium. Keep profile, auth state, plans with real data, screenshots and reports local. `.d365fo-ui/` and `playwright/.auth/` are ignored by Git.
+Paths inside the profile resolve relative to the profile file. `headless:false` shows the dedicated test browser; authentication is always visible. Set `channel:"msedge"` for installed Microsoft Edge, including authentication, or omit it to use Playwright Chromium. Keep profile, auth state, plans with real data, screenshots and reports local. `.d365fo-ui/` and `playwright/.auth/` are ignored by Git.
 
 ## Invoke from the agent
 
@@ -62,13 +77,13 @@ SQL is optional and independent. Use `axdb_sql` for debugging or extra persisted
 
 1. Finish generation, build, required DB synchronization and deployment. Identify the build/revision actually available in the test environment.
 2. Fetch `verify_ui_customization` with `{"action":"contract"}` once. This returns the complete validated contract and example, keeping the ordinary MCP tool catalogue small.
-3. Derive two cases from the **original requirement**, not from the generated implementation: one happy path and the most important negative/boundary case. Each case needs executable preconditions and at least one functional assertion.
-4. Observe the actual DOM to identify unambiguous selectors, including the active company indicator. Do not infer working browser selectors from X++ control names alone.
+3. Derive cases from the **original requirement**, not from the generated implementation. Use two by default: one happy path and the most important negative/boundary case. One to five cases are allowed when explicitly planned. Each case needs executable preconditions and at least one functional assertion.
+4. Observe the actual DOM to identify unambiguous selectors, including the active company indicator. Use a case `scope` for the active visible form or row when needed. Do not infer working browser selectors from X++ control names alone. If the saved login is missing or expired, use `authenticate` separately.
 5. Call `action="run"` with the plan; the tool uses the environment saved in setup. If `requiresUserInput` is returned, ask the user the provided question and wait; resume with their `environmentUrl`, or stop if they skip testing. Supply `profilePath` only for an explicit override. Read the compact response and local report. Investigate a failure before choosing to rerun; the tool does not automatically repeat writes.
 
 Example agent instruction:
 
-> After this customization is built, synchronized and deployed to my test environment, verify the original requirement using the environment configured in setup and the saved browser login. Run exactly two independent cases: valid input and the most important invalid input. Reopen any saved record when persistence is part of the requirement. Return only the journey, expected/observed result and outcome for each case.
+> After this customization is built, synchronized and deployed to my test environment, verify the original requirement using the environment configured in setup and the saved browser login. Default to two independent cases: valid input and the most important invalid input. Reopen any saved record when persistence is part of the requirement. Return only the journey, expected/observed result and outcome for each case.
 
 ## Two-case example
 
@@ -105,7 +120,7 @@ The following **illustrative** plan tests a fictional form requiring a positive 
         "steps": [
           { "action": "fill", "selector": "[data-testid='quantity']", "value": "0" },
           { "action": "click", "selector": "[data-testid='validate']" },
-          { "action": "assert", "selector": "[data-testid='result']", "check": "text", "expected": "Quantity must be greater than zero" }
+          { "action": "assert", "selector": "[data-testid='result']", "check": "text", "match": "contains", "expected": "Quantity must be greater than zero" }
         ]
       }
     ]
@@ -115,13 +130,31 @@ The following **illustrative** plan tests a fictional form requiring a positive 
 
 `buildReference.ready` is a prerequisite declared by the caller. The browser does not attest which assembly was deployed; the report labels this reference as declared. `ready:false` produces NOT_VERIFIED without running the cases.
 
-Supported steps: `navigate`, `click`, `fill`, `select`, `press`, `wait`, `assert`. Assertions observe `visible`, `text`, `value` or `enabled`; boolean checks take booleans, text/value checks take strings. Assertions may appear between actions, so saving, reopening and checking a record can be expressed in one case. `select` addresses native select elements; D365FO lookups and virtualized grids may need explicit click/fill/press sequences. This version provides no universal adapter for complex controls or frames.
+Supported steps: `navigate`, `click`, `fill`, `select`, `press`, `wait`, `assert`. Assertions observe `visible`, `text`, `value` or `enabled`; boolean checks take booleans, text/value checks take strings. Text defaults to an exact trimmed comparison; `match:"contains"` accepts a non-empty substring, useful for message bars with extra text. Value and company comparisons remain exact. Assertions may appear between actions, so saving, reopening and checking a record can be expressed in one case. `select` addresses native select elements; D365FO lookups and virtualized grids may need explicit click/fill/press sequences. This version provides no universal adapter for complex controls or frames.
 
-Limits: exactly two cases, at most 20 steps each, at most 15 seconds per wait and 120 seconds per case. Cases stop at their first error and are not retried. The second runs independently when its own preconditions can be satisfied. Navigation must stay on the configured environment origin. This first version rejects every HTTP navigation redirect, including redirects within the same origin, as NOT_VERIFIED before following it. Use the final application URL and refresh the saved login state when needed. Normal SPA navigation without an HTTP redirect is supported; subresources such as CDN scripts are not subject to this navigation restriction.
+Optional `scope` on each case limits its preconditions and steps to one visible form/container, for example `"scope":"[data-testid='active-form']"`. The company indicator is always checked at page level. Hidden duplicates are ignored; multiple visible matches still produce `NOT_VERIFIED`, so repeated grid rows need an observed row-specific selector. `visible:false` succeeds when no visible match exists (absent or hidden).
+
+Limits: one to five cases, at most 20 steps each. Default timeouts are 30 seconds per step, 60 seconds per navigation and 180 seconds per case; maximums are 120, 180 and 600 seconds. Set `timeouts` in the profile or on `run` (run overrides profile). The case deadline remains an overall cap. Cases stop at their first error and are not retried. Other cases run independently when their own preconditions can be satisfied.
+
+Verification permits same-origin HTTP redirects, checking each navigation hop before following it, with at most ten redirects in one chain. Off-origin navigation, URLs containing credentials and popup navigation stop the affected case with `NOT_VERIFIED`; other independent cases still check their own preconditions. Native browser redirects preserve HTTP methods and cookies; UI actions are not replayed. Normal SPA navigation is supported. Subresources such as CDN scripts are not subject to the document-navigation allowlist. External identity-provider navigation is permitted only by the separate `authenticate` action.
+
+## Reuse a plan
+
+A run with a resolved profile saves the validated `plan.json` beside `report.md` and returns `planPath`. Review the declared build reference, readiness, requirement and record preconditions before reusing it. The saved plan does not prove that a new build has been deployed or reset existing records.
+
+```json
+{
+  "action": "run",
+  "planPath": "C:/path/to/.d365fo-ui/reports/RUN-ID/plan.json",
+  "timeouts": { "navigationTimeoutMs": 120000, "caseTimeoutMs": 300000 }
+}
+```
+
+Supply exactly one of `plan` or `planPath`. Saved input files are capped at 2 MiB and validated again. A plan does not embed credentials or the profile; supply the same `profilePath` when an override is needed. This supports lightweight repetition of these cases; it is not a Task Recorder/RSAT suite importer.
 
 ## Read the report
 
-The response gives the overall result, the two case outcomes, a bounded journey with expected/observed evidence, and the report path. The Markdown report records the requirement, declared build, environment/company, duration, actual steps completed, expected and observed values, and the stopping point. An error screenshot is local and optional; it is not sent to a model.
+The response gives the overall result, the case outcomes, a bounded journey with expected/observed evidence, and the report/plan paths. The Markdown report records the requirement, declared build, environment/company, effective timeouts, duration, actual steps completed, expected and observed values, and the stopping point. An error screenshot is local and optional; it is not sent to a model.
 
 | Outcome | Meaning |
 |---|---|
@@ -129,10 +162,10 @@ The response gives the overall result, the two case outcomes, a bounded journey 
 | FAIL | With required state reached, an observed functional result contradicted the requirement-based expectation. |
 | NOT_VERIFIED | Missing session/build readiness, unmet precondition, ambiguous selector, navigation/action error or another technical block prevented a verdict. |
 
-Overall FAIL takes precedence over NOT_VERIFIED, and NOT_VERIFIED over PASS. Always inspect the two individual outcomes. An expected business rejection is a **passing negative case** if the expected rejection actually appears.
+Overall FAIL takes precedence over NOT_VERIFIED, and NOT_VERIFIED over PASS. Always inspect the individual outcomes. An expected business rejection is a **passing negative case** if the expected rejection actually appears.
 
 ## Validation scope
 
 Run the browser fixture checks with `npm run test:ui` after installing Chromium. Run the input/report tests with `npm run test:run -- tests/tools/verify-ui-customization.test.ts`.
 
-Automated fixture tests exercise actual Chromium interaction and the result/report logic. They do not prove compatibility with a live D365FO form. Before relying on this fork for a real customization, run its two cases against the deployed D365FO environment and inspect the evidence. Uncovered requirement criteria remain outside the verdict.
+Automated fixture tests exercise actual Chromium interaction, same-origin and blocked redirects, native POST redirects/cookies, popup blocking, timeout behavior, visible scoping, text matching, saved plans and a simulated identity provider with session reuse. They do not prove compatibility with live D365FO, Edge-specific tenant policies or real Entra ID/MFA. Before relying on this fork for a real customization, run its cases against the deployed D365FO environment and inspect the evidence. Uncovered requirement criteria remain outside the verdict.

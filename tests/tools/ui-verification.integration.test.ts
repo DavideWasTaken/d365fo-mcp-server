@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+import type { Page } from 'playwright';
+import { installNavigationGuard } from '../../src/tools/sdlc/uiVerification/navigation.js';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,6 +13,7 @@ import { loadEnv } from '../../src/utils/loadEnv.js';
 let server: Server, dir: string, baseUrl: string, profilePath: string;
 let foreignHits = 0;
 let writes = 0;
+const nativePosts: string[] = [];
 let nextHopHits = 0;
 let foreign: Server, foreignUrl: string;
 const html = `<span id="company">USMF</span><span id="record">UI-TEST-001</span><input id="quantity" value="1"><button id="save">Save</button><span id="result">Fresh</span><script>document.querySelector('#save').onclick=()=>{setTimeout(()=>{document.querySelector('#result').textContent=Number(document.querySelector('#quantity').value)>0?'Saved':'Quantity must be positive';localStorage.setItem('touched','yes');fetch('/mutate')},150)}; setTimeout(()=>{const x=document.createElement('div');x.id='delayed';x.textContent='Ready';document.body.appendChild(x)},100); if(localStorage.getItem('touched')) document.querySelector('#result').textContent='Leaked';</script>`;
@@ -22,6 +26,67 @@ beforeAll(async () => {
   await new Promise<void>(resolve => foreign.listen(0, '127.0.0.1', resolve));
   foreignUrl = `http://127.0.0.1:${(foreign.address() as any).port}`;
   server = createServer((req, res) => {
+    if (req.url === '/credential-redirect') {
+      res.writeHead(302, { Location: baseUrl.replace('://', '://user:password@') + '/final' });
+      res.end();
+      return;
+    }
+    if (req.url === '/popup') {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(html + `<button id="popup" onclick="window.open('${foreignUrl}')">Popup</button>`);
+      return;
+    }
+    if (req.url === '/native-post') {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(
+        html +
+          '<form method="post" action="/posted"><input name="quantity" value="7"><button id="send">Send</button></form>',
+      );
+      return;
+    }
+    if (req.url === '/posted') {
+      let body = '';
+      req.on('data', chunk => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        nativePosts.push(`${req.method}:${body}`);
+        res.writeHead(303, { Location: '/post-final', 'Set-Cookie': 'hop=accepted; Path=/' });
+        res.end();
+      });
+      return;
+    }
+    if (req.url === '/post-final') {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(
+        html.replace(
+          '>Fresh<',
+          req.method === 'GET' && req.headers.cookie?.includes('hop=accepted') ? '>Posted<' : '>Bad transport<',
+        ),
+      );
+      return;
+    }
+    if (req.url === '/hidden-duplicates') {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(
+        '<section hidden><input id="quantity"><span id="company">OTHER</span><span id="result">Other</span></section>' +
+          html,
+      );
+      return;
+    }
+    if (req.url?.startsWith('/loop/')) {
+      const hop = Number(req.url.split('/').at(-1));
+      res.writeHead(302, { Location: `/loop/${hop + 1}` });
+      res.end();
+      return;
+    }
+    if (req.url === '/slow-navigation') {
+      setTimeout(() => {
+        res.setHeader('Content-Type', 'text/html');
+        res.end(html);
+      }, 700);
+      return;
+    }
     if (req.url === '/chain-start' || req.url === '/same-redirect') {
       res.writeHead(302, { Location: req.url === '/chain-start' ? '/chain-middle' : '/final' });
       res.end();
@@ -39,6 +104,21 @@ beforeAll(async () => {
       res.end(
         html.replace('id="company">USMF', 'id="company">Loading') +
           '<script>setTimeout(()=>document.querySelector("#company").textContent="USMF",150)</script>',
+      );
+      return;
+    }
+    if (req.url === '/scoped') {
+      res.setHeader('Content-Type', 'text/html');
+      const form =
+        '<span id="record">UI-TEST-001</span><input id="quantity" value="1"><span id="result">Fresh result</span><span class="hidden" hidden>A</span><span class="hidden" hidden>B</span>';
+      res.end(
+        '<span id="company">USMF</span><section hidden>' +
+          form +
+          '</section><section id="active">' +
+          form +
+          '</section><section>' +
+          form +
+          '</section>',
       );
       return;
     }
@@ -100,17 +180,27 @@ describe('real browser UI verification fixture', () => {
       const pending = await verifyUiCustomizationTool({ action: 'run', plan: plan() }, options);
       expect(JSON.parse(pending.content[0].text).requiresUserInput).toBe(true);
       expect(writes).toBe(beforeWrites);
-      const resumed = await verifyUiCustomizationTool({ action: 'run', environmentUrl: baseUrl, plan: plan() }, options);
+      const resumed = await verifyUiCustomizationTool(
+        { action: 'run', environmentUrl: baseUrl, plan: plan() },
+        options,
+      );
       const report = JSON.parse(resumed.content[0].text);
       expect(report.status, resumed.content[0].text).toBe('PASS');
       expect(report.cases.map((c: any) => c.status)).toEqual(['PASS', 'PASS']);
       expect(report.reportPath).toContain(path.join(dir, 'answered-reports'));
       expect(process.env.D365FO_UI_TEST_URL).toBe('');
-    } finally { vi.unstubAllEnvs(); }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
   it('loads setup configuration and executes both cases without a profile file', async () => {
     const configPath = path.join(dir, 'd365fo-mcp.json');
-    await writeFile(configPath, JSON.stringify({ environment: { uiTestUrl: baseUrl, uiStorageState: 'auth.json', uiOutputDir: 'configured-reports' } }));
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        environment: { uiTestUrl: baseUrl, uiStorageState: 'auth.json', uiOutputDir: 'configured-reports' },
+      }),
+    );
     const originalEnv = { ...process.env };
     try {
       delete process.env.D365FO_UI_TEST_URL;
@@ -137,7 +227,9 @@ describe('real browser UI verification fixture', () => {
       expect(result.status).toBe('PASS');
       expect(result.environment).toBe(baseUrl);
       expect(foreignHits).toBe(0);
-    } finally { vi.unstubAllEnvs(); }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
   it('verifies positive and negative business outcomes with isolated auth contexts', async () => {
     const p = plan();
@@ -228,21 +320,189 @@ describe('real browser UI verification fixture', () => {
     const r = await runVerification(missingProfile, plan(), options);
     expect(r.cases.map(c => c.status)).toEqual(['NOT_VERIFIED', 'NOT_VERIFIED']);
   });
-  it('rejects all navigation redirects before any subsequent hop can escape the origin', async () => {
-    for (const startUrl of ['/chain-start', '/same-redirect']) {
+  it('follows same-origin redirects using browser cookies', async () => {
+    const p = plan();
+    p.startUrl = '/same-redirect';
+    const r = await runVerification(profilePath, p, options);
+    expect(r.status, JSON.stringify(r.cases)).toBe('PASS');
+    expect(nextHopHits).toBeGreaterThan(0);
+  });
+  it('blocks a foreign second redirect hop before the foreign server is reached', async () => {
+    const before = nextHopHits;
+    const p = plan();
+    p.startUrl = '/chain-start';
+    const r = await runVerification(profilePath, p, options);
+    expect(r.status).toBe('NOT_VERIFIED');
+    expect(nextHopHits).toBeGreaterThan(before);
+    expect(foreignHits).toBe(0);
+    expect(r.cases[0].reason).toContain('origin');
+  });
+  it('saves the validated reusable plan and reports every supplied case', async () => {
+    for (const count of [1, 3, 5]) {
       const p = plan();
-      p.startUrl = startUrl;
+      p.cases = Array.from({ length: count }, (_, i) => ({ ...structuredClone(p.cases[0]), name: `Case ${i}` }));
       const r = await runVerification(profilePath, p, options);
-      expect(r.status).toBe('NOT_VERIFIED');
-      expect(nextHopHits).toBe(0);
-      expect(foreignHits).toBe(0);
-      expect(r.cases[0].reason).toContain('Use the final application URL');
+      expect(r.status).toBe('PASS');
+      expect(r.cases).toHaveLength(count);
+      expect(JSON.parse(await readFile(r.planPath, 'utf8'))).toEqual(p);
     }
+  });
+  it('supports contains and visible form scoping while ignoring hidden duplicates', async () => {
+    const p = plan();
+    p.startUrl = '/scoped';
+    p.cases.forEach(c => {
+      c.scope = '#active';
+      c.preconditions = [{ selector: '#record', check: 'text', expected: 'UI-TEST-001' }];
+      c.steps = [
+        { action: 'fill', selector: '#quantity', value: '2' },
+        { action: 'assert', selector: '#quantity', check: 'value', expected: '2' },
+        { action: 'assert', selector: '#result', check: 'text', match: 'contains', expected: 'Fresh' },
+        { action: 'assert', selector: '.hidden', check: 'visible', expected: false },
+        { action: 'assert', selector: '#absent', check: 'visible', expected: false },
+      ];
+    });
+    expect((await runVerification(profilePath, p, options)).status).toBe('PASS');
+    p.cases.forEach(c => {
+      delete c.scope;
+    });
+    expect((await runVerification(profilePath, p, options)).status).toBe('NOT_VERIFIED');
+  });
+  it('does not retry a write when its following assertion fails', async () => {
+    const before = writes;
+    const p = plan();
+    p.cases.forEach(c => {
+      c.steps = [
+        { action: 'click', selector: '#save' },
+        { action: 'assert', selector: '#result', check: 'text', expected: 'Impossible' },
+        { action: 'click', selector: '#save' },
+      ];
+    });
+    const r = await runVerification(profilePath, p, options);
+    expect(r.cases.map(c => c.status)).toEqual(['FAIL', 'FAIL']);
+    expect(writes - before).toBe(2);
+  });
+  it('rejects embedded credentials on a same-origin redirect hop', async () => {
+    const before = nextHopHits;
+    const p = plan();
+    p.startUrl = '/credential-redirect';
+    const r = await runVerification(profilePath, p, options);
+    expect(r.status).toBe('NOT_VERIFIED');
+    expect(nextHopHits).toBe(before);
+  });
+  it('blocks unexpected popups before their first foreign navigation request', async () => {
+    const before = foreignHits;
+    const p = plan();
+    p.startUrl = '/popup';
+    p.cases.forEach(c => {
+      c.steps = [
+        { action: 'click', selector: '#popup' },
+        { action: 'assert', selector: '#result', check: 'text', expected: 'Fresh' },
+      ];
+    });
+    const r = await runVerification(profilePath, p, options);
+    expect(r.status).toBe('NOT_VERIFIED');
+    expect(foreignHits).toBe(before);
+  });
+  it('preserves native POST redirect methods and response cookies without replay', async () => {
+    const before = nativePosts.length;
+    const p = plan();
+    p.startUrl = '/native-post';
+    p.cases.forEach(c => {
+      c.steps = [
+        { action: 'click', selector: '#send' },
+        { action: 'assert', selector: '#result', check: 'text', expected: 'Posted' },
+      ];
+    });
+    const r = await runVerification(profilePath, p, options);
+    expect(r.status, JSON.stringify(r.cases)).toBe('PASS');
+    expect(nativePosts.slice(before)).toEqual(['POST:quantity=7', 'POST:quantity=7']);
+  });
+  it('uses visible controls and company when hidden duplicates remain in the DOM', async () => {
+    const p = plan();
+    p.startUrl = '/hidden-duplicates';
+    // Avoid the fixture's intentionally broad querySelector save handler, which targets its first input.
+    p.cases.forEach(c => {
+      c.steps = [
+        { action: 'fill', selector: '#quantity', value: '9' },
+        { action: 'assert', selector: '#quantity', check: 'value', expected: '9' },
+      ];
+    });
+    const r = await runVerification(profilePath, p, options);
+    expect(r.status, JSON.stringify(r.cases)).toBe('PASS');
+  });
+  it('bounds redirect loops and reports why they were blocked', async () => {
+    const p = plan();
+    p.startUrl = '/loop/0';
+    const r = await runVerification(profilePath, p, options);
+    expect(r.status).toBe('NOT_VERIFIED');
+    expect(r.cases[0].reason).toContain('maximum 10 redirects');
+  });
+  it('uses a separate navigation budget and merges bounded profile/run timeouts', async () => {
+    const timeoutProfile = path.join(dir, 'timeouts-profile.json');
+    await writeFile(
+      timeoutProfile,
+      JSON.stringify({
+        baseUrl,
+        storageState: 'auth.json',
+        outputDir: 'reports',
+        timeouts: { stepTimeoutMs: 45000, navigationTimeoutMs: 90000, caseTimeoutMs: 240000 },
+      }),
+    );
+    const p = plan();
+    p.startUrl = '/slow-navigation';
+    p.cases.forEach(c => {
+      c.steps = [{ action: 'assert', selector: '#quantity', check: 'value', expected: '1' }];
+    });
+    const r = await runVerification(timeoutProfile, p, {
+      stepTimeoutMs: 500,
+      navigationTimeoutMs: 1500,
+      caseTimeoutMs: 5000,
+      timeouts: { stepTimeoutMs: 60000 },
+    });
+    expect(r.status, JSON.stringify(r.cases)).toBe('PASS');
+    expect(r.timeouts).toEqual({ stepTimeoutMs: 500, navigationTimeoutMs: 1500, caseTimeoutMs: 5000 });
+    p.startUrl = '/';
+    const configured = await runVerification(timeoutProfile, p, { timeouts: { stepTimeoutMs: 60000 } });
+    expect(configured.timeouts).toEqual({ stepTimeoutMs: 60000, navigationTimeoutMs: 90000, caseTimeoutMs: 240000 });
   });
   it('waits for the initial company placeholder to settle before checking preconditions', async () => {
     const p = plan();
     p.startUrl = '/delayed-company';
     const r = await runVerification(profilePath, p, options);
     expect(r.status).toBe('PASS');
+  });
+});
+
+describe('child guard lifecycle', () => {
+  it('ignores ordinary child detach while initialization is pending but blocks live transport failures', async () => {
+    for (const detached of [true, false]) {
+      const session = new EventEmitter() as EventEmitter & {
+        send: ReturnType<typeof vi.fn>;
+        detach: ReturnType<typeof vi.fn>;
+      };
+      let commandId: number | undefined;
+      session.send = vi.fn(async (method: string, params: any) => {
+        if (method === 'Target.sendMessageToTarget') commandId = JSON.parse(params.message).id;
+        return {};
+      });
+      session.detach = vi.fn(async () => {});
+      const page = {
+        isClosed: () => false,
+        context: () => ({ newCDPSession: async () => session }),
+      } as unknown as Page;
+      const blocked: string[] = [];
+      const cleanup = await installNavigationGuard(page, ['https://example.com'], reason => blocked.push(reason));
+      session.emit('Target.attachedToTarget', { sessionId: 'child', targetInfo: { type: 'iframe' } });
+      if (detached) session.emit('Target.detachedFromTarget', { sessionId: 'child' });
+      else
+        session.emit('Target.receivedMessageFromTarget', {
+          sessionId: 'child',
+          message: JSON.stringify({ id: commandId, error: { message: 'Fetch interception unavailable' } }),
+        });
+      await new Promise(resolve => setImmediate(resolve));
+      if (detached) expect(blocked).toEqual([]);
+      else expect(blocked).toEqual(['Navigation blocked: Fetch interception unavailable']);
+      await cleanup();
+    }
   });
 });
