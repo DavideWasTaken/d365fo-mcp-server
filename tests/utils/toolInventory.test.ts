@@ -37,8 +37,8 @@ describe('tool inventory contract', () => {
     // build_d365fo_project(dbSync). Before that, get_method and suggest_edt were
     // unpublished into get_object_info(options.method) and prepare(fieldsHint).
     // Every one of those handlers stays routable under its old name.
-    expect(mcpServerToolNames).toHaveLength(21);
-    expect(startupCatalogToolNames).toHaveLength(21);
+    expect(mcpServerToolNames).toHaveLength(22);
+    expect(startupCatalogToolNames).toHaveLength(22);
   });
 
   it('never states a tool count that disagrees with the published inventory', () => {
@@ -163,7 +163,7 @@ describe('tool inventory contract', () => {
     // trigger_db_sync left the published surface, and each fold landed in a tool
     // whose locality already covered it (get_workspace_info and
     // build_d365fo_project are LOCAL; d365fo_file is in ALWAYS_TOOLS).
-    expect(LOCAL_TOOLS.size).toBe(7);
+    expect(LOCAL_TOOLS.size).toBe(8);
     expect(mcpServerToolNames.filter(name => !LOCAL_TOOLS.has(name))).toHaveLength(14);
   });
 
@@ -256,7 +256,7 @@ describe('tool inventory contract', () => {
       // read tool CLAIMS to be read-only; a write tool simply must not.
       expect([true, undefined], `'${toolName}' readOnlyHint must be true or absent`)
         .toContain(a.readOnlyHint);
-      expect(a.openWorldHint).toBe(toolName === 'verify_ui_customization');
+      expect(a.openWorldHint).toBe(['verify_ui_customization', 'axdb_sql'].includes(toolName));
     }
     // No orphan annotations for tools that no longer exist
     const published = new Set(mcpServerToolNames);

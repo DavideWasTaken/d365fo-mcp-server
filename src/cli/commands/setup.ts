@@ -25,6 +25,7 @@ import { findPackagesRoot } from '../../utils/packagesRoot.js';
 import { rootTarget } from '../target.js';
 import { askConfirm, askSelect, askText, p, requireFullInstall } from '../ui.js';
 import { listXppConfigs } from '../xppConfig.js';
+import { configureSql } from '../sqlSetup.js';
 import { rebuildIndex } from './indexCmd.js';
 import { instanceAddCommand } from './instance.js';
 
@@ -163,6 +164,7 @@ function openRootStore(): SettingsStore {
 async function configureEnvironment(store: SettingsStore, scenario: Scenario): Promise<'traditional' | 'ude'> {
   p.log.step('D365FO environment');
   await askSetting(store, setting('environment.uiTestUrl'));
+  await configureSql(store);
 
   let envType: string;
   if (scenario === 'ude') {

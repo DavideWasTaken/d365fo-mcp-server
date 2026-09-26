@@ -1,4 +1,10 @@
-# Tool Reference — 21 tools
+# Tool Reference — 22 tools
+
+This is the maximum catalogue. The optional `axdb_sql` is omitted when SQL setup is blank/disabled (including from the core profile).
+
+## Optional AxDB SQL (this fork)
+
+`axdb_sql`: `contract` for the strict schema, `status` for connectivity, `schema` for physical columns, `query` for live SELECT, `execute` for transactional INSERT/UPDATE/DELETE. Configure through `d365fo-mcp config sql`; blank server disables SQL. Use for debugging and extra persisted-data checks, not to bypass UI creation/validation paths under test. [Setup and examples](AXDB_SQL.md).
 
 Every tool the server exposes, grouped by purpose. The AI agent picks tools automatically — the *example prompts* show what to ask to trigger them; you never name tools yourself.
 
@@ -6,7 +12,7 @@ Every tool the server exposes, grouped by purpose. The AI agent picks tools auto
 
 > **C# bridge first:** on Windows D365FO VMs, the bridge-backed read tools (marked †) query the live `IMetadataProvider` (always-fresh metadata) and `DYNAMICSXREFDB` (compiler-resolved cross-references), falling back to SQLite transparently on Azure/Linux. All AOT metadata writes go exclusively through the bridge. See [ARCHITECTURE.md](ARCHITECTURE.md).
 >
-> **Server modes:** `full` = all 21 tools · `read-only` (Azure) = everything except the seven local build/verify tools · `write-only` (hybrid companion) = those seven local tools plus the three always-on ones (`get_object_info`, `labels`, `d365fo_file`). Independently, **`MCP_TOOL_PROFILE=core`** publishes only the 16-tool create-build-and-verify loop, for workspaces that already run other MCP servers. See [MCP_CONFIG.md](MCP_CONFIG.md).
+> **Server modes:** `full` = all 22 tools · `read-only` (Azure) = everything except the eight local build/verify tools · `write-only` (hybrid companion) = those eight local tools plus the three always-on ones (`get_object_info`, `labels`, `d365fo_file`). Independently, **`MCP_TOOL_PROFILE=core`** publishes only the 17-tool create-build-and-verify loop, for workspaces that already run other MCP servers. See [MCP_CONFIG.md](MCP_CONFIG.md).
 
 ---
 

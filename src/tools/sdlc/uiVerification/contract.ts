@@ -114,7 +114,8 @@ export function getContract() {
     planSchema,
     profileSchema: z.toJSONSchema(ProfileSchema),
     rules: [
-      'Exactly two independent cases using dedicated existing data; at most 20 steps each.',
+      'Exactly two independent cases using dedicated test data; create records through the UI when creation is under test. At most 20 steps each.',
+      'Choose setup from the requirement: if creation/defaulting/validation/CoC is under test, create and act through UI or X++; do not pre-insert the expected state with SQL. Optional axdb_sql is for debug, extra DB checks or unrelated prerequisites, not automatic setup. SQL disabled does not block UI tests.',
       'Observe unique CSS selectors on the real DOM before preparing the plan. No raw code or eval.',
       'Preconditions establish authentication, data and readiness. Company text is checked exactly before every step.',
       'Build readiness is caller-declared, not browser-attested. Reopen saved records when persistence is the requirement.',

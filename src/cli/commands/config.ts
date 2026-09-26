@@ -11,6 +11,7 @@ import { readSetting, saveStore, writeSetting, type SettingsStore } from '../set
 import { pickTarget } from '../target.js';
 import { askSelect, p } from '../ui.js';
 import { listXppConfigs, xppConfigDir } from '../xppConfig.js';
+import { configureSql } from '../sqlSetup.js';
 
 const xppConfigNameSetting = settingByPath('environment.xppConfigName')!;
 const envTypeSetting = settingByPath('environment.type')!;
@@ -82,6 +83,13 @@ export async function configCommand(
     }
   }
 
+  if (section === 'sql') {
+    await configureSql(store);
+    saveStore(store);
+    p.log.success(`Saved ${store.configPath}`);
+    p.outro('Restart the server for SQL configuration changes to take effect.');
+    return;
+  }
   await askSettings(store, [
     ...settingsInSection(section, 'basic').filter(s => !skip.has(s)),
     ...settingsInSection(section, 'advanced'),

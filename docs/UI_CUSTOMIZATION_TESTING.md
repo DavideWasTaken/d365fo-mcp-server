@@ -58,6 +58,8 @@ Paths inside the profile resolve relative to the profile file. `headless:false` 
 
 ## Invoke from the agent
 
+SQL is optional and independent. Use `axdb_sql` for debugging or extra persisted-data checks when configured, not as automatic UI test setup. If the requirement covers creating records, defaults, validation or CoC, exercise that path through UI/X++ instead of inserting the finished state with SQL. Only prepare unrelated prerequisites with SQL when it actually helps and explain that choice. See [AxDB SQL](AXDB_SQL.md). A disabled SQL configuration never prevents a UI-only test.
+
 1. Finish generation, build, required DB synchronization and deployment. Identify the build/revision actually available in the test environment.
 2. Fetch `verify_ui_customization` with `{"action":"contract"}` once. This returns the complete validated contract and example, keeping the ordinary MCP tool catalogue small.
 3. Derive two cases from the **original requirement**, not from the generated implementation: one happy path and the most important negative/boundary case. Each case needs executable preconditions and at least one functional assertion.

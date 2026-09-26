@@ -40,6 +40,20 @@ a single value from a launcher or a container, not something you need to set by 
 
 ## Settings
 
+### AxDB SQL (optional)
+
+Windows-authenticated SQL access for development debugging and targeted data changes.
+
+| Key | Asked | Env var | Default | Description |
+| --- | --- | --- | --- | --- |
+| `sql.enabled` | advanced | `D365FO_SQL_ENABLED` | `false` | Enable the optional SQL tool after configuring its server. Blank server always disables SQL. |
+| `sql.server` | setup | `D365FO_SQL_SERVER` | — | Optional server or named instance; enter localhost for a local developer SQL Server. Leaving it empty skips SQL setup. |
+| `sql.database` | setup | `D365FO_SQL_DATABASE` | `AxDB` | Database to query on this server. This is separate from the metadata index and cross-reference database. |
+| `sql.allowWrites` | setup | `D365FO_SQL_ALLOW_WRITES` | `false` | Enable direct SQL changes for debugging and targeted test data work. These do not execute X++ validation, CoC or business logic. |
+| `sql.trustServerCertificate` | setup | `D365FO_SQL_TRUST_CERTIFICATE` | `false` | Use for a developer SQL Server with a self-signed certificate. The connection remains encrypted. |
+| `sql.commandTimeoutSeconds` | advanced | `D365FO_SQL_TIMEOUT` | `30` | Maximum time for each SQL command; a batch also has a total time budget. |
+| `sql.maxRows` | advanced | `D365FO_SQL_MAX_ROWS` | `100` | Default returned row limit. Large results are explicitly marked truncated. |
+
 ### D365FO environment
 
 Which developer box this is and where its X++ packages live.
@@ -108,7 +122,7 @@ Transport, timeouts and logging of the MCP server process.
 | Key | Asked | Env var | Default | Description |
 | --- | --- | --- | --- | --- |
 | `server.mode` | advanced | `MCP_SERVER_MODE` | `full` | Which half of the toolset this process exposes. "full" is a single local server; the hybrid deployment splits into an Azure "read-only" instance plus a local "write-only" companion that owns the C# bridge. Values: `full` — all tools — single local server; `read-only` — search/inspect only — Azure-hosted shared index; `write-only` — create/modify/build only — local companion. |
-| `server.toolProfile` | advanced | `MCP_TOOL_PROFILE` | `full` | How many tools this server advertises. "full" publishes all 21. "core" publishes only the plan → discover → write → build → verify loop (16 tools) and leaves out the specialist ones (extension_info, analyze_code, validate_code, security_info, run_systest_class). Worth switching when the workspace runs several MCP servers at once: hosts stop sending the tool catalogue inline past a limit (VS Code: ~100 tools) and make the model search for tools first, which costs a round trip per tool. Values: `full` — all 21 tools; `core` — 16-tool create-build-and-verify loop. |
+| `server.toolProfile` | advanced | `MCP_TOOL_PROFILE` | `full` | How many tools this server advertises. "full" publishes up to 22 tools (SQL only when configured). "core" publishes only the plan → discover → write → build → verify loop (17 tools) and leaves out the specialist ones (extension_info, analyze_code, validate_code, security_info, run_systest_class). Worth switching when the workspace runs several MCP servers at once: hosts stop sending the tool catalogue inline past a limit (VS Code: ~100 tools) and make the model search for tools first, which costs a round trip per tool. Values: `full` — all 22 tools; `core` — 17-tool create-build-and-verify loop. |
 | `server.extraTools` | advanced | `MCP_EXTRA_TOOLS` | — | Tool names to publish in addition to the core profile, e.g. security_info,run_systest_class. Ignored when the tool profile is "full". |
 | `server.port` | setup | `PORT` | `8080` | Port for the HTTP transport. Only relevant when clients connect over http://localhost:<port>/mcp/ — an IDE that spawns the server itself uses stdio and ignores this. |
 | `server.host` | advanced | `HOST` | `0.0.0.0` | Interface the HTTP transport binds to. Left unset it follows the API key: 0.0.0.0 once a key (or ALLOW_UNAUTHENTICATED) is configured, which is what a container or App Service needs, and 127.0.0.1 when neither is, so an unauthenticated server stays off the network. Setting it to a public interface without a key is refused at startup. |
@@ -171,6 +185,15 @@ Downloading a pre-built index from blob storage instead of building it locally.
 ```json
 {
   "version": 1,
+  "sql": {
+    "enabled": false,
+    "server": "localhost or localhost\\INSTANCE",
+    "database": "AxDB",
+    "allowWrites": false,
+    "trustServerCertificate": false,
+    "commandTimeoutSeconds": 30,
+    "maxRows": 100
+  },
   "environment": {
     "uiTestUrl": "https://your-test-env.operations.dynamics.com",
     "uiStorageState": ".d365fo-ui/auth.json",

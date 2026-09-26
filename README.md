@@ -2,9 +2,9 @@
 
 <div align="center">
 
-**21 AI tools for grounded X++ development and browser verification of D365FO customizations**
+**Up to 22 AI tools for grounded X++ development, browser verification and optional AxDB SQL debugging**
 
-> **This fork adds `verify_ui_customization`:** after building and deploying a customization, run two requirement-based browser cases and get a short report. The runner makes no LLM calls. See [setup and examples](docs/UI_CUSTOMIZATION_TESTING.md). The upstream npm package and hosted installation links below do not include this fork's new tool; build this repository locally to use it. Live D365FO acceptance testing is still required for your environment.
+> **This fork adds `verify_ui_customization` and optional `axdb_sql`:** run two requirement-based browser cases after deployment; use live SQL independently for debugging and targeted development data changes. SQL setup can be left blank and never replaces a UI creation/validation path under test. See [UI setup](docs/UI_CUSTOMIZATION_TESTING.md) and [SQL setup](docs/AXDB_SQL.md). The runners make no LLM calls. Upstream npm/hosted links below do not include these additions: build this checkout locally, including the updated bridge for SQL. Live D365FO acceptance testing is still required.
 
 [![npm](https://img.shields.io/npm/v/d365fo-mcp.svg?logo=npm&color=cb3837)](https://www.npmjs.com/package/d365fo-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -31,7 +31,7 @@
 
 AI assistants excel at C#, Python, and JavaScript. X++ is different: your D365FO codebase is private, deeply customized, and invisible to every model — so AI confidently generates code that doesn't compile.
 
-This server pre-indexes your entire D365FO installation (580 000+ symbols across standard, ISV, and custom models) and exposes it as 21 specialized MCP tools. Every signature, every CoC wrapper, every label, every form pattern — verified against your real metadata **before** the AI writes a single line.
+This server pre-indexes your entire D365FO installation (580 000+ symbols across standard, ISV, and custom models) and exposes up to 22 specialized MCP tools (21 when SQL is disabled). Every signature, every CoC wrapper, every label, every form pattern — verified against your real metadata **before** the AI writes a single line.
 
 ![Solution Architecture](docs/img/solution-architecture-diagram.svg)
 
@@ -55,17 +55,23 @@ This server pre-indexes your entire D365FO installation (580 000+ symbols across
 | 🧩 **Form pattern engine** | Complete catalog of Microsoft form patterns and sub-patterns: recommends the right pattern, clones reference forms with datasource re-binding, **deterministically expands** patterns that have no reference form, **auto-repairs** a form's missing required controls, validates structure and blocks invalid writes |
 | ✍️ **Safe metadata writes** | C# bridge uses Microsoft's own `IMetadataProvider` wherever it can express the object; the few types and ops it cannot go through structured XML writers with ambiguity guards — never blind string replacement. Automatic `.rnrproj` registration, one-call undo |
 | 🏗️ **SDLC integration** | MSBuild compilation with structured diagnostics, DB sync, xppbp best practices, SysTestRunner — all from chat |
-| **Browser customization tests — `verify_ui_customization`** | Available on this branch. Runs two requirement-based cases after build/deployment, reporting steps, expected/observed results and PASS / FAIL / NOT_VERIFIED. Supports Chromium and Microsoft Edge through the browser profile; the runner makes no LLM calls. [Setup](docs/UI_CUSTOMIZATION_TESTING.md) |
-| **Optional AxDB SQL — `axdb_sql`** | Available on the [SQL development branch](https://github.com/DavideWasTaken/d365fo-mcp-server/tree/feat/axdb-sql-debug), not yet on `main`. Live queries, table schema inspection and transactional development writes, independent of UI tests. Full D365FO bridge compilation and live AxDB validation remain pending. [SQL setup](https://github.com/DavideWasTaken/d365fo-mcp-server/blob/feat/axdb-sql-debug/docs/AXDB_SQL.md) |
+| **Browser customization tests — `verify_ui_customization`** | Two requirement-based cases after build/deployment, with a short report of steps, expected/observed results and PASS / FAIL / NOT_VERIFIED. Supports Chromium and Microsoft Edge through the browser profile. The runner makes no LLM calls. [Setup](docs/UI_CUSTOMIZATION_TESTING.md) |
+| **Optional AxDB SQL — `axdb_sql`** | Live queries, table columns/keys/defaults and transactional INSERT/UPDATE/DELETE for development debugging. No result cache or automatic write retry. Independent of browser tests: use UI/X++ when creation, validation or CoC is under test. [Setup](docs/AXDB_SQL.md) |
 | 📐 **X++ knowledge base** | Queryable rules: select grammar, CoC authoring, financial dimensions, the posting engine (`LedgerVoucher`), number sequences, `SysExtension`, Electronic Reporting, AX2012→D365FO migration — prevents deprecated APIs |
 
 ### Configure this fork's additional tools
 
-The UI tool needs the environment URL and an authenticated browser session; a missing URL is requested when a test runs. When testing creation, defaults, validation or CoC, exercise that path through UI/X++ rather than inserting its expected result with SQL.
+The UI tool needs the environment URL and an authenticated browser session; a missing URL is requested when a test runs. SQL is separately optional: leave the SQL server blank in setup to hide the tool and skip the remaining SQL questions.
 
-On the SQL development branch, setup asks for server/instance (for example `localhost`), database (normally `AxDB`), whether to allow writes, and whether to trust a self-signed SQL certificate. Leave the server blank to disable SQL and skip the other questions. Authentication uses the Windows account running MCP with the required database permissions; SQL username/password authentication is not implemented. The updated bridge must be built and deployed on the developer VM. See the [SQL guide](https://github.com/DavideWasTaken/d365fo-mcp-server/blob/feat/axdb-sql-debug/docs/AXDB_SQL.md) for commands and prerequisites.
+For SQL on a developer VM, the wizard asks for the server/instance (for example `localhost`), database (normally `AxDB`), whether to allow writes, and whether to trust a self-signed SQL certificate. Authentication uses the Windows account running MCP; it needs the corresponding database permissions. SQL username/password authentication is not implemented. The updated C# bridge must be built and deployed on the D365FO VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge). Full bridge compilation and live AxDB acceptance testing are still pending for this addition.
 
-The upstream npm package and installer below do not include this fork's additional tools.
+From this checkout, revisit SQL setup with:
+
+```powershell
+npx tsx src/cli/index.ts config sql
+```
+
+Restart MCP after saving. The upstream npm package and installer below do not include this fork's additional tools.
 
 ### Pattern-grounded form development
 
@@ -127,7 +133,7 @@ Deployment guide: [docs/SETUP_AZURE.md](docs/SETUP_AZURE.md) — includes CI/CD 
 
 | Getting started | Reference | Operations |
 |-----------------|-----------|------------|
-| [Quick Start](docs/QUICK_START.md) — connect or install | [All 21 tools](docs/MCP_TOOLS.md) | [Azure deployment](docs/SETUP_AZURE.md) |
+| [Quick Start](docs/QUICK_START.md) — connect or install | [All 22 tools](docs/MCP_TOOLS.md) | [Azure deployment](docs/SETUP_AZURE.md) |
 | [Setup scenarios A–F](docs/SETUP.md) | [`.mcp.json` reference](docs/MCP_CONFIG.md) | [DevOps pipelines](docs/SETUP_AZURE.md#azure-devops-pipelines) |
 | [Claude Code setup](docs/SETUP.md#claude-code-cli) | [Configuration](docs/CONFIGURATION.md) | [Testing](docs/TESTING.md) |
 | [Usage examples](docs/USAGE_EXAMPLES.md) — real tool chains | [Architecture](docs/ARCHITECTURE.md) | [Custom / ISV models](docs/CUSTOM_EXTENSIONS.md) |

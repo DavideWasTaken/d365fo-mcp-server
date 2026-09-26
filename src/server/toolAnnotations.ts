@@ -101,6 +101,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotations> = {
   generate_object:                         write('Generate code (pattern/scaffold)'),
 
   verify_ui_customization: { title: 'Verify UI customization', destructiveHint: true, openWorldHint: true },
+  axdb_sql: { title: 'AxDB SQL', destructiveHint: true, openWorldHint: true },
 
   // SDLC operations
   update_symbol_index:              write('Update symbol index', { idempotent: true }),

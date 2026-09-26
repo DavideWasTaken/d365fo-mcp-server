@@ -16,7 +16,7 @@
  * its request/extra args, so a direct call returns the exact wire payload.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createXppMcpServer } from '../../src/server/mcpServer';
 
 // ~4 chars/token is the usual rough conversion for English+JSON; only used for
@@ -199,6 +199,15 @@ async function getTools(): Promise<Array<{ name: string }>> {
 }
 
 describe('tool schema token budget', () => {
+  it('keeps the optional SQL catalogue within the same total budget', async () => {
+    vi.stubEnv('D365FO_SQL_ENABLED', 'true');
+    vi.stubEnv('D365FO_SQL_SERVER', 'localhost');
+    try {
+      const tools = await getTools();
+      expect(tools.length).toBe(22);
+      expect(JSON.stringify(tools).length).toBeLessThan(TOTAL_BUDGET);
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('total ListTools payload stays within the token budget', async () => {
     const tools = await getTools();
     const chars = JSON.stringify(tools).length;
