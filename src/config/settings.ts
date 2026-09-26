@@ -138,7 +138,7 @@ export const SETTINGS: Setting[] = [
     tier: 'basic',
     type: 'string',
     label: 'Environment URL for UI tests',
-    description: 'Optional D365FO test environment URL used by verify_ui_customization. Enter once; leave empty to skip browser tests. A saved Playwright login is also required (docs/UI_CUSTOMIZATION_TESTING.md).',
+    description: 'Optional D365FO test environment URL used by verify_ui_customization. Leave empty to be asked only when requesting a UI test. Not needed if you do not test. A saved Playwright login is also required (docs/UI_CUSTOMIZATION_TESTING.md).',
     placeholder: 'https://your-test-env.operations.dynamics.com',
     validate: value => {
       if (!value.trim()) return undefined;

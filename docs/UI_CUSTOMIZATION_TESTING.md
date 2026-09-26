@@ -24,7 +24,9 @@ Run `npm run setup` in this fork and fill in **Environment URL for UI tests**. T
 
 The tool reuses this URL whenever `profilePath` is omitted. No separate profile file is required. The advanced environment settings `uiStorageState` and `uiOutputDir` default to `.d365fo-ui/auth.json` and `.d365fo-ui/reports`, relative to the installation or instance directory, independent of the MCP process working directory. Environment-variable overrides are `D365FO_UI_TEST_URL`, `D365FO_UI_STORAGE_STATE` and `D365FO_UI_OUTPUT_DIR`.
 
-When a separate instance configuration is selected, UI settings from another installation's ambient `.env` are ignored. Deliberate shell overrides and an explicitly selected `ENV_FILE` still apply. Leaving the URL unset gives NOT_VERIFIED with setup instructions; the tool never guesses an environment URL.
+When a separate instance configuration is selected, UI settings from another installation's ambient `.env` are ignored. Deliberate shell overrides and an explicitly selected `ENV_FILE` still apply.
+
+You can leave the URL empty during setup. If you later request a UI test, the tool returns `requiresUserInput: true` with a question for the calling agent to ask in your language. Provide the URL or choose to skip testing. The agent resumes with the same plan plus `environmentUrl`, without restarting the MCP or rerunning setup. That answer fills only an empty configured URL, applies to that run and is not saved. Existing configuration or an explicit profile takes precedence. The tool never guesses an environment URL. If you never request UI testing, no URL or browser login is needed.
 
 ## Save a local browser login
 
@@ -60,7 +62,7 @@ Paths inside the profile resolve relative to the profile file. `headless:false` 
 2. Fetch `verify_ui_customization` with `{"action":"contract"}` once. This returns the complete validated contract and example, keeping the ordinary MCP tool catalogue small.
 3. Derive two cases from the **original requirement**, not from the generated implementation: one happy path and the most important negative/boundary case. Each case needs executable preconditions and at least one functional assertion.
 4. Observe the actual DOM to identify unambiguous selectors, including the active company indicator. Do not infer working browser selectors from X++ control names alone.
-5. Call `action="run"` with the plan; the tool uses the environment saved in setup. Supply `profilePath` only for an explicit override. Read the compact response and local report. Investigate a failure before choosing to rerun; the tool does not automatically repeat writes.
+5. Call `action="run"` with the plan; the tool uses the environment saved in setup. If `requiresUserInput` is returned, ask the user the provided question and wait; resume with their `environmentUrl`, or stop if they skip testing. Supply `profilePath` only for an explicit override. Read the compact response and local report. Investigate a failure before choosing to rerun; the tool does not automatically repeat writes.
 
 Example agent instruction:
 

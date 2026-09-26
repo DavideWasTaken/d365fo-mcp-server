@@ -62,7 +62,17 @@ export const ProfileSchema = z
   .strict();
 export const InputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('contract') }).strict(),
-  z.object({ action: z.literal('run'), profilePath: short.optional(), plan: PlanSchema }).strict(),
+  z.object({
+    action: z.literal('run'),
+    profilePath: short.optional(),
+    environmentUrl: ProfileSchema.shape.baseUrl.refine(value => {
+      try {
+        const parsed = new URL(value);
+        return !parsed.username && !parsed.password;
+      } catch { return false; }
+    }, 'Embedded credentials are not allowed').optional(),
+    plan: PlanSchema,
+  }).strict(),
 ]);
 export type Plan = z.infer<typeof PlanSchema>;
 export type Assertion = z.infer<typeof AssertionSchema>;
@@ -113,6 +123,7 @@ export function getContract() {
       'Only navigation to the configured exact HTTP(S) origin is allowed. All HTTP navigation redirects are NOT_VERIFIED; use the final application URL and refresh saved login.',
       'Profile paths resolve relative to the profile file. Auth state is loaded into separate sequential browser contexts; never a personal browser.',
       'Omit profilePath to use environment.uiTestUrl and the saved login/report paths from normal MCP setup. An explicit profile replaces these settings entirely.',
+      'If a run returns requiresUserInput, ask its question and wait. Pass the user-provided environmentUrl with the same plan to resume, or skip if they decline. This one-run URL only fills an empty setup URL and is not saved. Never guess an environment.',
     ],
     example: { action: 'run', plan: examplePlan },
     profileExample: {

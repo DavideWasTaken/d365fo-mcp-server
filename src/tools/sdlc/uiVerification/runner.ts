@@ -7,6 +7,7 @@ import { resolveUiProfile } from './profile.js';
 import { aggregateStatus, renderReport, type CaseResult, type VerificationReport, type StepResult } from './report.js';
 
 export interface RunOptions {
+  environmentUrl?: string;
   signal?: AbortSignal;
   stepTimeoutMs?: number;
   caseTimeoutMs?: number;
@@ -99,7 +100,7 @@ export async function runVerification(
   options: RunOptions = {},
 ): Promise<RunResult> {
   const plan = PlanSchema.parse(rawPlan);
-  const profile = await resolveUiProfile(profilePath);
+  const profile = await resolveUiProfile(profilePath, options.environmentUrl);
   const base = allowedUrl(profile.baseUrl, profile.baseUrl);
   const outputDir = path.resolve(profile.outputDir, `run-${Date.now()}-${randomUUID()}`);
   await mkdir(outputDir, { recursive: true });

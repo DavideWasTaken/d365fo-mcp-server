@@ -1,16 +1,17 @@
 export const verifyUiCustomizationTool = {
   name: 'verify_ui_customization',
   description:
-    'Run two requirement-based UI cases after build/deploy. Call action="contract" once for strict plan/profile schemas and example. Uses local saved browser auth; may modify test data. No LLM judge or retries.',
+    'Run two UI cases after build/deploy. Call action="contract" for schemas. Ask user when requiresUserInput is returned. Uses saved auth; may modify test data.',
   inputSchema: {
     type: 'object',
     properties: {
       action: { type: 'string', enum: ['contract', 'run'] },
-      profilePath: { type: 'string', description: 'Optional JSON profile; defaults to MCP setup.' },
+      profilePath: { type: 'string', description: 'Optional JSON profile override.' },
+      environmentUrl: { type: 'string', description: 'URL if setup left empty.' },
       plan: {
         type: 'object',
         additionalProperties: true,
-        description: 'Strict executable plan returned by action="contract"; required for run.',
+        description: 'Plan from action="contract"; required for run.',
       },
     },
     required: ['action'],

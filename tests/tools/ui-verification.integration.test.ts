@@ -91,6 +91,23 @@ afterAll(async () => {
 const plan = (): Plan => structuredClone(examplePlan);
 const options = { stepTimeoutMs: 1000, caseTimeoutMs: 5000 };
 describe('real browser UI verification fixture', () => {
+  it('waits for a missing URL and resumes the test with the user answer without restarting', async () => {
+    vi.stubEnv('D365FO_UI_TEST_URL', '');
+    vi.stubEnv('D365FO_UI_STORAGE_STATE', path.join(dir, 'auth.json'));
+    vi.stubEnv('D365FO_UI_OUTPUT_DIR', path.join(dir, 'answered-reports'));
+    try {
+      const beforeWrites = writes;
+      const pending = await verifyUiCustomizationTool({ action: 'run', plan: plan() }, options);
+      expect(JSON.parse(pending.content[0].text).requiresUserInput).toBe(true);
+      expect(writes).toBe(beforeWrites);
+      const resumed = await verifyUiCustomizationTool({ action: 'run', environmentUrl: baseUrl, plan: plan() }, options);
+      const report = JSON.parse(resumed.content[0].text);
+      expect(report.status, resumed.content[0].text).toBe('PASS');
+      expect(report.cases.map((c: any) => c.status)).toEqual(['PASS', 'PASS']);
+      expect(report.reportPath).toContain(path.join(dir, 'answered-reports'));
+      expect(process.env.D365FO_UI_TEST_URL).toBe('');
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('loads setup configuration and executes both cases without a profile file', async () => {
     const configPath = path.join(dir, 'd365fo-mcp.json');
     await writeFile(configPath, JSON.stringify({ environment: { uiTestUrl: baseUrl, uiStorageState: 'auth.json', uiOutputDir: 'configured-reports' } }));

@@ -9,6 +9,7 @@ import { openStore, saveStore, writeSetting } from '../../src/cli/settingsStore.
 import { InputSchema, ProfileSchema, examplePlan } from '../../src/tools/sdlc/uiVerification/contract.js';
 import { verifyUiCustomizationTool } from '../../src/tools/sdlc/verifyUiCustomization.js';
 import { loadEnv } from '../../src/utils/loadEnv.js';
+import { resolveUiProfile } from '../../src/tools/sdlc/uiVerification/profile.js';
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -61,13 +62,31 @@ describe('UI test configuration', () => {
       expect(validate(value)).toBeTruthy();
   });
 
-  it('accepts runs without a profile and gives actionable feedback when the URL is missing', async () => {
+  it('asks the agent to request the URL only when a test is attempted without one', async () => {
     const input = { action: 'run', plan: examplePlan };
     expect(InputSchema.safeParse(input).success).toBe(true);
     vi.stubEnv('D365FO_UI_TEST_URL', '');
     const result = await verifyUiCustomizationTool(input);
-    expect(result.content[0].text).toContain('NOT_VERIFIED');
-    expect(result.content[0].text).toContain('environment.uiTestUrl');
-    expect(result.content[0].text).toContain('setup');
+    const reply = JSON.parse(result.content[0].text);
+    expect(reply.status).toBe('NOT_VERIFIED');
+    expect(reply.requiresUserInput).toBe(true);
+    expect(reply.missingField).toBe('environmentUrl');
+    expect(reply.question).toContain('URL');
+    expect(reply.nextAction).toContain('Ask the user');
+    expect(reply.nextAction).toContain('skip');
+  });
+
+  it('uses a one-run URL answer without modifying the configured environment', async () => {
+    vi.stubEnv('D365FO_UI_TEST_URL', '');
+    vi.stubEnv('D365FO_UI_STORAGE_STATE', join(tmpdir(), 'auth.json'));
+    vi.stubEnv('D365FO_UI_OUTPUT_DIR', join(tmpdir(), 'reports'));
+    const profile = await resolveUiProfile(undefined, 'https://answer.example');
+    expect(profile.baseUrl).toBe('https://answer.example');
+    expect(process.env.D365FO_UI_TEST_URL).toBe('');
+    vi.stubEnv('D365FO_UI_TEST_URL', 'https://configured.example');
+    expect((await resolveUiProfile(undefined, 'https://answer.example')).baseUrl).toBe('https://configured.example');
+    expect(InputSchema.safeParse({ action: 'run', plan: examplePlan, environmentUrl: 'javascript:alert(1)' }).success).toBe(false);
+    expect(InputSchema.safeParse({ action: 'run', plan: examplePlan, environmentUrl: 'not-a-url' }).success).toBe(false);
+    expect(InputSchema.safeParse({ action: 'run', plan: examplePlan, environmentUrl: 'https://user:secret@example.com' }).success).toBe(false);
   });
 });
