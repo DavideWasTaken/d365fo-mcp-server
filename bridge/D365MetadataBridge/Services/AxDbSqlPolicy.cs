@@ -23,7 +23,8 @@ namespace D365MetadataBridge.Services
             "REPLACE", "CONCAT", "CONCAT_WS", "CHARINDEX", "PATINDEX", "ISNULL", "NULLIF", "COALESCE",
             "GETDATE", "GETUTCDATE", "SYSDATETIME", "SYSUTCDATETIME", "DATEADD", "DATEDIFF", "DATEDIFF_BIG",
             "DATEPART", "DATENAME", "YEAR", "MONTH", "DAY", "EOMONTH", "ROW_NUMBER", "RANK", "DENSE_RANK",
-            "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "STRING_AGG", "STDEV", "STDEVP", "VAR", "VARP"
+            "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "STRING_AGG", "STDEV", "STDEVP", "VAR", "VARP",
+            "COLLATIONPROPERTY", "DATABASEPROPERTYEX", "DB_NAME"
         };
 
         public static IReadOnlyList<AxDbTableReference> Validate(string sql, bool write)

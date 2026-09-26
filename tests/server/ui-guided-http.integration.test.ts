@@ -70,7 +70,7 @@ it('drives a real browser over independent HTTP POSTs, rejects foreign origins a
   const application = createServer((_req, res) => {
     res.setHeader('Content-Type', 'text/html');
     res.end(
-      '<button aria-label="Company">USMF</button><button onclick="document.querySelector(\'output\').textContent=\'Saved\'">Save</button><output role="status">Pending</output>',
+      '<button aria-label="Company">USMF</button><button onclick="document.querySelector(\'output\').textContent=\'Saved\'">Save</button><output role="status">Pending</output><div role="grid" aria-label="Orders" aria-rowcount="1"><div role="row" aria-rowindex="1"><span role="columnheader">Order</span></div></div>',
     );
   });
   await new Promise<void>(r => application.listen(0, '127.0.0.1', r));
@@ -124,6 +124,7 @@ it('drives a real browser over independent HTTP POSTs, rejects foreign origins a
         preconditions: [{ id: 'ready', targetDescription: 'Save button', check: 'enabled', expected: true }],
         criteria: [
           { id: 'saved', targetDescription: 'Result status', check: 'text', expected: 'Saved', match: 'exact' },
+          { id: 'empty', targetDescription: 'Empty orders grid', check: 'rowCount', basis: 'total', expected: 0 },
         ],
       },
     ];
@@ -175,10 +176,21 @@ it('drives a real browser over independent HTTP POSTs, rejects foreign origins a
         })
       ).check.status,
     ).toBe('PASS');
+    const gridRef = acted.observation.nodes.find((n: any) => n.role === 'grid').ref;
+    const gridResult = await parsed({
+      action: 'check',
+      ...base,
+      criterionId: 'empty',
+      snapshotId: acted.observation.snapshotId,
+      ref: gridRef,
+    });
+    expect(gridResult.check).toMatchObject({ status: 'PASS', source: 'measured', observed: '0' });
+    expect(gridResult.check.target).toContain('total data rows');
     const finished = await parsed({ action: 'finish', sessionId });
     expect(finished.status).toBe('PASS');
     expect(await readFile(finished.reportPath, 'utf8')).toContain('Saved');
     expect(await readFile(finished.reportPath, 'utf8')).toContain('Browser: chromium');
+    expect(await readFile(finished.reportPath, 'utf8')).toContain('0 total data rows');
     expect(signals.every(s => !s.aborted)).toBe(true);
   } finally {
     await manager.dispose();

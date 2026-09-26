@@ -22,6 +22,18 @@ internal static class Program
         if (policy == null) { Console.Error.WriteLine("FAIL: SELECT policy must be implemented before SQL is enabled."); return 1; }
         var validate = policy.GetMethod("Validate", BindingFlags.Public | BindingFlags.Static)!;
         var failures = new List<string>();
+        foreach (var sql in new[] {
+            "SELECT COLLATIONPROPERTY('Latin1_General_100_CI_AS', 'CodePage')",
+            "SELECT DATABASEPROPERTYEX('AxDB', 'Collation')",
+            "SELECT DATABASEPROPERTYEX(DB_NAME(), 'Collation')",
+            "SELECT collationproperty(@collation, @property), databasepropertyex(DB_NAME(), @property)"
+        }) Check(sql, false, true);
+        foreach (var sql in new[] {
+            "SELECT dbo.COLLATIONPROPERTY('x', 'y')",
+            "SELECT [dbo].[DATABASEPROPERTYEX]('x', 'y')",
+            "SELECT dbo.DB_NAME()",
+            "SELECT DATABASEPROPERTYEX_CUSTOM('x', 'y')"
+        }) Check(sql, false, false);
         foreach (var sql in new[] { "SELECT * FROM dbo.CustTable", "WITH c AS (SELECT RECID FROM dbo.CustTable) SELECT COUNT(*) FROM c", "SELECT a.RECID FROM dbo.CustTable a JOIN dbo.Other b ON a.RECID=b.RECID", "SELECT 'EXEC DELETE INTO OPENROWSET' AS literal" })
             Check(sql, false, true);
         foreach (var sql in new[] { "SELECT * INTO dbo.Other FROM dbo.CustTable", "DELETE dbo.CustTable", "SELECT 1; DELETE dbo.CustTable", "EXEC('SELECT 1')", "SELECT * FROM OtherDb.dbo.CustTable", "SELECT * FROM [server].[db].[dbo].[t]", "SELECT * FROM OPENQUERY(Remote, 'SELECT 1')", "SELECT * FROM OPENROWSET('x','y','z')", "SELECT dbo.CustomFunction()", "SELECT NEXT VALUE FOR dbo.Sequence", "SELECT @x = RECID FROM dbo.CustTable", "SELECT * FROM dbo.FunctionTable()", "SELECT 1 FOR XML AUTO", "SELECT * FROM #temp", "SELECT * FROM dbo.CustTable WITH (NOLOCK)", "SELECT CAST('x' AS dbo.CustomType)", "SELECT * FROM dbo.T OPTION (MAXDOP 0)", "SELECT * FROM OPENDATASOURCE('SQLNCLI','x').db.dbo.T", "SELECT * FROM (SELECT * FROM Other.dbo.T) x", "WITH c AS (SELECT dbo.CustomFunction() AS v) SELECT v FROM c", "SELECT [dbo].[CustomFunction]()" })

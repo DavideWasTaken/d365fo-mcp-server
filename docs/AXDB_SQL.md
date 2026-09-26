@@ -75,6 +75,8 @@ Fetch `{"action":"contract"}` for the full strict input schema, supported types 
 - `query`: one SELECT, including CTEs, joins and aggregates.
 - `execute`: up to 20 INSERT/UPDATE/DELETE statements in one local transaction, committed together; optional `expectedRows` per statement causes rollback on mismatch.
 
+Read-only metadata functions `COLLATIONPROPERTY`, `DATABASEPROPERTYEX` and `DB_NAME` are supported, including `SELECT DATABASEPROPERTYEX(DB_NAME(), 'Collation')`. Qualified custom functions such as `dbo.DATABASEPROPERTYEX(...)` remain excluded. This change is in the C# bridge: rebuild/deploy that bridge after pulling; a TypeScript-only build leaves the old SQL policy active. These functions read properties ([Microsoft DATABASEPROPERTYEX](https://learn.microsoft.com/en-us/sql/t-sql/functions/databasepropertyex-transact-sql), [Microsoft COLLATIONPROPERTY](https://learn.microsoft.com/en-us/sql/t-sql/functions/collation-functions-collationproperty-transact-sql)); they do not enable writes.
+
 ```json
 {
   "action": "query",

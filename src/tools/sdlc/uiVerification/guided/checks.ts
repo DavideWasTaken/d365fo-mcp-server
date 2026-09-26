@@ -1,6 +1,7 @@
 import type { ElementHandle, Frame, Page } from 'playwright';
 import type { Criterion, GuidedInput } from './contract.js';
 import { assertCheckApplicable } from '../checkApplicability.js';
+import { measureGridRows } from './gridRows.js';
 
 type CheckInput = Extract<GuidedInput, { action: 'check' }>;
 const credentialSelector =
@@ -75,9 +76,9 @@ export async function measureCheck(
   resolve: (snapshot: string, ref: string) => Promise<ElementHandle>,
   criterion: Criterion,
   input: CheckInput,
-): Promise<{ actual: string | boolean; passed: boolean; target: string }> {
+): Promise<{ actual: string | boolean | number; passed: boolean; target: string }> {
   if ('kind' in criterion) throw new Error('AI review requires captured evidence and a declared AI criterion');
-  let actual: string | boolean;
+  let actual: string | boolean | number;
   if (input.absent) {
     if (criterion.check !== 'visible' || criterion.expected !== false)
       throw new Error('Absence query only allowed for visible:false criteria');
@@ -95,6 +96,14 @@ export async function measureCheck(
   if (await element.evaluate((node, selector) => node instanceof Element && node.matches(selector), credentialSelector))
     throw new Error('Sensitive credential controls cannot be checked');
   await assertCheckApplicable(element, criterion.check);
+  if (criterion.check === 'rowCount') {
+    const actual = await measureGridRows(element, criterion.basis);
+    return {
+      actual,
+      passed: actual === criterion.expected,
+      target: `Observed grid ref ${input.ref}; ${criterion.basis} data rows (column headers excluded)`,
+    };
+  }
   switch (criterion.check) {
     case 'visible':
       actual = await element.isVisible();

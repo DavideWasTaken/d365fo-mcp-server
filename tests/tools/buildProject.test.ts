@@ -87,9 +87,21 @@ vi.mock('../../src/utils/packagesRoot.js', async () => {
 
 const { pruneMock } = vi.hoisted(() => ({ pruneMock: vi.fn() }));
 vi.mock('../../src/tools/sdlc/compilerMetadataPrune.js', () => ({ pruneStaleCompilerMetadata: pruneMock }));
+const { bpMock, syncMock, labelsMock } = vi.hoisted(() => ({ bpMock: vi.fn(), syncMock: vi.fn(), labelsMock: vi.fn() }));
+vi.mock('../../src/tools/sdlc/runBpCheck.js', () => ({ runBpCheckTool: bpMock }));
+vi.mock('../../src/tools/sdlc/dbSync.js', () => ({ dbSyncTool: syncMock }));
+vi.mock('../../src/tools/write/compileLabels.js', () => ({ compileModelLabels: labelsMock }));
 
 import path from 'path';
 import { buildProjectTool, readFullLog, renderFailureLog, trimSucceededLog } from '../../src/tools/sdlc/buildProject';
+import { buildD365foProjectTool } from '../../src/server/toolSchemas/buildD365foProject';
+
+it('publishes background default and explicit blocking semantics', () => {
+  expect(buildD365foProjectTool.description).toContain('background');
+  expect(buildD365foProjectTool.description).not.toContain('do NOT poll');
+  expect(buildD365foProjectTool.inputSchema.properties.wait.default).toBe(false);
+  expect(buildD365foProjectTool.inputSchema.properties.wait.description).toContain('wait:true');
+});
 
 describe('trimSucceededLog', () => {
   const SUMMARY = ['Compilation completed', 'Errors: 0', 'Warnings: 2'];
@@ -186,6 +198,9 @@ describe('build_d365fo_project', () => {
     // assume changed", so every finished result would be refused and rebuilt.
     statMock.mockResolvedValue({ mtimeMs: 0 });
     pruneMock.mockResolvedValue({ stale: [], phantoms: [], skippedModels: [], errors: [], scanned: 0 });
+    bpMock.mockResolvedValue({ content: [{ type: 'text', text: 'BP findings saved' }] });
+    syncMock.mockResolvedValue({ content: [{ type: 'text', text: 'Tables synced' }] });
+    labelsMock.mockResolvedValue({ success: true, skipped: true, message: 'No labels' });
     cfgGetProjectPath.mockResolvedValue(PROJECT_PATH);
     cfgGetPackagePath.mockReturnValue(null);
     cfgGetContext.mockReturnValue({});
@@ -358,8 +373,8 @@ describe('build_d365fo_project', () => {
     expect(result.content[0].text).toContain('nothing was recompiled by this call');
     expect(result.isError).toBeFalsy();
     expect(spawnMock).not.toHaveBeenCalled();
-    // State file should be cleared
-    expect(unlinkMock).toHaveBeenCalled();
+    // Keep results recoverable if the transport loses this response.
+    expect(unlinkMock).not.toHaveBeenCalled();
   });
 
   it('returns error result when previous build failed', async () => {
@@ -453,9 +468,9 @@ describe('build_d365fo_project', () => {
 
     await buildProjectTool({ projectPath: PROJECT_PATH, wait: false }, {});
 
-    const logWrite = writeFileMock.mock.calls.find(
+    const logWrite = writeFileMock.mock.calls.filter(
       (c: any[]) => typeof c[0] === 'string' && c[0].includes('d365build_log'),
-    );
+    ).at(-1);
     expect(logWrite).toBeDefined();
     const written = String(logWrite![1]);
     expect(written).toContain('=== xppc invocation ===');
@@ -766,6 +781,227 @@ describe('build_d365fo_project', () => {
     });
   }
 
+  it('returns promptly by default and persists the original post-build request', async () => {
+    spawnMock.mockReturnValue(makeFakeChild(42));
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['MyTable'] }, {});
+    expect(result.content[0].text).toContain('build started');
+    const state = JSON.parse(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+    expect(state.postBuildRequest).toMatchObject({ projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['MyTable'] });
+    expect(result.content[0].text).toContain(state.logFile);
+    expect(result.content[0].text).toContain('modelName');
+    expect(result.content[0].text).toContain('fullBuild');
+    expect(bpMock).not.toHaveBeenCalled();
+    expect(syncMock).not.toHaveBeenCalled();
+  }, 1000);
+
+  it('default follow-up returns a running snapshot with the recoverable log path', async () => {
+    serveState(finishedState({ status: 'running', phase: 'finalizing' }));
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(result.content[0].text).toContain('Call again to refresh');
+    expect(result.content[0].text).toContain('d365build_log_prev.log');
+    expect(spawnMock).not.toHaveBeenCalled();
+  }, 1000);
+
+  it.each([false, true])('keeps single/queued success logs and runtime restart guidance (queued=%s)', async queued => {
+    const logFile = 'C:\\Temp\\d365build_log_prev.log';
+    serveState(finishedState(queued ? {
+      buildQueue: ['Dep', MODEL_NAME],
+      queueResults: [
+        { modelName: 'Dep', status: 'succeeded', duration: 1, logFile: 'dependency.log' },
+        { modelName: MODEL_NAME, status: 'succeeded', duration: 2, logFile },
+      ],
+    } : {}));
+    readdirMock.mockResolvedValue([]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    const text = result.content[0].text;
+    expect(text).toContain(logFile);
+    if (queued) expect(text).toContain('dependency.log');
+    expect(text).toContain('Restart');
+    expect(text).toContain('AOSService');
+    expect(text).toContain('IIS Express');
+    expect(text).toContain('W3SVC');
+    expect(text).toContain('does not prove');
+  });
+
+  it.each([false, true])('keeps failure logs without claiming runtime readiness (queued=%s)', async queued => {
+    const logFile = 'C:\\Temp\\d365build_log_prev.log';
+    serveState(finishedState({ status: 'failed', ...(queued ? {
+      buildQueue: ['Dep', MODEL_NAME],
+      queueResults: [{ modelName: 'Dep', status: 'failed', duration: 1, logFile }],
+    } : {}) }));
+    readdirMock.mockResolvedValue([]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain(logFile);
+    expect(result.content[0].text).not.toContain('Restart');
+  });
+
+  it('runs captured BP/sync once in background and collects the same result repeatedly without replay', async () => {
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child);
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, wait: false, bpCheck: true, dbSync: ['MyTable'] }, {});
+    const close = child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1];
+    await close(0);
+    expect(bpMock).toHaveBeenCalledTimes(1);
+    expect(syncMock).toHaveBeenCalledTimes(1);
+    expect(syncMock.mock.calls[0][0]).toMatchObject({ projectPath: PROJECT_PATH, tables: ['MyTable'] });
+    const finalState = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
+    serveState(finalState);
+    readdirMock.mockResolvedValue([]);
+    for (let i = 0; i < 2; i++) {
+      const result = await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: ['OtherTable'] }, {});
+      expect(result.content[0].text).toContain('Tables synced');
+      expect(result.content[0].text).toContain('BP findings saved');
+      expect(result.content[0].text).toContain('original build request');
+    }
+    expect(bpMock).toHaveBeenCalledTimes(1);
+    expect(syncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not run post-build actions after a failed compile', async () => {
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child);
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, wait: false, bpCheck: true, dbSync: true }, {});
+    await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](1);
+    expect(bpMock).not.toHaveBeenCalled();
+    expect(syncMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves a database sync failure in the collected result', async () => {
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child);
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    syncMock.mockResolvedValue({ content: [{ type: 'text', text: 'Sync failed' }], isError: true });
+    await buildProjectTool({ projectPath: PROJECT_PATH, wait: false, dbSync: true }, {});
+    await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    serveState(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+    readdirMock.mockResolvedValue([]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Sync failed');
+  });
+
+  it('reports interrupted finalization after server restart without replaying sync', async () => {
+    serveState(finishedState({ status: 'running', phase: 'finalizing', ownerSessionId: 'old-server',
+      postBuildRequest: { dbSync: ['MyTable'], bpCheck: true } }));
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('server session');
+    expect(result.content[0].text).toContain('unknown');
+    expect(result.content[0].text).toContain('MyTable');
+    expect(result.content[0].text).toContain('d365build_log_prev.log');
+    expect(syncMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  }, 1000);
+
+  it('preserves saved post-build results when a dead-PID snapshot settles into completion', async () => {
+    let reads = 0;
+    readFileMock.mockImplementation(async (p: string) => {
+      if (p.includes('d365build_state')) return ++reads === 1
+        ? finishedState({ pid: 2147483646, status: 'running' })
+        : finishedState({ postBuildResult: { bpSection: 'Saved BP', syncSection: 'Saved failed sync', syncFailed: true } });
+      if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
+      return 'Build complete';
+    });
+    readdirMock.mockResolvedValue([]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(result.content[0].text).toContain('Saved BP');
+    expect(result.content[0].text).toContain('Saved failed sync');
+    expect(result.isError).toBe(true);
+  });
+
+  it('returns promptly while slow label preparation continues in the background', async () => {
+    let finishLabels!: (value: any) => void;
+    labelsMock.mockImplementation(() => new Promise(resolve => { finishLabels = resolve; }));
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child);
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(result.content[0].text).toContain('preparing');
+    expect(result.content[0].text).toContain('Log:');
+    expect(spawnMock).not.toHaveBeenCalled();
+    const state = JSON.parse(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+    expect(state.phase).toBe('preparing');
+    serveState(JSON.stringify(state));
+    const snapshot = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(snapshot.isError).toBeFalsy();
+    expect(snapshot.content[0].text).toContain('Call again to refresh');
+    finishLabels({ success: true, skipped: true, message: 'No labels' });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+  }, 1000);
+
+  it('keeps the build recoverable when a dead compiler transitions to finalizing', async () => {
+    const child = makeFakeChild(2147483646);
+    spawnMock.mockReturnValue(child);
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, wait: false, dbSync: true }, {});
+    const launched = JSON.parse(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+    let reads = 0;
+    readFileMock.mockImplementation(async (p: string) => {
+      if (p.includes('d365build_state')) return JSON.stringify({ ...launched, phase: ++reads === 1 ? 'compiling' : 'finalizing' });
+      if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
+      return 'Preparing sync';
+    });
+    unlinkMock.mockClear();
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).toContain('finalizing');
+    expect(unlinkMock).not.toHaveBeenCalled();
+  });
+
+  it('does not launch obsolete preparation after force replaces its job', async () => {
+    let finishLabels!: (value: any) => void;
+    labelsMock.mockImplementationOnce(() => new Promise(resolve => { finishLabels = resolve; }));
+    spawnMock.mockReturnValue(makeFakeChild(42));
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    await buildProjectTool({ projectPath: PROJECT_PATH, force: true }, {});
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const currentState = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
+    finishLabels({ success: true, skipped: true, message: 'No labels' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]).toBe(currentState);
+  });
+
+  it('reports immediate preparation failures as errors and keeps a failed result', async () => {
+    labelsMock.mockRejectedValue(new Error('label tool unavailable'));
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('preparation failed');
+    expect(spawnMock).not.toHaveBeenCalled();
+    const state = JSON.parse(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+    expect(state.status).toBe('failed');
+    expect(appendFileMock.mock.calls.some(c => c[1].includes('label tool unavailable'))).toBe(true);
+  });
+
+  it('does not spawn or overwrite the new log when force interrupts an invocation log write', async () => {
+    let finishOldWrite!: () => void;
+    let oldLog: string | undefined;
+    writeFileMock.mockImplementation(async (file: string, text: string) => {
+      if (text.includes('=== xppc invocation ===') && !oldLog) {
+        oldLog = file;
+        await new Promise<void>(resolve => { finishOldWrite = resolve; });
+      }
+    });
+    spawnMock.mockReturnValue(makeFakeChild(42));
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(oldLog).toBeDefined();
+    await buildProjectTool({ projectPath: PROJECT_PATH, force: true }, {});
+    const stateJson = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
+    const newLog = JSON.parse(stateJson).logFile;
+    finishOldWrite();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(newLog).not.toBe(oldLog);
+    expect(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]).toBe(stateJson);
+  });
+
   it('fullBuild:true recompiles instead of replaying a finished FULL build', async () => {
     serveState(finishedState({ fullBuild: true }));
     // Sources unchanged since the build ended — the cached result would
@@ -859,7 +1095,7 @@ describe('build_d365fo_project', () => {
     });
     const onProgress = vi.fn().mockResolvedValue(undefined);
 
-    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {}, onProgress);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH, wait: true }, {}, onProgress);
 
     expect(result.content[0].text).toContain('Build succeeded');
     expect(result.content[0].text).not.toContain('timeout');
@@ -878,7 +1114,7 @@ describe('build_d365fo_project', () => {
 
     // 1 ms window — the wait expires before the build can possibly finish.
     const result = await buildProjectTool(
-      { projectPath: PROJECT_PATH, waitTimeoutMs: 1 }, {},
+      { projectPath: PROJECT_PATH, wait: true, waitTimeoutMs: 1 }, {},
     );
 
     const text = result.content[0].text;

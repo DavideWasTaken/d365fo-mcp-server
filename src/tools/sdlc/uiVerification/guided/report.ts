@@ -23,6 +23,7 @@ export interface GuidedCase extends CaseResult {
   counters: { calls: number; interactions: number; images: number; recoveries: number; characters: number };
 }
 export function expectedText(c: Criterion) {
+  if (!('kind' in c) && c.check === 'rowCount') return `${c.expected} ${c.basis} data rows (column headers excluded)`;
   return 'kind' in c ? c.expectedDescription : String(c.expected);
 }
 export function caseStatus(c: GuidedCase, definition: Mission['cases'][number]): Status {

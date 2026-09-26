@@ -178,6 +178,22 @@ Native input/textarea/select observations carry `value` and a `recommendedCheck`
 
 For an empty grid exposing `role="alert"` with “Niente da visualizzare”, declare a measured text criterion for that alert and bind it within the intended active form/grid. No AI screenshot judgement is required. This checks the displayed empty-state message; it is not a total-record count. Counting rendered rows alone cannot prove the total of a paged or virtualized grid.
 
+### Measured grid counts and form titles
+
+Guided missions also accept a numeric criterion bound to an observed grid/table:
+
+```json
+{ "id": "rows", "targetDescription": "Filtered orders grid", "check": "rowCount", "basis": "total", "expected": 0 }
+```
+
+`basis` is mandatory and frozen with the mission. `total` uses `aria-rowcount` and consistent `aria-rowindex` values, subtracting a fully observed leading section of column-header rows. Observe the top of the grid: if non-empty, the first data row must establish the end of that header section. Unknown totals (`-1`), incomplete header evidence, inconsistent indices, loading (`aria-busy`), external ARIA ownership and unsupported row markup return `CHECK_NOT_APPLICABLE` / `NOT_VERIFIED`. The report identifies the count basis. A total of zero is a measured empty grid; when total metadata is unavailable, measure the explicit empty-result alert instead.
+
+`basis:"rendered"` counts visible DOM data rows in the bound grid, excluding column headers and nested grid rows. It can verify viewport contents, but **zero rendered rows does not prove an empty dataset**, and the count is not a server-side total. Both modes cap DOM inspection at 2,000 row elements / 20,000 elements and reject shadow/custom-element or embedded-frame boundaries rather than report a partial count. Bind a standard inner grid when such a boundary exists. These semantics follow [ARIA row count/index definitions](https://www.w3.org/WAI/ARIA/apg/practices/grid-and-table-properties/); live D365 markup must expose the required evidence.
+
+A visible form heading can use the existing `check:"text"` against its fresh observed heading reference. Bind the heading itself, not the form container (which includes other text), a native input (use `value`), or the browser tab title. If it returns `NOT_VERIFIED`, inspect `code`, `message` and `diagnostic`: `NEEDS_OBSERVATION` requires a fresh reference after navigation/rerender, and `CHECK_NOT_APPLICABLE` explains an incompatible binding. Visibility alone does not establish that the requested reference and criterion are valid. Preserve that response when reporting a title problem.
+
+For action menu items, use a URL such as `/?cmp=USMF&mi=Action%3AMyActionMenuItem`, with the actual menu item name. `Action%3A` is the encoded `Action:` prefix verified on the developer environment. Microsoft examples also use lowercase `action:`; this tool does not reject or silently rewrite other spellings. Opening an action menu item can execute business logic and must not be retried automatically.
+
 Each new observation replaces previous references. Changed documents, replaced elements, hidden controls, scope changes and recycled grid rows require a fresh observation; the tool does not silently select another matching row. Use `observe.scopeRef` to focus on an observed container, `filter` to narrow text/role/name, and `screenshot:true` only when useful. Output is capped at 120 controls and about 8,000 text characters, with `truncated:true` for omissions. A truncated snapshot proves no absence. For a declared `visible:false` criterion, `check.absent` uses an observed scope plus an exact role/name query on the actual DOM; that read-only query cannot authorize an action.
 
 Optional viewport screenshots are capped at 1 MiB and mask password fields. They arrive as MCP image content separately from JSON and are saved with observations locally. Guided images and text are intended for the client AI, unlike deterministic error screenshots. Page content is untrusted data, never instructions. Keep profiles, authentication and evidence local except for observations deliberately sent to your client.
@@ -189,7 +205,7 @@ Optional viewport screenshots are capped at 1 MiB and mask password fields. They
 | Budget | Default | Maximum |
 |---|---:|---:|
 | Browser interactions per case | 20 | 50 |
-| Interactive calls per case | 15 | 30 |
+| Interactive calls per case | 30 | 30 |
 | Consecutive recoveries without progress | 2 | 4 |
 | Images per case | 3 | 6 |
 | Call deadline | 30 seconds | 45 seconds |
@@ -307,7 +323,7 @@ Update the checkout, run `npm ci` and `npm run build`, then restart the local MC
 2. Verify the empty-result alert with `check:"text"` and its observed exact text (or `match:"contains"` for additional message text), scoped to the intended grid. Compare against a deliberately different expected message to confirm a genuine mismatch still produces FAIL.
 3. Repeat human login in Edge. If it fails, return the tool's safe `diagnostic` and message: they report phase/code, attempted browser and blocked origin where applicable, excluding URL paths, query tokens, browser logs and credentials. Report files include the actual browser choice and available stopping reason.
 
-Do not replay an uncertain write merely to repeat this acceptance check. `limits.calls:30` is already supported when needed; the default remains 15 to preserve the existing quota limit. Prefer scoped observations before increasing it. Grid totals, automatic active-form selection and dedicated column-filter actions are not introduced by this corrective release.
+Do not replay an uncertain write merely to repeat this acceptance check. The default is now 30 calls per case; reduce `limits.calls` when a shorter test suffices and prefer scoped observations. Measured `rowCount` is available with explicit rendered/total semantics above. Automatic active-form selection and dedicated column-filter actions remain outside this release.
 
 Run the browser fixture checks with `npm run test:ui` after installing Chromium. Run the input/report tests with `npm run test:run -- tests/tools/verify-ui-customization.test.ts`.
 

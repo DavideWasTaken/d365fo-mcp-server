@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { verifyUiCustomizationTool } from '../../src/tools/sdlc/verifyUiCustomization.js';
-import { GuidedInputSchema, exampleMission } from '../../src/tools/sdlc/uiVerification/guided/contract.js';
+import {
+  GuidedInputSchema,
+  exampleMission,
+  CriterionSchema,
+  LimitsSchema,
+} from '../../src/tools/sdlc/uiVerification/guided/contract.js';
 
 describe('guided UI contract', () => {
+  it('provides 30 calls by default and requires an explicit row-count basis', () => {
+    expect(LimitsSchema.parse({}).calls).toBe(30);
+    const criterion = { id: 'rows', targetDescription: 'Filtered orders', check: 'rowCount', expected: 0 };
+    expect(CriterionSchema.safeParse(criterion).success).toBe(false);
+    for (const basis of ['rendered', 'total'])
+      expect(CriterionSchema.safeParse({ ...criterion, basis }).success).toBe(true);
+    expect(CriterionSchema.safeParse({ ...criterion, basis: 'total', expected: -1 }).success).toBe(false);
+  });
   it('publishes the guided mission and action contract separately without browser startup', async () => {
     const result = await verifyUiCustomizationTool({ action: 'contract', topic: 'guided' });
     expect(result).not.toHaveProperty('isError', true);

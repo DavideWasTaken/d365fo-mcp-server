@@ -14,7 +14,7 @@ export const buildD365foProjectTool = {
     name: 'build_d365fo_project',
     description:
       'Build a D365FO model with xppc.exe (compiles the ENTIRE model, not one project). ' +
-      'Blocks until done — call ONCE per build, do NOT poll (wait:false = legacy polling mode). ' +
+      'Starts in background by default; check/collect with the same modelName, omitting fullBuild/force. wait:true opts into blocking. ' +
       'fullBuild:true fixes "not been successfully compiled since it was last changed" stale-symbol errors.',
     inputSchema: {
       type: 'object',
@@ -36,16 +36,17 @@ export const buildD365foProjectTool = {
         },
         bpCheck: {
           type: 'boolean',
-          description: 'On a SUCCESSFUL build, also run the best-practice checker and append its findings. Prefer this to a follow-up run_bp_check call: one build call instead of two round trips.',
+          description: 'Run the best-practice checker once after a SUCCESSFUL build. Set on the initial build; status calls collect saved findings without repeating actions.',
         },
         dbSync: {
           type: ['boolean', 'array'],
           items: { type: 'string' },
-          description: 'On a SUCCESSFUL build, also run the database sync (SyncEngine.exe) — REQUIRED after any table/view/data-entity change. true = partial sync of the syncable objects in the project, full-model when it has none; an ARRAY syncs exactly those tables/views (much faster).',
+          description: 'Sync once after a SUCCESSFUL build; set on the initial build. Required after table/view/data-entity changes. true = project scope, full-model if none; ARRAY = exact tables/views. Status calls never repeat sync.',
         },
         wait: {
           type: 'boolean',
-          description: 'When true (default) the tool blocks until the build finishes and returns the final result in a single call. The agent should make exactly one call per requested build. Set false for legacy fire-and-forget polling behaviour.',
+          default: false,
+          description: 'Default false returns a background status/log path. Use wait:true to block for the final result; client timeouts may occur sooner. Keep the MCP server running for finalization.',
         },
         waitTimeoutMs: {
           type: 'number',

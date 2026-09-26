@@ -18,6 +18,9 @@ import { recordBuild } from '../../utils/buildMarker.js';
 import type { ProgressReporter } from '../../utils/progressReporter.js';
 
 const execFileAsync = util.promisify(execFile);
+// Close handlers and post-build work belong to this server lifetime.
+const BUILD_SESSION_ID = crypto.randomUUID();
+const activeBuildJobs = new Map<string, string>();
 
 // Build-tool file logger
 async function buildLog(level: 'INFO' | 'WARN' | 'ERROR', message: string): Promise<void> {
@@ -242,6 +245,10 @@ interface QueueResult {
 }
 
 interface BuildJobState {
+  jobId?: string;
+  ownerSessionId?: string;
+  postBuildRequest?: { bpCheck?: boolean | string; dbSync?: boolean | string | string[]; projectPath?: string; packagePath?: string };
+  postBuildResult?: { bpSection: string; syncSection: string; syncFailed: boolean };
   pid: number;
   modelName: string;       // Currently building model
   targetModel: string;     // Final target model — state file is keyed by this
@@ -249,13 +256,14 @@ interface BuildJobState {
   startTime: string;
   logFile: string;         // Log for the CURRENT model in the queue
   status: 'running' | 'succeeded' | 'failed';
-  // What a 'running' state is actually doing. 'finalizing' means xppc has
+  // What a 'running' state is actually doing. 'preparing' includes labelc;
+  // 'finalizing' means xppc has
   // already exited and the in-process close handler is doing post-build work
   // (runtime metadata regeneration, up to ~90 s) before it can write the final
   // result. Without this a waiter sees a dead PID, concludes the build was
   // orphaned and returns a "still running" stub for a build that in fact
   // succeeded seconds ago — the 185 s double-call of #829.
-  phase?: 'compiling' | 'finalizing';
+  phase?: 'preparing' | 'compiling' | 'finalizing';
   exitCode?: number;
   endTime?: string;
   fullBuild?: boolean;
@@ -267,7 +275,7 @@ interface BuildJobState {
 
 // State file is keyed by targetModel so it remains findable throughout a
 // multi-model build even while a dependency is building. Each model in the
-// queue gets its own log file (keyed by targetModel + index).
+// queue gets its own log file (keyed by targetModel + job + index).
 
 function stateFilePath(targetModel: string, customPackagesPath: string): string {
   const hash = crypto
@@ -278,10 +286,10 @@ function stateFilePath(targetModel: string, customPackagesPath: string): string 
   return path.join(os.tmpdir(), `d365build_state_${hash}.json`);
 }
 
-function logFilePath(targetModel: string, queueIndex: number, customPackagesPath: string): string {
+function logFilePath(targetModel: string, queueIndex: number, customPackagesPath: string, jobId?: string): string {
   const hash = crypto
     .createHash('md5')
-    .update(`log:${targetModel.toLowerCase()}|${queueIndex}|${customPackagesPath.toLowerCase()}`)
+    .update(`log:${targetModel.toLowerCase()}|${queueIndex}|${customPackagesPath.toLowerCase()}|${jobId ?? ''}`)
     .digest('hex')
     .slice(0, 10);
   return path.join(os.tmpdir(), `d365build_log_${hash}.log`);
@@ -374,7 +382,12 @@ async function readBuildState(targetModel: string, customPackagesPath: string): 
 }
 
 async function writeBuildState(state: BuildJobState, customPackagesPath: string): Promise<void> {
+  if (isSupersededBuild(state, customPackagesPath)) return;
   await writeFile(stateFilePath(state.targetModel, customPackagesPath), JSON.stringify(state, null, 2), 'utf-8');
+}
+
+function isSupersededBuild(state: BuildJobState, customPackagesPath: string): boolean {
+  return !!state.jobId && activeBuildJobs.get(stateFilePath(state.targetModel, customPackagesPath)) !== state.jobId;
 }
 
 async function clearBuildState(targetModel: string, customPackagesPath: string): Promise<void> {
@@ -383,6 +396,13 @@ async function clearBuildState(targetModel: string, customPackagesPath: string):
 
 function isProcessAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function isBuildActive(state: BuildJobState): boolean {
+  if (state.ownerSessionId && state.ownerSessionId !== BUILD_SESSION_ID) return false;
+  if (state.phase === 'preparing' || state.phase === 'finalizing') return true;
+  if (!state.pid && state.buildQueue?.length) return true;
+  return isProcessAlive(state.pid);
 }
 
 /** Last N lines of a log file (used while a build is running). */
@@ -675,6 +695,7 @@ export function describeLabelCompilation(modelName: string, result: CompileLabel
 
 /** Passed through the entire queue so the close handler can launch the next model without re-resolving paths. */
 interface XppcBuildContext {
+  toolContext?: any;
   xppcExe: string;
   customPackagesPath: string;
   microsoftPackagesPath: string;
@@ -930,6 +951,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
   // would leave THIS build reporting unknown-label errors for labels that are
   // perfectly well defined, and only clear them on the next one.
   const labelResult = await compileModelLabels(microsoftPackagesPath, customPackagesPath, modelName, !!useFullBuild);
+  if (isSupersededBuild(state, customPackagesPath)) return -1;
   const labelHeader = describeLabelCompilation(modelName, labelResult);
   if (labelResult.skipped && labelResult.success) {
     await buildLog('INFO', `labelc skipped for ${modelName}: ${labelResult.message}`);
@@ -960,6 +982,9 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
   // output to it, so a single tail read shows the whole build in the order it
   // happened.
   await writeFile(state.logFile, invocationHeader + labelHeader, 'utf-8');
+  // force may supersede preparation during the awaited log write. Nothing may
+  // await between this last ownership check and spawning the compiler.
+  if (isSupersededBuild(state, customPackagesPath)) return -1;
   const logFd = openSyncFs(state.logFile, 'a');
 
   const child = spawn(xppcExe, xppcArgs, {
@@ -972,7 +997,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
   const pid = child.pid!;
 
   // Write state with actual PID immediately so polls see it
-  const liveState: BuildJobState = { ...state, pid };
+  const liveState: BuildJobState = { ...state, pid, phase: 'compiling' };
   await writeBuildState(liveState, customPackagesPath);
 
   await buildLog('INFO', `xppc.exe launched — PID: ${pid} | model: ${modelName} | log: ${state.logFile}`);
@@ -986,6 +1011,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
 
   child.on('close', async (code) => {
     closeSyncFs(logFd);
+    if (isSupersededBuild(liveState, customPackagesPath)) return;
     const exitCode = code ?? -1;
 
     // Publish "xppc is gone, I am finishing up" BEFORE the post-build work, so
@@ -998,6 +1024,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
     try {
       xppcErrContent = await readFile(xppcErrLog, 'utf-8');
     } catch { /* no -log file = no diagnostics */ }
+    if (isSupersededBuild(liveState, customPackagesPath)) return;
 
     const hasCompileErrors = XPPC_COMPILE_ERROR_RE.test(xppcErrContent);
     const hasStaleSymbol   = XPPC_STALE_SYMBOL_RE.test(xppcErrContent);
@@ -1056,7 +1083,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
     ) {
       const nextIdx   = liveState.queueIndex + 1;
       const nextModel = liveState.buildQueue[nextIdx];
-      const nextLog   = logFilePath(liveState.targetModel, nextIdx, customPackagesPath);
+      const nextLog   = logFilePath(liveState.targetModel, nextIdx, customPackagesPath, liveState.jobId);
 
       const nextState: BuildJobState = {
         ...liveState,
@@ -1096,6 +1123,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
       liveState.targetModel,
       compilerMetadataPath,
     );
+    if (isSupersededBuild(liveState, customPackagesPath)) return;
     if (metaResult.skipped) {
       await buildLog('WARN', `Runtime metadata regeneration skipped: ${metaResult.message}`);
     } else if (metaResult.success) {
@@ -1106,13 +1134,32 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
       await appendFile(state.logFile, `\n⚠️ Runtime metadata (.md) regeneration failed — VS build required for deployment of new classes:\n${metaResult.message}\n`, 'utf-8').catch(() => {});
     }
 
-    // All models built — finalise as succeeded
+    // Capture compilation time before optional post-build work: source edits
+    // during a slow sync must still invalidate this compile's result.
+    const endTime = new Date().toISOString();
+    const dataDir = ctx.toolContext?.symbolIndex?.dataDir;
+    if (dataDir) recordBuild(dataDir, liveState.targetModel, {
+      builtAt: endTime, fullBuild: !!liveState.fullBuild, succeeded: true,
+    });
+    // These run in the original close handler, never in a status/read request.
+    // Persisted results can be collected repeatedly without repeating a sync.
+    const bpSection = await runPostBuildBpCheck(liveState.postBuildRequest, liveState.targetModel, ctx.toolContext);
+    if (isSupersededBuild(liveState, customPackagesPath)) return;
+    const sync = await runPostBuildDbSync(liveState.postBuildRequest, liveState.targetModel, ctx.toolContext);
+    if (isSupersededBuild(liveState, customPackagesPath)) return;
+    const postBuildResult = { bpSection, syncSection: sync.section, syncFailed: sync.failed };
+    if (bpSection || sync.section) {
+      await appendFile(state.logFile, bpSection + sync.section + '\n', 'utf-8').catch(() => {});
+    }
+
+    // All models and requested post-build actions finished.
     const final: BuildJobState = {
       ...liveState,
       status: 'succeeded',
       exitCode,
-      endTime: new Date().toISOString(),
+      endTime,
       queueResults: allResults,
+      postBuildResult,
     };
     await writeBuildState(final, customPackagesPath).catch(() => {});
     await buildLog('INFO', `xppc.exe SUCCEEDED — PID: ${pid} | model: ${modelName} | ${duration}s`);
@@ -1135,8 +1182,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
 // Render the final result of a finished build (succeeded or failed) as the
 // MCP response payload. Shared between the "existing finished state" branch
 // and the wait-for-completion branch so both code paths produce identical
-// output. Caller is responsible for calling clearBuildState() afterwards
-// when appropriate.
+// output. Collection keeps the state so transport retries can recover it.
 // ---------------------------------------------------------------------------
 
 async function renderFinishedBuildResult(
@@ -1144,19 +1190,25 @@ async function renderFinishedBuildResult(
   targetModel: string,
   /** Where to leave the last-build note; omitted when no symbol index is attached. */
   dataDir?: string,
-  /** The tool's own arguments, for the opt-in post-build BP check. */
+  /** Used only to clarify that a follow-up cannot change post-build actions. */
   params?: any,
-  context?: any,
 ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
   const succeeded  = finalState.status === 'succeeded';
   const isQueued   = !!(finalState.buildQueue && finalState.buildQueue.length > 1);
   const allResults = finalState.queueResults ?? [];
+  const bpSection = finalState.postBuildResult?.bpSection ?? '';
+  const syncSection = finalState.postBuildResult?.syncSection ?? '';
+  const syncFailed = finalState.postBuildResult?.syncFailed ?? false;
+  const requestNote = params?.bpCheck !== undefined || params?.dbSync !== undefined
+    ? '\nPost-build actions belong to the original build request; reading this result does not add or repeat them. Use fullBuild:true for a new build with different actions.\n'
+    : '';
+  const runtimeNote = succeeded ? runtimeRestartGuidance() : '';
 
   if (isQueued) {
     const totalDuration = allResults.reduce((sum, r) => sum + r.duration, 0);
     const statusIcon    = succeeded ? '✅ Build complete' : '❌ Build failed';
     const modelLines    = allResults
-      .map(r => `  ${r.status === 'succeeded' ? '✅' : '❌'} ${r.modelName}: ${r.duration}s`)
+      .map(r => `  ${r.status === 'succeeded' ? '✅' : '❌'} ${r.modelName}: ${r.duration}s — Log: ${r.logFile}`)
       .join('\n');
 
     const relevantResult = succeeded
@@ -1176,12 +1228,13 @@ async function renderFinishedBuildResult(
     return {
       content: [{
         type: 'text',
-        text: `${statusIcon} — ${allResults.length} models, ${totalDuration}s total\n\n${modelLines}\n\n` +
+        text: `${statusIcon} — ${allResults.length} models, ${totalDuration}s total\n\n${modelLines}\nLog: ${relevantLogFile}\n` +
+          runtimeNote + requestNote + '\n' +
           (unexplained ? `${unexplained}\n\n` : '') +
           (structured ? `${structured}\n\n` : '') +
-          `--- Log (${relevantResult?.modelName ?? targetModel}) ---\n${logContent}`,
+          `--- Log (${relevantResult?.modelName ?? targetModel}) ---\n${logContent}` + bpSection + syncSection,
       }],
-      ...(succeeded ? {} : { isError: true }),
+      ...((!succeeded || syncFailed) ? { isError: true } : {}),
     };
   }
 
@@ -1206,30 +1259,17 @@ async function renderFinishedBuildResult(
   // tool that compiles nothing can say whether anything ever did.
   if (dataDir) {
     recordBuild(dataDir, targetModel, {
-      builtAt: new Date().toISOString(),
+      builtAt: finalState.endTime ?? finalState.startTime,
       fullBuild: !!finalState.fullBuild,
       succeeded,
     });
   }
 
-  // "compile, then check best practices" was the second most common pair in the
-  // sampled sessions (10 build -> run_bp_check hand-offs). Opt-in, and only on a
-  // green build: when the compile failed, the compiler errors ARE the answer and
-  // a BP report on half-built metadata is noise.
-  const bpSection = succeeded ? await runPostBuildBpCheck(params, targetModel, context) : '';
-  // Same shape, same reason, for the database sync: a table change is not
-  // finished until AxDB is synchronised, and that sync always follows a
-  // successful build. Gated on `succeeded` for the same reason bpCheck is —
-  // syncing metadata the compiler just rejected is worse than not syncing.
-  const sync = succeeded
-    ? await runPostBuildDbSync(params, targetModel, context)
-    : { section: '', failed: false };
-  const syncSection = sync.section;
-
   return {
     content: [{
       type: 'text',
-      text: `${statusIcon} (${finalState.tool}, ${buildMode}, ${duration}s)\n\nModel: ${targetModel}\n` +
+      text: `${statusIcon} (${finalState.tool}, ${buildMode}, ${duration}s)\n\nModel: ${targetModel}\nLog: ${finalState.logFile}\n` +
+        runtimeNote + requestNote +
         incrementalScopeCaveat(succeeded, !!finalState.fullBuild) + '\n' +
         (unexplained ? `${unexplained}\n\n` : '') +
         (structured ? `${structured}\n\n` : '') +
@@ -1237,8 +1277,16 @@ async function renderFinishedBuildResult(
     }],
     // A failed sync is an error even though the compile passed: the caller asked
     // for "build and sync", and half of that did not happen.
-    ...((!succeeded || sync.failed) ? { isError: true } : {}),
+    ...((!succeeded || syncFailed) ? { isError: true } : {}),
   };
+}
+
+function runtimeRestartGuidance(): string {
+  return '\nRuntime refresh required: Restart/reload the actual AOS host before testing new or changed objects. ' +
+    'For full IIS, recycle the AOSService application pool; for IIS Express, restart the specific ' +
+    'IIS Express instance hosting this environment through its normal launcher. A stopped W3SVC ' +
+    'does not identify or restart an IIS Express host. Compilation does not prove deployment or runtime availability; ' +
+    'verify the objects after the restart. This tool has not restarted the host.\n';
 }
 
 /**
@@ -1273,10 +1321,8 @@ async function runPostBuildBpCheck(
 /**
  * Database sync appended to a successful build when `dbSync` is set.
  *
- * Folded in from the retired `trigger_db_sync` tool, on the `bpCheck`
- * precedent above and with the same advisory contract: a sync failure is
- * reported as a section, never as a failed build, because the compile verdict
- * already stands.
+ * A sync failure preserves the successful compile verdict but sets isError
+ * on the overall result because the requested build-and-sync did not finish.
  *
  * `dbSync: true` lets dbSyncTool derive the partial-sync list from the project
  * (its ordinary behaviour when no `tables` are named); `dbSync: ["CustTable"]`
@@ -1364,10 +1410,8 @@ function incrementalScopeCaveat(succeeded: boolean, fullBuild: boolean): string 
 const PROGRESS_INTERVAL_MS = 10_000;
 
 /**
- * Default wait window. Long on purpose: with progress streaming the caller is
- * not sitting in silence, and a timeout short enough to fire on a normal build
- * is the worst of both worlds — it blocks for minutes AND still hands back a
- * "call me again" stub that costs another round trip (#829).
+ * Opt-in blocking window. The async default avoids client-side timeouts;
+ * progress notifications cannot override every client's absolute time limit.
  */
 const DEFAULT_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -1421,7 +1465,8 @@ async function waitForBuildCompletion(
       // pid 0 means a queue advance is in flight (the next model has not been
       // spawned yet) — transient, never an orphan.
       const finalizing = state.phase === 'finalizing';
-      const settled = !finalizing && (!state.pid || isProcessAlive(state.pid));
+      const settled = state.ownerSessionId === BUILD_SESSION_ID && isBuildActive(state)
+        || !finalizing && (!state.pid || isProcessAlive(state.pid));
       if (settled) {
         pidDeadSince = null;
       } else {
@@ -1449,18 +1494,14 @@ function describeBuildProgress(state: BuildJobState, startedAt: number): string 
   const queue = state.buildQueue && state.buildQueue.length > 1
     ? ` (${(state.queueIndex ?? 0) + 1}/${state.buildQueue.length})`
     : '';
-  const what = state.phase === 'finalizing'
-    ? 'finalizing (runtime metadata)'
+  const what = state.phase === 'preparing' ? 'preparing (compiler metadata and labels)' : state.phase === 'finalizing'
+    ? 'finalizing (runtime metadata, requested BP check/database sync)'
     : state.fullBuild ? 'full build' : 'incremental';
   return `🔨 Building ${state.modelName}${queue} — ${what}, ${elapsed}s elapsed`;
 }
 
 /**
- * What to do after a wait window expires. The old text ("call again to collect
- * the final result") made the follow-up poll the obvious move, which is a whole
- * extra round trip for a build that is still compiling. Name a concrete
- * waitTimeoutMs instead, so a caller that wants to keep waiting can do it in one
- * call rather than guessing a number.
+ * Explain status collection and the explicit blocking alternative after timeout.
  */
 function renderWaitTimeoutGuidance(elapsedSec: number, timeoutMs: number): string {
   // Twice what has already elapsed, rounded up to a whole minute and never
@@ -1469,8 +1510,8 @@ function renderWaitTimeoutGuidance(elapsedSec: number, timeoutMs: number): strin
   return [
     `The build is NOT finished and nothing is lost — it keeps compiling in the background.`,
     `Waited ${elapsedSec}s of the ${Math.round(timeoutMs / 1000)}s window.`,
-    `To keep waiting in a single call: build_d365fo_project { waitTimeoutMs: ${suggestMin * 60_000} }  (${suggestMin} min).`,
-    `Calling again without waitTimeoutMs re-attaches to the same build — it does not start a second one.`,
+    `Check status with the same modelName, omitting fullBuild and force; this does not start a second one.`,
+    `For an opt-in blocking wait: build_d365fo_project { wait: true, waitTimeoutMs: ${suggestMin * 60_000} } (${suggestMin} min). Your client may time out sooner.`,
   ].join('\n');
 }
 
@@ -1478,7 +1519,7 @@ function renderWaitTimeoutGuidance(elapsedSec: number, timeoutMs: number): strin
 // Tool handler
 // ---------------------------------------------------------------------------
 
-export const buildProjectTool = async (params: any, context: any, onProgress?: ProgressReporter) => {
+export const buildProjectTool = async (params: any, context: any, onProgress?: ProgressReporter): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> => {
   const dataDir: string | undefined = context?.symbolIndex?.dataDir;
   try {
     const force                 = params.force                === true;
@@ -1569,6 +1610,16 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
     const existingState = await readBuildState(targetModel, customPackagesPath);
 
     if (existingState && !force) {
+      if (existingState.status === 'running' && existingState.ownerSessionId && existingState.ownerSessionId !== BUILD_SESSION_ID) {
+        return {
+          content: [{ type: 'text', text: `❌ The owning server session ended before build finalization was recorded.\n\n` +
+            `Model: ${targetModel}\nLog: ${existingState.logFile}\n` +
+            `Requested post-build actions: ${JSON.stringify(existingState.postBuildRequest ?? {})}\n\n` +
+            `Completion of compilation and requested BP/database sync is unknown; no actions were replayed. ` +
+            `The compiler may still be running. Inspect its log and any sync outcome before explicitly starting a new build with force:true.` }],
+          isError: true,
+        };
+      }
       // fullBuild:true is a request to RECOMPILE, not a request for the newest
       // available result — so a FINISHED state can never satisfy it, not even a
       // finished full build. Discard it and compile for real. (#829: an explicit
@@ -1584,7 +1635,7 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
       // A 'finalizing' state has no live PID by definition — xppc exited and the
       // close handler is still doing post-build work — but it is very much a
       // running build, not an orphan.
-      const alive   = existingState.phase === 'finalizing' || isProcessAlive(existingState.pid);
+      const alive   = isBuildActive(existingState);
       const logTail = await readLogTail(existingState.logFile);
 
       if (existingState.status === 'running' && alive) {
@@ -1620,10 +1671,8 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
               .map(r => `${r.status === 'succeeded' ? '✅' : '❌'} ${r.modelName} (${r.duration}s)`)
               .join(', ')
           : '';
-        // When wait:true (default) and a build is already running for this
-        // model, attach to it and block until completion instead of returning
-        // a snapshot — this matches the "single call per build" contract.
-        const waitForFinish = params.wait !== false;
+        // A status request returns promptly unless blocking is explicit.
+        const waitForFinish = params.wait === true;
         if (waitForFinish) {
           const timeoutMs = resolveWaitTimeoutMs(params);
           // A malformed startTime must not leak NaN into a progress payload.
@@ -1633,8 +1682,7 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
             targetModel, customPackagesPath, timeoutMs, onProgress, startedAt,
           );
           if (wait.outcome === 'finished' && wait.state) {
-            await clearBuildState(targetModel, customPackagesPath);
-            return await renderFinishedBuildResult(wait.state, targetModel, dataDir, params, context);
+            return await renderFinishedBuildResult(wait.state, targetModel, dataDir, params);
           }
           const tailLog = await readLogTail(existingState.logFile);
           if (wait.outcome === 'orphaned') {
@@ -1654,7 +1702,7 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
               type: 'text',
               text:
                 `⏳ ${queueProgress} (PID: ${existingState.pid}, running ${elapsed}s; wait timeout reached)${completedLine}\n\n` +
-                renderWaitTimeoutGuidance(elapsed, timeoutMs) + '\n\n' +
+                `Log: ${wait.state?.logFile ?? existingState.logFile}\n\n` + renderWaitTimeoutGuidance(elapsed, timeoutMs) + '\n\n' +
                 `--- Latest log ---\n${tailLog}`,
             }],
           };
@@ -1662,7 +1710,7 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
         return {
           content: [{
             type: 'text',
-            text: `⏳ ${queueProgress} (PID: ${existingState.pid}, running ${elapsed}s)${completedLine}\n\nCall again to refresh.\n\n--- Latest log ---\n${logTail}`,
+            text: `⏳ ${queueProgress} (PID: ${existingState.pid}, ${existingState.phase ?? 'compiling'}, running ${elapsed}s)${completedLine}\nLog: ${existingState.logFile}\n\nCall again to refresh using modelName: ${JSON.stringify(targetModel)}; omit fullBuild and force.\n\n--- Latest log ---\n${logTail}`,
           }],
         };
       }
@@ -1675,12 +1723,15 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
           await new Promise(resolve => setTimeout(resolve, 500));
           const refreshed = await readBuildState(targetModel, customPackagesPath);
           if (refreshed && refreshed.status !== 'running') { finalState = refreshed; break; }
+          // xppc can exit just before its close handler publishes finalizing,
+          // or a queue can advance to another PID. Re-enter the ordinary status
+          // path using the newly active state instead of deleting it as orphaned.
+          if (refreshed && isBuildActive(refreshed)) {
+            return await buildProjectTool(params, context, onProgress);
+          }
         }
         if (finalState.status !== 'running') {
-          existingState.status   = finalState.status;
-          existingState.exitCode = finalState.exitCode;
-          existingState.endTime  = finalState.endTime;
-          existingState.queueResults = finalState.queueResults;
+          Object.assign(existingState, finalState);
         } else {
           await clearBuildState(targetModel, customPackagesPath);
           return {
@@ -1702,9 +1753,8 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
       const stillCurrent = await finishedResultStillDescribesDisk(
         existingState, targetModel, customPackagesPath,
       );
-      await clearBuildState(targetModel, customPackagesPath);
       if (stillCurrent) {
-        const result = await renderFinishedBuildResult(existingState, targetModel, dataDir, params, context);
+        const result = await renderFinishedBuildResult(existingState, targetModel, dataDir, params);
         // Say plainly that nothing was compiled just now, so a reader can never
         // mistake a collected result for a fresh one.
         const collected =
@@ -1715,6 +1765,7 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
           content: [{ type: 'text', text: collected + (result.content[0]?.text ?? '') }],
         };
       }
+      await clearBuildState(targetModel, customPackagesPath);
       // Sources moved on — fall through and build for real.
       await buildLog(
         'WARN',
@@ -1727,6 +1778,8 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
     // force=true: kill existing processes and clear state
     // ------------------------------------------------------------------
     if (force) {
+      // Cancel an old preparation/finalizer before replacing its compiler.
+      activeBuildJobs.delete(stateFilePath(targetModel, customPackagesPath));
       await buildLog('WARN', `force=true — killing orphaned build processes for model: ${targetModel}`);
       if (existingState?.pid) {
         try { process.kill(existingState.pid, 'SIGTERM'); } catch { /* already gone */ }
@@ -1762,12 +1815,14 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
     }
 
     const firstModel   = buildQueue[0];
-    const firstLogFile = logFilePath(targetModel, 0, customPackagesPath);
+    const jobId = crypto.randomUUID();
+    const firstLogFile = logFilePath(targetModel, 0, customPackagesPath, jobId);
 
     // ------------------------------------------------------------------
     // Build context (shared across the entire queue)
     // ------------------------------------------------------------------
     const ctx: XppcBuildContext = {
+      toolContext: context,
       xppcExe,
       customPackagesPath,
       microsoftPackagesPath,
@@ -1796,6 +1851,9 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
     // Initial state
     // ------------------------------------------------------------------
     const initState: BuildJobState = {
+      jobId,
+      ownerSessionId: BUILD_SESSION_ID,
+      postBuildRequest: { bpCheck: params.bpCheck, dbSync: params.dbSync, projectPath: params.projectPath, packagePath: params.packagePath },
       pid: 0,             // updated by spawnXppcForState
       modelName: firstModel,
       targetModel,
@@ -1803,14 +1861,29 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
       startTime: new Date().toISOString(),
       logFile: firstLogFile,
       status: 'running',
+      phase: 'preparing',
       fullBuild,
       buildQueue: buildQueue.length > 1 ? buildQueue : undefined,
       queueIndex: buildQueue.length > 1 ? 0 : undefined,
       queueResults: [],
     };
 
+    activeBuildJobs.set(stateFilePath(targetModel, customPackagesPath), initState.jobId!);
     await writeBuildState(initState, customPackagesPath);
-    const pid = await spawnXppcForState(ctx, initState);
+    await writeFile(firstLogFile, `Preparing build for ${targetModel}: compiler metadata and labels.\n`, 'utf-8');
+    // Label compilation can itself take minutes. Publish the recoverable state
+    // first, and let preparation/spawn continue independently of the request.
+    const launch = spawnXppcForState(ctx, initState).catch(async (error) => {
+      if (isSupersededBuild(initState, customPackagesPath)) return -1;
+      const message = `Build preparation failed: ${error?.message ?? error}`;
+      await appendFile(firstLogFile, message + '\n', 'utf-8').catch(() => {});
+      await writeBuildState({ ...initState, status: 'failed', exitCode: -1, endTime: new Date().toISOString() }, customPackagesPath);
+      await buildLog('ERROR', message);
+      return -1;
+    });
+    // Let an immediate launch provide its PID; a slow preparation gets only one
+    // event-loop turn before the caller receives its handle and log path.
+    const pid = await Promise.race([launch, new Promise<undefined>(resolve => setTimeout(resolve, 0))]);
 
     // ------------------------------------------------------------------
     // Return "build started" message OR wait for completion
@@ -1824,10 +1897,9 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
         buildQueue.map((m, i) => `  ${i + 1}. ${m}${m === targetModel ? ' (target)' : ' (dependency)'}`).join('\n')
       : '';
 
-    // wait defaults to true — single call returns the final result. When the
-    // caller passes wait:false explicitly we keep the legacy fire-and-forget
-    // behaviour for compatibility with callers that intentionally poll.
-    const waitForFinish = params.wait !== false;
+    // Default to a prompt response: client absolute timeouts can be shorter
+    // than compilation even when progress notifications are delivered.
+    const waitForFinish = params.wait === true;
 
     if (waitForFinish) {
       const timeoutMs = resolveWaitTimeoutMs(params);
@@ -1836,8 +1908,7 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
         targetModel, customPackagesPath, timeoutMs, onProgress, startedAt,
       );
       if (wait.outcome === 'finished' && wait.state) {
-        await clearBuildState(targetModel, customPackagesPath);
-        return await renderFinishedBuildResult(wait.state, targetModel, dataDir, params, context);
+        return await renderFinishedBuildResult(wait.state, targetModel, dataDir, params);
       }
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
       const tailLog = await readLogTail(wait.state?.logFile ?? firstLogFile);
@@ -1880,17 +1951,21 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
       };
     }
 
-    // Legacy fire-and-forget mode: return immediately after spawning.
+    // Default background mode: return while preparation/compilation continues.
     return {
+      ...(pid === -1 ? { isError: true } : {}),
       content: [{
         type: 'text',
         text: [
-          `🔨 ${modeLabel} started (xppc.exe PID: ${pid})`,
+          pid === undefined ? `🔨 ${modeLabel} preparing in background (compiler PID pending)`
+            : pid === -1 ? `❌ ${modeLabel} preparation failed; collect the saved result for details`
+            : `🔨 ${modeLabel} started (xppc.exe PID: ${pid})`,
           ``,
           `Target: ${targetModel}${queueDetail}`,
           `Log:    ${firstLogFile}`,
           ``,
-          `Call **build_d365fo_project** again to check status and see output.`,
+          `Call **build_d365fo_project** with { modelName: ${JSON.stringify(targetModel)} } to check status and collect output. Omit fullBuild and force on follow-ups.`,
+          `Requested BP/database sync runs once after a successful compile. Keep this MCP server running until finalization finishes.`,
         ].join('\n'),
       }],
     };
