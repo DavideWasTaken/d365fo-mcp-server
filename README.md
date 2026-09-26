@@ -4,7 +4,7 @@
 
 **Up to 22 AI tools for grounded X++ development, browser verification and optional AxDB SQL debugging**
 
-> **This fork adds `verify_ui_customization` and optional `axdb_sql`:** run two requirement-based browser cases after deployment; use live SQL independently for debugging and targeted development data changes. SQL setup can be left blank and never replaces a UI creation/validation path under test. See [UI setup](docs/UI_CUSTOMIZATION_TESTING.md) and [SQL setup](docs/AXDB_SQL.md). The runners make no LLM calls. Upstream npm/hosted links below do not include these additions: build this checkout locally, including the updated bridge for SQL. Live D365FO acceptance testing is still required.
+> **Both additional tools are included on this fork's `main`: `verify_ui_customization` and optional `axdb_sql`.** Run two requirement-based browser cases after deployment; use live SQL independently for debugging and targeted development data changes. SQL setup can be left blank and never replaces a UI creation/validation path under test. See [UI setup](docs/UI_CUSTOMIZATION_TESTING.md) and [SQL setup](docs/AXDB_SQL.md). The runners make no LLM calls. Install or update this fork from `main` using [Quick Start](#quick-start); no feature branch is needed. Live D365FO acceptance testing is still required.
 
 [![npm](https://img.shields.io/npm/v/d365fo-mcp.svg?logo=npm&color=cb3837)](https://www.npmjs.com/package/d365fo-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -71,7 +71,7 @@ From this checkout, revisit SQL setup with:
 npx tsx src/cli/index.ts config sql
 ```
 
-Restart MCP after saving. The upstream npm package and installer below do not include this fork's additional tools.
+Restart MCP after saving. The upstream npm package does not include this fork's additional tools.
 
 ### Pattern-grounded form development
 
@@ -94,20 +94,39 @@ Structural violations (wrong order, missing container, disallowed control) **blo
 
 > **From D365FO platform update 10.0.49 (PU74), Visual Studio 2026 is the supported IDE for X++ development** — Microsoft no longer supports VS 2022. Earlier platform versions still use VS 2022 ≥ 17.14. [Details](https://learn.microsoft.com/en-us/dynamics365/fin-ops-core/fin-ops/get-started/whats-new-platform-updates-10-0-49)
 
-**Installing on your own D365FO VM** — the usual case. One line in PowerShell installs Node.js if it is missing, installs the server from npm, and runs the setup wizard, which asks where the index should live and builds the C# bridge for you:
+### Install this fork from main
+
+On your D365FO developer VM, use Node.js 24+, Git and a .NET SDK compatible with the bridge. The bridge requires the installed D365FO development assemblies; see [setup prerequisites](docs/SETUP.md). Both additional tools are in this repository's `main` branch.
 
 ```powershell
-irm https://raw.githubusercontent.com/dynamics365ninja/d365fo-mcp-server/main/install.ps1 | iex
+git clone --branch main https://github.com/DavideWasTaken/d365fo-mcp-server.git
+cd d365fo-mcp-server
+npm ci
+npm run build
+dotnet build bridge/D365MetadataBridge -c Release
+npx playwright install chromium
+npm run setup
 ```
 
-Already have Node.js 24+? Then the one-liner has nothing to bootstrap and you can skip it:
+Setup asks for the optional UI environment URL and SQL connection settings. For browser tests, also [save an authenticated session](docs/UI_CUSTOMIZATION_TESTING.md#save-a-local-browser-login); Microsoft Edge can be selected through the browser profile. Point your editor's local MCP configuration at **this checkout's `dist/index.js`**, following [setup scenarios](docs/SETUP.md).
+
+### Update an existing checkout of this fork
+
+Stop the MCP process before replacing its bridge executable. From your checkout on `main`:
 
 ```powershell
-npm install -g d365fo-mcp
-d365fo-mcp setup
+git pull --ff-only origin main
+npm ci
+npm run build
+dotnet build bridge/D365MetadataBridge -c Release
+npx playwright install chromium
 ```
 
-Re-running either is safe. An installation made before the npm package existed is a git checkout, and both are left exactly where they are and updated in place.
+Restart MCP after updating. Existing configuration is retained; use `npx tsx src/cli/index.ts config sql` when you want to enable or change SQL. Building the bridge and validating live AxDB access must be done on your developer VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
+
+### Upstream package and shared servers
+
+The npm package `d365fo-mcp`, the original project's installer and its hosted server do **not** include these fork additions. Use the checkout above for UI verification and AxDB SQL.
 
 **Your team already runs a shared server?** Then you install nothing — point your editor at it:
 
@@ -133,7 +152,8 @@ Deployment guide: [docs/SETUP_AZURE.md](docs/SETUP_AZURE.md) — includes CI/CD 
 
 | Getting started | Reference | Operations |
 |-----------------|-----------|------------|
-| [Quick Start](docs/QUICK_START.md) — connect or install | [All 22 tools](docs/MCP_TOOLS.md) | [Azure deployment](docs/SETUP_AZURE.md) |
+| [Install/update this fork](#quick-start) | [Tool catalog (up to 22)](docs/MCP_TOOLS.md) | [Azure deployment](docs/SETUP_AZURE.md) |
+| [Browser test setup](docs/UI_CUSTOMIZATION_TESTING.md) | [Optional AxDB SQL](docs/AXDB_SQL.md) | [Upstream setup guide](docs/QUICK_START.md) |
 | [Setup scenarios A–F](docs/SETUP.md) | [`.mcp.json` reference](docs/MCP_CONFIG.md) | [DevOps pipelines](docs/SETUP_AZURE.md#azure-devops-pipelines) |
 | [Claude Code setup](docs/SETUP.md#claude-code-cli) | [Configuration](docs/CONFIGURATION.md) | [Testing](docs/TESTING.md) |
 | [Usage examples](docs/USAGE_EXAMPLES.md) — real tool chains | [Architecture](docs/ARCHITECTURE.md) | [Custom / ISV models](docs/CUSTOM_EXTENSIONS.md) |
