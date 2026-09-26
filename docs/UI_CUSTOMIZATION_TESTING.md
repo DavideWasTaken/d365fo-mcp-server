@@ -192,7 +192,16 @@ Guided missions also accept a numeric criterion bound to an observed grid/table:
 
 A visible form heading can use the existing `check:"text"` against its fresh observed heading reference. Bind the heading itself, not the form container (which includes other text), a native input (use `value`), or the browser tab title. If it returns `NOT_VERIFIED`, inspect `code`, `message` and `diagnostic`: `NEEDS_OBSERVATION` requires a fresh reference after navigation/rerender, and `CHECK_NOT_APPLICABLE` explains an incompatible binding. Visibility alone does not establish that the requested reference and criterion are valid. Preserve that response when reporting a title problem.
 
-For action menu items, use a URL such as `/?cmp=USMF&mi=Action%3AMyActionMenuItem`, with the actual menu item name. `Action%3A` is the encoded `Action:` prefix verified on the developer environment. Microsoft examples also use lowercase `action:`; this tool does not reject or silently rewrite other spellings. Opening an action menu item can execute business logic and must not be retried automatically.
+Use the menu item's AOT name (not the form/class name or translated label) and distinguish its type:
+
+| Menu item type | Environment-relative URL |
+|---|---|
+| Display (ordinary form navigation) | `/?mi=MyDisplayMenuItem` |
+| Action | `/?mi=Action%3AMyActionMenuItem` |
+
+Prefix either path with the environment root, for example `https://your-environment-name`. To select the test company, add `cmp`, for example `/?cmp=USMF&mi=MyDisplayMenuItem` or `/?cmp=USMF&mi=Action%3AMyActionMenuItem`. The UI tool still verifies the company displayed in the browser.
+
+`Action%3A` is the encoded `Action:` prefix verified on the developer environment. [Microsoft's system-entity navigation example](https://learn.microsoft.com/en-us/dynamics365/fin-ops-core/dev-itpro/user-interface/create-deep-links) also uses lowercase `action:`; this tool does not reject or silently rewrite other spellings. Opening an action menu item can execute business logic and must not be retried automatically.
 
 Each new observation replaces previous references. Changed documents, replaced elements, hidden controls, scope changes and recycled grid rows require a fresh observation; the tool does not silently select another matching row. Use `observe.scopeRef` to focus on an observed container, `filter` to narrow text/role/name, and `screenshot:true` only when useful. Output is capped at 120 controls and about 8,000 text characters, with `truncated:true` for omissions. A truncated snapshot proves no absence. For a declared `visible:false` criterion, `check.absent` uses an observed scope plus an exact role/name query on the actual DOM; that read-only query cannot authorize an action.
 
