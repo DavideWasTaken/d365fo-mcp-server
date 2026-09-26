@@ -45,6 +45,7 @@ async function fixture(options: { limits?: Record<string, number> } = {}, aiRevi
     prepareCase: async () => {},
     bindCompany: async () => {},
     checkCompany: async () => {},
+    inspectSystemErrors: async () => ({ complete: true, errors: [] as any[] }),
     close: async () => {},
   };
   const manager = new GuidedSessionManager({ openBrowser: async () => browser as any });
@@ -83,6 +84,140 @@ async function ready(f: Awaited<ReturnType<typeof fixture>>) {
   return { ...base, snapshotId };
 }
 describe('guided session workflow', () => {
+  it('detects a platform error on a repeated immutable check without replacing its PASS', async () => {
+    const f = await fixture();
+    const base = await ready(f);
+    const acted = await f.manager.call({
+      action: 'act',
+      ...base,
+      operationId: 'open',
+      actions: [{ type: 'click', ref: 'e1' }],
+    });
+    const check = {
+      action: 'check',
+      ...base,
+      snapshotId: acted.payload.observation.snapshotId,
+      criterionId: 'result',
+      ref: 'e1',
+    };
+    expect((await f.manager.call(check)).payload.check.status).toBe('PASS');
+    f.browser.inspectSystemErrors = async () => ({
+      complete: true,
+      errors: [{ code: 'MENU_ITEM_OPEN_FAILED', message: 'D365 menu failure' }],
+    });
+    const again = await f.manager.call(check);
+    expect(again.payload.historical).toBe(true);
+    expect(again.payload.check.status).toBe('PASS');
+    expect(again.payload.systemErrors).toHaveLength(1);
+    expect((await f.manager.call({ action: 'finish', sessionId: f.sessionId })).payload.status).toBe('FAIL');
+  });
+  it('stops a multi-action batch after the first interaction displays a system error', async () => {
+    const f = await fixture();
+    const base = await ready(f);
+    Object.assign(f.handle, {
+      isEditable: async () => true,
+      fill: async () => {
+        f.browser.inspectSystemErrors = async () => ({
+          complete: true,
+          errors: [{ code: 'MENU_ITEM_OPEN_FAILED', message: 'D365 menu failure' }],
+        });
+      },
+    });
+    const result = await f.manager.call({
+      action: 'act',
+      ...base,
+      operationId: 'batch',
+      actions: [
+        { type: 'fill', ref: 'e1', value: '7' },
+        { type: 'click', ref: 'e1' },
+      ],
+    });
+    expect(result.payload.completed).toBe(1);
+    expect(result.payload.systemErrors).toHaveLength(1);
+    expect(f.clicks()).toBe(0);
+  });
+  it('keeps WRITE_UNCERTAIN while also recording independent system failure evidence', async () => {
+    const f = await fixture();
+    const base = await ready(f);
+    f.handle.click = async (o?: any) => {
+      if (!o?.trial) {
+        f.browser.inspectSystemErrors = async () => ({
+          complete: true,
+          errors: [{ code: 'MENU_ITEM_OPEN_FAILED', message: 'D365 menu failure' }],
+        });
+        throw new Error('dispatch timeout');
+      }
+    };
+    const result = await f.manager.call({
+      action: 'act',
+      ...base,
+      operationId: 'uncertain',
+      actions: [{ type: 'click', ref: 'e1' }],
+    });
+    expect(result.payload.code).toBe('WRITE_UNCERTAIN');
+    const observed = await f.manager.call({ action: 'observe', sessionId: f.sessionId });
+    expect(observed.payload.phase).toBe('WRITE_UNCERTAIN');
+    expect(observed.payload.systemErrors).toHaveLength(1);
+    expect((await f.manager.call({ action: 'finish', sessionId: f.sessionId })).payload.status).toBe('FAIL');
+  });
+  it('records a system error despite passing criteria and retains it after dismissal', async () => {
+    const f = await fixture();
+    const base = await ready(f);
+    const error = { code: 'MENU_ITEM_OPEN_FAILED', message: 'Unable to open menu item', source: 'dialog' };
+    f.handle.click = async (o?: any) => {
+      if (!o?.trial) f.browser.inspectSystemErrors = async () => ({ complete: true, errors: [error] });
+    };
+    const acted = await f.manager.call({
+      action: 'act',
+      ...base,
+      operationId: 'open',
+      actions: [{ type: 'click', ref: 'e1' }],
+    });
+    expect(acted.payload.systemErrors).toHaveLength(1);
+    f.browser.inspectSystemErrors = async () => ({ complete: true, errors: [] });
+    const observed = await f.manager.call({ action: 'observe', sessionId: f.sessionId });
+    const checked = await f.manager.call({
+      action: 'check',
+      ...base,
+      snapshotId: observed.payload.observation.snapshotId,
+      criterionId: 'result',
+      ref: 'e1',
+    });
+    expect(checked.payload.check.status).toBe('PASS');
+    const result = await f.manager.call({ action: 'finish', sessionId: f.sessionId });
+    expect(result.payload.status).toBe('FAIL');
+    expect(result.payload.cases[0].systemErrors[0].code).toBe('MENU_ITEM_OPEN_FAILED');
+    expect(await readFile(result.payload.reportPath, 'utf8')).toContain('System errors');
+  });
+  it('blocks dispatch when a system error already exists before the first action', async () => {
+    const f = await fixture();
+    const base = await ready(f);
+    f.browser.inspectSystemErrors = async () => ({
+      complete: true,
+      errors: [{ code: 'MULTIPLE_SYSTEM_ERRORS', message: 'Più errori ricevuti', source: 'dialog' }],
+    });
+    const result = await f.manager.call({
+      action: 'act',
+      ...base,
+      operationId: 'no-dispatch',
+      actions: [{ type: 'click', ref: 'e1' }],
+    });
+    expect(result.payload.code).toBe('SYSTEM_ERROR_DETECTED');
+    expect(f.clicks()).toBe(0);
+    expect((await f.manager.call({ action: 'finish', sessionId: f.sessionId })).payload.status).toBe('NOT_VERIFIED');
+  });
+  it('does not return PASS when the final independent error inspection is unavailable', async () => {
+    const f = await fixture();
+    const base = await ready(f);
+    await f.manager.call({ action: 'check', ...base, criterionId: 'result', ref: 'e1' });
+    f.browser.inspectSystemErrors = async () => {
+      throw new Error('secret browser URL');
+    };
+    const result = await f.manager.call({ action: 'finish', sessionId: f.sessionId });
+    expect(result.payload.status).toBe('NOT_VERIFIED');
+    expect(JSON.stringify(result)).not.toContain('secret browser URL');
+    expect(result.payload.cases[0].systemErrorInspectionIncomplete).toBeTruthy();
+  });
   it('keeps trusted disabled-control guidance instead of a generic browser error', async () => {
     const f = await fixture();
     const base = await ready(f);

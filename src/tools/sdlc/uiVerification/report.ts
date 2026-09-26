@@ -1,3 +1,4 @@
+import type { SystemErrorRecord } from './systemErrors.js';
 export type Status = 'PASS' | 'FAIL' | 'NOT_VERIFIED';
 export interface StepResult {
   label: string;
@@ -5,7 +6,7 @@ export interface StepResult {
   observed: string;
   completed: boolean;
 }
-export interface CaseResult {
+export interface CaseResult extends SystemErrorRecord {
   name: string;
   status: Status;
   durationMs: number;
@@ -76,6 +77,15 @@ export function renderReport(r: VerificationReport): string {
         `| ${safeText(s.label)} | ${s.completed ? 'yes' : 'no'} | ${safeText(s.expected)} | ${safeText(s.observed)} |`,
       );
     if (c.reason) lines.push('', `Stopped: ${safeText(c.reason)}`);
+    if (c.systemErrors?.length) {
+      lines.push('', '**System errors (independent of case criteria)**');
+      for (const error of c.systemErrors)
+        lines.push(
+          `- ${error.code} (${error.stage}): ${safeText(error.message)}; observed ${safeText(error.observedAt)}`,
+        );
+    }
+    if (c.systemErrorInspectionIncomplete)
+      lines.push('', `System-error inspection incomplete: ${safeText(c.systemErrorInspectionIncomplete)}`);
     if (c.screenshot)
       lines.push('', `Local error screenshot: [open screenshot](<${encodeURI(c.screenshot.replace(/\\/g, '/'))}>)`);
     lines.push('');
@@ -98,6 +108,8 @@ export function summarizeReport(result: VerificationReport & { reportPath: strin
         status: c.status,
         durationMs: c.durationMs,
         reason: c.reason?.slice(0, limit),
+        systemErrors: c.systemErrors,
+        systemErrorInspectionIncomplete: c.systemErrorInspectionIncomplete,
         journey: c.steps.map(s => ({
           step: s.label.slice(0, limit),
           completed: s.completed,

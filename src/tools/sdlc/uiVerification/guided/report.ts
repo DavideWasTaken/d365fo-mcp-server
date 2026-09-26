@@ -19,6 +19,7 @@ export interface GuidedCase extends CaseResult {
   begun: boolean;
   ended: boolean;
   uncertain: boolean;
+  applicationActionDispatched?: boolean;
   checks: Record<string, CheckEvidence>;
   counters: { calls: number; interactions: number; images: number; recoveries: number; characters: number };
 }
@@ -27,11 +28,14 @@ export function expectedText(c: Criterion) {
   return 'kind' in c ? c.expectedDescription : String(c.expected);
 }
 export function caseStatus(c: GuidedCase, definition: Mission['cases'][number]): Status {
+  if (c.systemErrors?.some(error => error.stage === 'after_action')) return 'FAIL';
   if (Object.values(c.checks).some(v => v.stage === 'criterion' && v.status === 'FAIL')) return 'FAIL';
   if (
     !c.begun ||
     c.uncertain ||
     c.reason ||
+    c.systemErrors?.length ||
+    c.systemErrorInspectionIncomplete ||
     [...definition.preconditions, ...definition.criteria].some(v => c.checks[v.id]?.status !== 'PASS')
   )
     return 'NOT_VERIFIED';
@@ -81,6 +85,8 @@ export function guidedReport(
         name: c.name.slice(0, limit),
         status: c.status,
         reason: c.reason?.slice(0, limit),
+        systemErrors: c.systemErrors,
+        systemErrorInspectionIncomplete: c.systemErrorInspectionIncomplete,
         counters: c.counters,
         // Stable mission indexes keep all outcomes identifiable even when long IDs
         // must be abbreviated. The complete IDs and evidence remain in local files.

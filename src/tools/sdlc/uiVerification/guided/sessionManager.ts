@@ -9,6 +9,7 @@ import { preflightAction, dispatchAction } from './actions.js';
 import { measureCheck } from './checks.js';
 import { MissingUiEnvironmentUrl } from '../profile.js';
 import { CheckNotApplicable } from '../checkApplicability.js';
+import { retainSystemErrors, type SystemErrorInspection, type SystemErrorRecord } from '../systemErrors.js';
 import { safeUiDiagnostic, formatUiDiagnostic, type UiDiagnostic } from '../diagnostics.js';
 
 export interface GuidedReply {
@@ -124,7 +125,8 @@ export class GuidedSessionManager {
       const reply = await this.execute(s, input);
       this.checkAbort(s);
       if (s.active) s.active.counters.characters += JSON.stringify(reply.payload).length;
-      if (!reply.payload.historical) await this.persist(s);
+      if (reply.payload.historical) await this.persist(s).catch(() => {});
+      else await this.persist(s);
       return reply;
     } catch (e) {
       const code =
@@ -291,6 +293,34 @@ export class GuidedSessionManager {
       throw fault('INVALID_STATE', 'Prepare the requested case; do not reuse another case context');
     return s.active;
   }
+  private async collectSystemErrors(s: Session) {
+    const target: SystemErrorRecord = s.active ?? {};
+    let inspection: SystemErrorInspection;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      inspection = await Promise.race([
+        s.browser.inspectSystemErrors(),
+        new Promise<SystemErrorInspection>(resolve => {
+          timer = setTimeout(() => resolve({ complete: false, errors: [] }), 2200);
+        }),
+      ]);
+    } catch {
+      inspection = { complete: false, errors: [] };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    const added = retainSystemErrors(target, inspection, s.active?.applicationActionDispatched ?? false);
+    for (const error of added) await s.journal.append('system_error', { caseId: s.active?.id, ...error });
+    return target;
+  }
+  private stopForSystemErrors(c: GuidedCase) {
+    if (c.systemErrors?.length)
+      throw fault(
+        'SYSTEM_ERROR_DETECTED',
+        'D365 system error detected; inspect the independent evidence and end this case. Do not replay its actions.',
+      );
+    if (c.systemErrorInspectionIncomplete) throw fault('NOT_VERIFIED', c.systemErrorInspectionIncomplete);
+  }
   private async observe(
     s: Session,
     options: { scopeRef?: string; filter?: string; screenshot?: boolean },
@@ -313,20 +343,36 @@ export class GuidedSessionManager {
       };
     }
     if (s.phase === 'AUTH_REQUIRED') s.phase = 'DISCOVERING';
+    const systemInspection = await this.collectSystemErrors(s);
     const { image, ...data } = observation;
     s.evidence.set(data.snapshotId, {
       caseId: s.active?.id,
       source: 'observation',
       interactions: s.active?.counters.interactions ?? 0,
     });
-    await writeFile(path.join(s.journal.directory, `${data.snapshotId}.json`), JSON.stringify(data), { mode: 0o600 });
+    await writeFile(
+      path.join(s.journal.directory, `${data.snapshotId}.json`),
+      JSON.stringify({
+        ...data,
+        systemErrors: systemInspection.systemErrors,
+        systemErrorInspectionIncomplete: systemInspection.systemErrorInspectionIncomplete,
+      }),
+      { mode: 0o600 },
+    );
     if (image)
       await writeFile(
         path.join(s.journal.directory, `${data.snapshotId}.${image.mimeType === 'image/png' ? 'png' : 'jpg'}`),
         Buffer.from(image.data, 'base64'),
         { mode: 0o600 },
       );
-    const payload = { phase: s.phase, observation: data, evidenceId: data.snapshotId, counters: s.active?.counters };
+    const payload = {
+      phase: s.phase,
+      observation: data,
+      evidenceId: data.snapshotId,
+      counters: s.active?.counters,
+      systemErrors: systemInspection.systemErrors,
+      systemErrorInspectionIncomplete: systemInspection.systemErrorInspectionIncomplete,
+    };
     return { payload, image };
   }
   private async execute(s: Session, input: Exclude<GuidedInput, { action: 'start' | 'finish' }>): Promise<GuidedReply> {
@@ -351,7 +397,9 @@ export class GuidedSessionManager {
         return this.observe(s, {});
       }
       this.active(s, input.caseId);
+      await this.collectSystemErrors(s);
       if (input.operation === 'begin') {
+        this.stopForSystemErrors(c);
         if (c.begun) return { payload: { phase: s.phase, caseId: c.id } };
         await s.browser.bindCompany(input.snapshotId!, input.companyRef!, s.mission.company);
         this.checkAbort(s);
@@ -379,7 +427,15 @@ export class GuidedSessionManager {
           .update(JSON.stringify({ ...input, sessionId: undefined }))
           .digest('hex');
         if (old.hash !== hash) throw fault('OPERATION_ID_REUSED', 'Operation ID was already used with different input');
-        return { payload: { ...old.payload, historical: true, requiresObservation: true } };
+        await this.collectSystemErrors(s);
+        return {
+          payload: {
+            ...old.payload,
+            historical: true,
+            requiresObservation: true,
+            systemErrors: s.active?.systemErrors,
+          },
+        };
       }
     }
     const c = this.active(s, input.caseId);
@@ -387,13 +443,15 @@ export class GuidedSessionManager {
     this.charge(s, 'calls');
     if (!c.begun) throw fault('PRECONDITIONS_REQUIRED', 'Confirm company with case begin first');
     if (!c.uncertain) await s.browser.checkCompany();
+    await this.collectSystemErrors(s);
     const definition = s.mission.cases.find(v => v.id === c.id)!;
     const criterion = (input.stage === 'precondition' ? definition.preconditions : definition.criteria).find(
       v => v.id === input.criterionId,
     );
     if (!criterion) throw fault('INVALID_STATE', 'Criterion ID is not in the immutable mission');
     const old = c.checks[criterion.id];
-    if (old && old.status !== 'PENDING') return { payload: { phase: s.phase, check: old, historical: true } };
+    if (old && old.status !== 'PENDING')
+      return { payload: { phase: s.phase, check: old, historical: true, systemErrors: c.systemErrors } };
     if (input.stage === 'precondition' && c.counters.interactions)
       throw fault('INVALID_STATE', 'Preconditions cannot be established after application actions');
     if (input.stage === 'criterion' && definition.preconditions.some(v => c.checks[v.id]?.status !== 'PASS'))
@@ -467,7 +525,8 @@ export class GuidedSessionManager {
       c.ended = true;
     }
     if (!c.uncertain && definition.preconditions.every(v => c.checks[v.id]?.status === 'PASS')) s.phase = 'CASE_ACTIVE';
-    return { payload: { phase: s.phase, check: evidence, counters: c.counters } };
+    await this.collectSystemErrors(s);
+    return { payload: { phase: s.phase, check: evidence, counters: c.counters, systemErrors: c.systemErrors } };
   }
   private async act(s: Session, c: GuidedCase, input: Extract<GuidedInput, { action: 'act' }>): Promise<GuidedReply> {
     const hash = createHash('sha256')
@@ -487,6 +546,8 @@ export class GuidedSessionManager {
     s.receipts.set(key, receipt);
     for (const action of input.actions) {
       this.checkAbort(s);
+      await this.collectSystemErrors(s);
+      this.stopForSystemErrors(c);
       let element;
       try {
         await s.browser.checkCompany();
@@ -509,6 +570,7 @@ export class GuidedSessionManager {
         if (check.stage === 'criterion' && check.status === 'PASS') delete c.checks[check.criterionId];
       this.checkAbort(s);
       s.sent = true;
+      if (action.type !== 'wait') c.applicationActionDispatched = true;
       try {
         await dispatchAction(s.browser.page, element, action, s.browser.profile.baseUrl, s.limits.callTimeoutMs);
         this.checkAbort(s);
@@ -532,8 +594,11 @@ export class GuidedSessionManager {
           message: 'Interaction may have reached the server; never replay',
         };
         c.steps.push({ label: action.type, expected: 'Execute once', observed: 'Outcome uncertain', completed: false });
+        await this.collectSystemErrors(s);
         throw fault('WRITE_UNCERTAIN', shortError(e), diagnosticFor(e));
       }
+      await this.collectSystemErrors(s);
+      if (c.systemErrors?.length || c.systemErrorInspectionIncomplete) break;
       if (action.type !== 'fill' && action.type !== 'wait') break;
     }
     s.phase = 'CASE_ACTIVE';
@@ -559,6 +624,7 @@ export class GuidedSessionManager {
     s.closing = true;
     if (s.timer) clearTimeout(s.timer);
     try {
+      await this.collectSystemErrors(s);
       for (const c of s.cases)
         if (!c.ended) {
           if (caseStatus(c, s.mission.cases.find(v => v.id === c.id)!) !== 'PASS') c.reason ??= reason;

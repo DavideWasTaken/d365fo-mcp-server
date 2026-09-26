@@ -279,6 +279,8 @@ The following **illustrative** plan tests a fictional form requiring a positive 
 
 `buildReference.ready` is a prerequisite declared by the caller. The browser does not attest which assembly was deployed; the report labels this reference as declared. `ready:false` produces NOT_VERIFIED without running the cases.
 
+After compiling new objects, use `build_d365fo_project` with `restartAos:true` and collect its completed result before declaring the build ready. The runtime helper discovers the local IIS `AOSService` pool or matching IIS Express instance, including `/config:... /apppool:Dynamics365`. Resolve a blocked restart or failed readiness check before starting UI tests. See [build/runtime workflow](BUILD_FEEDBACK.md); a compiled DLL alone does not establish that the running AOS loaded the new objects.
+
 Supported steps: `navigate`, `click`, `fill`, `select`, `press`, `wait`, `assert`. Assertions observe `visible`, `text`, `value` or `enabled`; boolean checks take booleans, text/value checks take strings. Text defaults to an exact trimmed comparison; `match:"contains"` accepts a non-empty substring, useful for message bars with extra text. Value and company comparisons remain exact. Assertions may appear between actions, so saving, reopening and checking a record can be expressed in one case. `select` addresses native select elements; D365FO lookups and virtualized grids may need explicit click/fill/press sequences. This version provides no universal adapter for complex controls or frames.
 
 Optional `scope` on each case limits its preconditions and steps to one visible form/container, for example `"scope":"[data-testid='active-form']"`. The company indicator is always checked at page level. Hidden duplicates are ignored; multiple visible matches still produce `NOT_VERIFIED`, so repeated grid rows need an observed row-specific selector. `visible:false` succeeds when no visible match exists (absent or hidden).
@@ -307,11 +309,19 @@ The response gives the overall result, the case outcomes, a bounded journey with
 
 | Outcome | Meaning |
 |---|---|
-| PASS | All assertions in this case matched their expected results. |
-| FAIL | With required state reached, an observed functional result contradicted the requirement-based expectation. |
+| PASS | All assertions matched, with no recognized system error and no incomplete system-error inspection. |
+| FAIL | An observed functional result contradicted the requirement, or a recognized D365 system error appeared after an application action. |
 | NOT_VERIFIED | Missing session/build readiness, unmet precondition, ambiguous selector, navigation/action error or another technical block prevented a verdict. |
 
 Overall FAIL takes precedence over NOT_VERIFIED, and NOT_VERIFIED over PASS. Always inspect the individual outcomes. An expected business rejection is a **passing negative case** if the expected rejection actually appears.
+
+### Independent D365 system-error evidence
+
+Both modes inspect visible application dialogs/alerts for the Italian and English menu-item-open error and multiple-system-errors messages (for example, “Impossibile aprire l'oggetto menu item” and “Più errori ricevuti”). Inspection runs outside the truncated observation snapshot, around actions and at result collection. It covers visible same-origin frames and open shadow roots. It does not classify generic business warnings as platform errors, use a model, dismiss a dialog or retry an action.
+
+`systemErrors` in the response and the **System errors** section of the report retain the error code, canonical description, time and whether it appeared before or after an application action. Raw dialog contents are not copied. Once observed, evidence survives dismissal and cannot be overwritten by a passing criterion. A post-action platform error makes that case FAIL independently of its declared checks; an error already present before its first action blocks the case with NOT_VERIFIED. Existing criterion failures and the WRITE_UNCERTAIN interaction state remain intact. `systemErrorInspectionIncomplete` prevents a PASS if the bounded inspection could not complete.
+
+This detects the listed DOM signatures, not every possible D365 error or a proven causal link to the generated code. Other languages, closed shadow roots and transient dialogs between observations still need live verification. For an expected missing-record guard in an action menu item's `static void main(Args ...)`, request `get_knowledge` topic `menu-item-guards`: `validate_code` now emits advisory `UI001` for recognizable unhandled `throw error(...)` patterns. Use `warning()` plus `return` only for ordinary guard outcomes; preserve exceptions needed for rollback, security and batch failures.
 
 ## Validation scope
 

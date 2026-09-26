@@ -8,6 +8,7 @@ import { uniqueVisible, visibleMatches } from './locators.js';
 import { resolveUiProfile } from './profile.js';
 import { assertCheckApplicable } from './checkApplicability.js';
 import { launchUiBrowser } from './browserLaunch.js';
+import { inspectSystemErrors, retainSystemErrors } from './systemErrors.js';
 import { aggregateStatus, renderReport, type CaseResult, type VerificationReport, type StepResult } from './report.js';
 
 export interface RunOptions {
@@ -103,8 +104,10 @@ async function execute(
   evidence: StepResult,
   deadline: number,
   scope?: string,
+  dispatching: () => void = () => {},
 ): Promise<void> {
   if (s.action === 'navigate') {
+    dispatching();
     await page.goto(allowedUrl(s.url, base), { waitUntil: 'domcontentloaded' });
     evidence.observed = 'Navigation completed';
     return;
@@ -114,6 +117,7 @@ async function execute(
     return;
   }
   const l = await uniqueVisible(page, s.selector, scope);
+  if (s.action !== 'wait') dispatching();
   switch (s.action) {
     case 'click':
       await l.click();
@@ -207,6 +211,22 @@ export async function runVerification(
       let removeNavigationGuard: (() => Promise<void>) | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       let closePromise: Promise<void> | undefined;
+      let applicationActionDispatched = false;
+      const collectSystemErrors = async () => {
+        if (page)
+          retainSystemErrors(
+            result,
+            await inspectSystemErrors(page, new URL(base).origin),
+            applicationActionDispatched,
+          );
+      };
+      const requireClearSystemErrors = async () => {
+        await collectSystemErrors();
+        if (result.systemErrors?.some(error => error.stage === 'after_action'))
+          throw new FunctionalMismatch('D365 system error detected independently of the case criteria');
+        if (result.systemErrors?.length) throw new Error('D365 system error already present before test actions');
+        if (result.systemErrorInspectionIncomplete) throw new Error(result.systemErrorInspectionIncomplete);
+      };
       const stop = (why: string) => {
         stopped ??= why;
         closePromise ??= (context ? context.close() : browser!.close()).catch(() => {});
@@ -289,6 +309,7 @@ export async function runVerification(
           const actual = await observe(page!, a);
           if (actual !== a.expected) throw new Error(`Company mismatch: expected ${plan.company}; observed ${actual}`);
         };
+        await requireClearSystemErrors();
         await record(
           'Verify company',
           plan.company,
@@ -317,6 +338,7 @@ export async function runVerification(
         }
         for (const s of c.steps) {
           guard();
+          await requireClearSystemErrors();
           await record(
             `${s.action}${s.action === 'assert' ? ` ${s.check}${s.check === 'text' ? ` (${s.match ?? 'exact'})` : ''}` : ''}${'selector' in s ? ` ${s.selector}` : ''}`,
             'expected' in s
@@ -330,18 +352,24 @@ export async function runVerification(
                     : 'Complete action',
             async (evidence, deadline) => {
               await checkCompany();
-              await execute(page!, s, base, evidence, deadline, c.scope);
+              await execute(page!, s, base, evidence, deadline, c.scope, () => {
+                applicationActionDispatched = true;
+              });
               guard();
             },
             s.action === 'navigate' ? navigationMs : stepMs,
             s.action === 'assert',
           );
+          await requireClearSystemErrors();
         }
         guard();
         await checkCompany();
+        await requireClearSystemErrors();
         result.status = 'PASS';
       } catch (e) {
+        await collectSystemErrors();
         result.status = !stopped && e instanceof FunctionalMismatch ? 'FAIL' : 'NOT_VERIFIED';
+        if (result.systemErrors?.some(error => error.stage === 'after_action')) result.status = 'FAIL';
         result.reason = stopped ?? message(e);
         if (page && !page.isClosed() && !stopped) {
           const screenshot = path.join(outputDir, `case-${index + 1}-error.png`);

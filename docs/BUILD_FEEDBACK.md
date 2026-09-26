@@ -5,7 +5,7 @@
 Start with the desired actions:
 
 ```json
-{"modelName":"MyModel","fullBuild":true,"bpCheck":true,"dbSync":["MyTable"]}
+{"modelName":"MyModel","fullBuild":true,"bpCheck":true,"dbSync":["MyTable"],"restartAos":true}
 ```
 
 Check status and collect the final result using the same model:
@@ -18,16 +18,30 @@ Space status checks apart (for example 15–30 seconds, increasing the interval 
 
 Omit `fullBuild` and `force` when collecting. `fullBuild:true` requests a fresh compilation once the previous build has finished. A source change also invalidates a saved finished result and starts a fresh build. Finished results retain their original timestamp and clearly state that collection compiled nothing. Logs and the latest result remain available until superseded by a new build or removed from the machine's temporary directory.
 
-Set `bpCheck` and `dbSync` on the initial request. The original build runs these actions once after successful compilation, saves their output, and reports a database sync failure separately from compilation success. Follow-up calls read saved output; they neither change nor replay the actions, even if flags are repeated or changed. The same applies to recovered queue results; referenced-model queue execution remains disabled.
+Set `bpCheck`, `dbSync`, and `restartAos` on the initial request. The original build runs these actions once after successful compilation and saves their output. A database sync or runtime restart failure is an error for the requested workflow even when compilation succeeded. Follow-up calls read saved output; they neither change nor replay the actions, even if flags are repeated or changed. The same applies to recovered queue results; referenced-model queue execution remains disabled.
 
-Keep the MCP server running until finalization completes. Compiler execution, runtime metadata generation, BP checking, and database sync do not constitute a restart-safe job service. If the owning server session ends before it records completion, a later call reports the outcome as unknown and shows the log and captured request. It does not silently repeat a potentially completed database sync. Inspect the compiler and sync outcome before deliberately restarting a build with `force:true`.
+Keep the MCP server running until finalization completes. Compiler execution, runtime metadata generation, BP checking, database sync, and runtime restart do not constitute a restart-safe job service. If the owning server session ends before it records completion, a later call reports the outcome as unknown and shows the log and captured request. It does not silently repeat potentially completed mutations. `force:true` is blocked while an AOS restart is in progress and for a recovered job whose recorded restart attempt has an unknown outcome. Inspect the host, compiler, and sync outcome before manually recovering an uncertain job; the response identifies its saved state and log.
 
 `wait:true` remains available for clients that support a long blocking request. `waitTimeoutMs` limits that wait (30 minutes by default); it does not stop compilation, and the client may time out earlier regardless of progress notifications. A later normal status call can recover the result while the server remains running.
 
-## Compilation and runtime availability
+## Actual runtime restart before UI tests
 
-A successful compile does not prove that the AOS runtime loaded the new objects. Successful single-model and recovered queue responses explicitly advise restarting/reloading the actual runtime host before testing new or changed objects, and keep the compiler log paths visible.
+A successful compile does not prove that the AOS runtime loaded the new objects. The build-before-UI-test workflow requires `restartAos:true` on the initial build and collection of an `AOS runtime ready` result before starting UI tests. Without that option, successful single-model and recovered queue responses retain the restart advisory. This is a workflow requirement, not a new cross-tool UI session gate.
 
-For a full IIS environment, recycle the `AOSService` application pool through normal environment operations. For IIS Express, restart the specific IIS Express instance hosting that environment through its normal launcher. A stopped `W3SVC` service does not identify or restart the IIS Express host. The build tool does not detect, kill, or restart runtime host processes automatically. Verify object availability after refresh, and still inspect any runtime metadata generation or database sync failure.
+The environment root comes from `D365FO_UI_TEST_URL`, or an explicit `aosUrl` on the build. Restart occurs only after runtime metadata generation and any requested database sync succeeded; skipped metadata generation or an empty requested sync scope blocks it. The configured hostname must resolve exclusively to local addresses, and exactly one running host's root application binding must match the URL's scheme, port, host, and local IP binding.
 
-Local regression coverage uses mocked compiler/process/filesystem boundaries: default launch and follow-up, explicit waits, success/failure logs, single/queued rendering, captured post-build actions, repeated collection without replay, interrupted server sessions, and source freshness. An actual D365FO build, sync, and IIS Express refresh must be verified on the development environment.
+For full IIS, only the matching, running `AOSService` application pool/site is eligible, and the Windows session must be administrative. The tool recycles that pool and verifies a new worker process. A stopped `W3SVC` is not treated as a live full IIS host.
+
+For IIS Express, the tool identifies the specific process from its configuration and binding, verifies the same Windows owner and process identity, checks termination access and elevation compatibility before stopping, and preserves its executable and validated startup arguments. The observed development launch is supported:
+
+```text
+"C:\Program Files\IIS Express\IISExpress.exe" /config:"C:\Users\Developer\Documents\IISExpress\config\applicationHost.config" /apppool:Dynamics365
+```
+
+An explicit `/site:` or `/siteid:` selector is also supported. Unknown or duplicate arguments, unreadable configuration, foreign ownership, ambiguous matching roots, or unavailable permissions block restart. Immediately before mutation, the tool revalidates configuration, ownership, process identity, DNS locality, and matching binding. It stops only the selected PID, waits for exit, and launches the replacement hidden with the same validated arguments. There is no process-name kill, `iisreset`, arbitrary shell command, or automatic restart retry. Dynamic values are JSON data on stdin to a constant PowerShell program.
+
+Readiness is bounded to 180 seconds after restart and requires both replacement process/pool verification and an HTTP response from the configured environment. It follows at most five same-origin redirects and never follows external redirects. A 2xx response or expected authentication challenge (401 or HTTPS `login.microsoftonline.com`/`login.windows.net`) establishes host readiness; the response explicitly says UI authentication is still required. Unexpected external redirects, redirect loops, process failures, and unavailable HTTP responses produce `not-ready` or `failed`, not a deploy-success claim. Object availability and business behavior still require the independent UI checks.
+
+For command semantics, see Microsoft's [IIS Express command-line documentation](https://learn.microsoft.com/en-us/iis/extensions/using-iis-express/running-iis-express-from-the-command-line), [Start-Process argument/hidden-window documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/start-process), and [Restart-WebAppPool](https://learn.microsoft.com/en-us/powershell/module/webadministration/restart-webapppool). The `/apppool:Dynamics365` case is additionally grounded in the development-machine process evidence above.
+
+Local regressions cover async launch/collection, source freshness, single/queued results, post-build sequencing/no replay, failed prerequisites, uncertain recovery, and force/restart races. Runtime tests cover host selection, readiness, and a Windows PowerShell harness with every restart mutation mocked, including the exact `/config` + `/apppool` arguments and hidden launch. No local AOS host is stopped by those tests. Actual D365FO build, sync, restart, and UI acceptance still require verification on the development environment.

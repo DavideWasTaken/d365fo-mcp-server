@@ -26,6 +26,16 @@ beforeAll(async () => {
   await new Promise<void>(resolve => foreign.listen(0, '127.0.0.1', resolve));
   foreignUrl = `http://127.0.0.1:${(foreign.address() as any).port}`;
   server = createServer((req, res) => {
+    if (req.url === '/system-error' || req.url === '/baseline-error') {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(
+        html +
+          (req.url === '/baseline-error'
+            ? '<div role="alertdialog">Più errori ricevuti: Impossibile aprire l\'oggetto menu item</div>'
+            : '<button id="system" onclick="this.insertAdjacentHTML(\'afterend\',\'&lt;div role=alertdialog&gt;Unable to open menu item&lt;/div&gt;\')">Open action</button>'),
+      );
+      return;
+    }
     if (req.url === '/credential-redirect') {
       res.writeHead(302, { Location: baseUrl.replace('://', '://user:password@') + '/final' });
       res.end();
@@ -171,6 +181,28 @@ afterAll(async () => {
 const plan = (): Plan => structuredClone(examplePlan);
 const options = { stepTimeoutMs: 1000, caseTimeoutMs: 5000 };
 describe('real browser UI verification fixture', () => {
+  it('reports a post-action platform error even when all declared assertions pass', async () => {
+    const p = plan();
+    p.startUrl = '/system-error';
+    p.cases = p.cases.slice(0, 1);
+    p.cases[0].steps = [
+      { action: 'click', selector: '#system' },
+      { action: 'assert', selector: '#result', check: 'text', expected: 'Fresh' },
+    ];
+    const result = await runVerification(profilePath, p, options);
+    expect(result.status).toBe('FAIL');
+    expect(result.cases[0].systemErrors?.[0].stage).toBe('after_action');
+    expect(await readFile(result.reportPath, 'utf8')).toContain('System errors');
+  });
+  it('classifies a pre-existing platform error as a blocked case', async () => {
+    const p = plan();
+    p.startUrl = '/baseline-error';
+    p.cases = p.cases.slice(0, 1);
+    const result = await runVerification(profilePath, p, options);
+    expect(result.status).toBe('NOT_VERIFIED');
+    expect(result.cases[0].systemErrors?.[0].stage).toBe('baseline');
+    expect(result.cases[0].steps.some(s => s.label.startsWith('click'))).toBe(false);
+  });
   it('classifies a text assertion on an input as unavailable rather than functional failure', async () => {
     const p = plan();
     p.cases = p.cases.slice(0, 1);

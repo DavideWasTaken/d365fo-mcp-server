@@ -87,10 +87,12 @@ vi.mock('../../src/utils/packagesRoot.js', async () => {
 
 const { pruneMock } = vi.hoisted(() => ({ pruneMock: vi.fn() }));
 vi.mock('../../src/tools/sdlc/compilerMetadataPrune.js', () => ({ pruneStaleCompilerMetadata: pruneMock }));
-const { bpMock, syncMock, labelsMock } = vi.hoisted(() => ({ bpMock: vi.fn(), syncMock: vi.fn(), labelsMock: vi.fn() }));
+const { bpMock, syncMock, labelsMock, metadataMock, restartMock } = vi.hoisted(() => ({ bpMock: vi.fn(), syncMock: vi.fn(), labelsMock: vi.fn(), metadataMock: vi.fn(), restartMock: vi.fn() }));
 vi.mock('../../src/tools/sdlc/runBpCheck.js', () => ({ runBpCheckTool: bpMock }));
 vi.mock('../../src/tools/sdlc/dbSync.js', () => ({ dbSyncTool: syncMock }));
 vi.mock('../../src/tools/write/compileLabels.js', () => ({ compileModelLabels: labelsMock }));
+vi.mock('../../src/tools/xml/generateMetadata.js', () => ({ generateRuntimeMetadata: metadataMock }));
+vi.mock('../../src/tools/sdlc/aosRuntime.js', () => ({ restartAosRuntime: restartMock }));
 
 import path from 'path';
 import { buildProjectTool, readFullLog, renderFailureLog, trimSucceededLog } from '../../src/tools/sdlc/buildProject';
@@ -101,6 +103,11 @@ it('publishes background default and explicit blocking semantics', () => {
   expect(buildD365foProjectTool.description).not.toContain('do NOT poll');
   expect(buildD365foProjectTool.inputSchema.properties.wait.default).toBe(false);
   expect(buildD365foProjectTool.inputSchema.properties.wait.description).toContain('wait:true');
+});
+
+it('publishes the actual restart option required for build-before-UI verification', () => {
+  expect(buildD365foProjectTool.inputSchema.properties.restartAos.description).toContain('UI');
+  expect(buildD365foProjectTool.inputSchema.properties.aosUrl.description).toContain('D365FO_UI_TEST_URL');
 });
 
 describe('trimSucceededLog', () => {
@@ -201,6 +208,8 @@ describe('build_d365fo_project', () => {
     bpMock.mockResolvedValue({ content: [{ type: 'text', text: 'BP findings saved' }] });
     syncMock.mockResolvedValue({ content: [{ type: 'text', text: 'Tables synced' }] });
     labelsMock.mockResolvedValue({ success: true, skipped: true, message: 'No labels' });
+    metadataMock.mockResolvedValue({ success: true, message: 'Metadata generated' });
+    restartMock.mockResolvedValue({ status: 'ready', message: 'Actual runtime restarted and verified' });
     cfgGetProjectPath.mockResolvedValue(PROJECT_PATH);
     cfgGetPackagePath.mockReturnValue(null);
     cfgGetContext.mockReturnValue({});
@@ -1000,6 +1009,105 @@ describe('build_d365fo_project', () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(newLog).not.toBe(oldLog);
     expect(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]).toBe(stateJson);
+  });
+
+  it('captures restartAos and runs actual restart once after metadata and sync, never on collection', async () => {
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: true, restartAos: true, aosUrl: 'https://dev.test/' }, {});
+    await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    expect(restartMock).toHaveBeenCalledExactlyOnceWith('https://dev.test/');
+    expect(metadataMock.mock.invocationCallOrder[0]).toBeLessThan(syncMock.mock.invocationCallOrder[0]);
+    expect(syncMock.mock.invocationCallOrder[0]).toBeLessThan(restartMock.mock.invocationCallOrder[0]);
+    const stateJson = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
+    expect(JSON.parse(stateJson).postBuildRequest.restartAos).toBe(true);
+    serveState(stateJson); readdirMock.mockResolvedValue([]);
+    for (let i = 0; i < 2; i++) {
+      const result = await buildProjectTool({ projectPath: PROJECT_PATH, restartAos: true }, {});
+      expect(result.content[0].text).toContain('Actual runtime restarted and verified');
+      expect(result.isError).toBeFalsy();
+    }
+    expect(restartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['failed', 'skipped', 'sync-failed'])('blocks runtime restart when prerequisites are %s', async condition => {
+    if (condition === 'failed') metadataMock.mockResolvedValue({ success: false, message: 'Metadata failed' });
+    if (condition === 'skipped') metadataMock.mockResolvedValue({ success: true, skipped: true, message: 'No metadata writer' });
+    if (condition === 'sync-failed') syncMock.mockResolvedValue({ isError: true, content: [{ type: 'text', text: 'Sync failed' }] });
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: true, restartAos: true, aosUrl: 'https://dev.test/' }, {});
+    await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    expect(restartMock).not.toHaveBeenCalled();
+    serveState(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+    readdirMock.mockResolvedValue([]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('restart blocked');
+  });
+
+  it('blocks force while the original job is restarting the AOS runtime', async () => {
+    let finishRestart!: (result: any) => void;
+    restartMock.mockImplementation(() => new Promise(resolve => { finishRestart = resolve; }));
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, restartAos: true, aosUrl: 'https://dev.test/' }, {});
+    const closing = child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    await vi.waitFor(() => expect(restartMock).toHaveBeenCalledTimes(1));
+    const force = await buildProjectTool({ projectPath: PROJECT_PATH, force: true }, {});
+    expect(force.isError).toBe(true);
+    expect(force.content[0].text).toContain('restart is in progress');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    finishRestart({ status: 'ready', message: 'Actual runtime restarted and verified' });
+    await closing;
+  });
+
+  it('blocks force after a server restart interrupted an AOS mutation', async () => {
+    serveState(finishedState({ status: 'running', phase: 'restarting', restartAttempted: true, ownerSessionId: 'previous-session' }));
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH, force: true }, {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('restart outcome is unknown');
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(restartMock).not.toHaveBeenCalled();
+  });
+
+  it('does not restart when database sync returns an error without text', async () => {
+    syncMock.mockResolvedValue({ isError: true, content: [] });
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: true, restartAos: true, aosUrl: 'https://dev.test/' }, {});
+    await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    expect(restartMock).not.toHaveBeenCalled();
+  });
+
+  it('does not restart when the requested database sync scope is empty', async () => {
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: [], restartAos: true, aosUrl: 'https://dev.test/' }, {});
+    await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    expect(restartMock).not.toHaveBeenCalled();
+  });
+
+  it('rechecks restart ownership when force was waiting on configuration before restart began', async () => {
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, restartAos: true, aosUrl: 'https://dev.test/' }, {});
+    const originalState = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
+    serveState(originalState);
+    let resumeForce!: () => void;
+    cfgEnsureLoaded.mockImplementationOnce(() => new Promise<void>(resolve => { resumeForce = resolve; }));
+    let finishRestart!: (value: any) => void;
+    restartMock.mockImplementation(() => new Promise(resolve => { finishRestart = resolve; }));
+    const forcing = buildProjectTool({ projectPath: PROJECT_PATH, force: true }, {});
+    const closing = child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    await vi.waitFor(() => expect(restartMock).toHaveBeenCalledTimes(1));
+    resumeForce();
+    const result = await forcing;
+    finishRestart({ status: 'ready', message: 'Host restarted' });
+    await closing;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('restart is in progress');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it('fullBuild:true recompiles instead of replaying a finished FULL build', async () => {

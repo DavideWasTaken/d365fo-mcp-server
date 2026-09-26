@@ -66,7 +66,10 @@ export async function recoverInterruptedReports(outputDir: string) {
     const confirmedFailure = events.split('\n').some(line => {
       try {
         const e = JSON.parse(line);
-        return e.type === 'check' && e.data?.stage === 'criterion' && e.data?.status === 'FAIL';
+        return (
+          (e.type === 'check' && e.data?.stage === 'criterion' && e.data?.status === 'FAIL') ||
+          (e.type === 'system_error' && e.data?.stage === 'after_action')
+        );
       } catch {
         return false;
       }

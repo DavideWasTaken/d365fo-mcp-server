@@ -16,11 +16,13 @@ import { pruneStaleCompilerMetadata } from './compilerMetadataPrune.js';
 import { readModuleReferences } from '../../metadata/modelDescriptor.js';
 import { recordBuild } from '../../utils/buildMarker.js';
 import type { ProgressReporter } from '../../utils/progressReporter.js';
+import { restartAosRuntime, type RuntimeRestartResult } from './aosRuntime.js';
 
 const execFileAsync = util.promisify(execFile);
 // Close handlers and post-build work belong to this server lifetime.
 const BUILD_SESSION_ID = crypto.randomUUID();
 const activeBuildJobs = new Map<string, string>();
+const activeRuntimeRestarts = new Set<string>();
 
 // Build-tool file logger
 async function buildLog(level: 'INFO' | 'WARN' | 'ERROR', message: string): Promise<void> {
@@ -247,8 +249,9 @@ interface QueueResult {
 interface BuildJobState {
   jobId?: string;
   ownerSessionId?: string;
-  postBuildRequest?: { bpCheck?: boolean | string; dbSync?: boolean | string | string[]; projectPath?: string; packagePath?: string };
-  postBuildResult?: { bpSection: string; syncSection: string; syncFailed: boolean };
+  postBuildRequest?: { bpCheck?: boolean | string; dbSync?: boolean | string | string[]; projectPath?: string; packagePath?: string; restartAos?: boolean; aosUrl?: string };
+  postBuildResult?: { bpSection: string; syncSection: string; syncFailed: boolean; runtimeRestart?: RuntimeRestartResult };
+  restartAttempted?: boolean;
   pid: number;
   modelName: string;       // Currently building model
   targetModel: string;     // Final target model — state file is keyed by this
@@ -263,7 +266,7 @@ interface BuildJobState {
   // result. Without this a waiter sees a dead PID, concludes the build was
   // orphaned and returns a "still running" stub for a build that in fact
   // succeeded seconds ago — the 185 s double-call of #829.
-  phase?: 'preparing' | 'compiling' | 'finalizing';
+  phase?: 'preparing' | 'compiling' | 'finalizing' | 'restarting';
   exitCode?: number;
   endTime?: string;
   fullBuild?: boolean;
@@ -400,7 +403,7 @@ function isProcessAlive(pid: number): boolean {
 
 function isBuildActive(state: BuildJobState): boolean {
   if (state.ownerSessionId && state.ownerSessionId !== BUILD_SESSION_ID) return false;
-  if (state.phase === 'preparing' || state.phase === 'finalizing') return true;
+  if (state.phase === 'preparing' || state.phase === 'finalizing' || state.phase === 'restarting') return true;
   if (!state.pid && state.buildQueue?.length) return true;
   return isProcessAlive(state.pid);
 }
@@ -1147,10 +1150,33 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
     if (isSupersededBuild(liveState, customPackagesPath)) return;
     const sync = await runPostBuildDbSync(liveState.postBuildRequest, liveState.targetModel, ctx.toolContext);
     if (isSupersededBuild(liveState, customPackagesPath)) return;
-    const postBuildResult = { bpSection, syncSection: sync.section, syncFailed: sync.failed };
+    let runtimeRestart: RuntimeRestartResult | undefined;
+    if (liveState.postBuildRequest?.restartAos === true) {
+      if (!metaResult.success || metaResult.skipped || sync.failed || sync.completed === false) {
+        runtimeRestart = { status: 'blocked', message: 'AOS restart blocked: runtime metadata generation and requested database sync must succeed first. Do not start UI tests yet.' };
+      } else if (!liveState.postBuildRequest.aosUrl) {
+        runtimeRestart = { status: 'blocked', message: 'AOS restart blocked: set aosUrl or D365FO_UI_TEST_URL to the local environment root.' };
+      } else if (activeRuntimeRestarts.size) {
+        runtimeRestart = { status: 'blocked', message: 'AOS restart blocked: another runtime restart is in progress. No restart was replayed.' };
+      } else {
+        const restartKey = liveState.jobId!;
+        activeRuntimeRestarts.add(restartKey);
+        try {
+          // Persist intent BEFORE mutation. A restarted server reports uncertain
+          // work rather than replaying a stop/start whose result was lost.
+          await writeBuildState({ ...liveState, phase: 'restarting', restartAttempted: true }, customPackagesPath);
+          if (isSupersededBuild(liveState, customPackagesPath)) return;
+          runtimeRestart = await restartAosRuntime(liveState.postBuildRequest.aosUrl);
+        } catch (error: any) {
+          runtimeRestart = { status: 'failed', message: `AOS restart outcome unknown: ${error.message}. No retry was made.` };
+        } finally { activeRuntimeRestarts.delete(restartKey); }
+      }
+    }
+    const postBuildResult = { bpSection, syncSection: sync.section, syncFailed: sync.failed, runtimeRestart };
     if (bpSection || sync.section) {
       await appendFile(state.logFile, bpSection + sync.section + '\n', 'utf-8').catch(() => {});
     }
+    if (runtimeRestart) await appendFile(state.logFile, `\nAOS runtime ${runtimeRestart.status}: ${runtimeRestart.message}\n`, 'utf-8').catch(() => {});
 
     // All models and requested post-build actions finished.
     const final: BuildJobState = {
@@ -1199,10 +1225,13 @@ async function renderFinishedBuildResult(
   const bpSection = finalState.postBuildResult?.bpSection ?? '';
   const syncSection = finalState.postBuildResult?.syncSection ?? '';
   const syncFailed = finalState.postBuildResult?.syncFailed ?? false;
-  const requestNote = params?.bpCheck !== undefined || params?.dbSync !== undefined
+  const runtimeRestart = finalState.postBuildResult?.runtimeRestart;
+  const restartFailed = !!runtimeRestart && runtimeRestart.status !== 'ready';
+  const requestNote = params?.bpCheck !== undefined || params?.dbSync !== undefined || params?.restartAos !== undefined
     ? '\nPost-build actions belong to the original build request; reading this result does not add or repeat them. Use fullBuild:true for a new build with different actions.\n'
     : '';
-  const runtimeNote = succeeded ? runtimeRestartGuidance() : '';
+  const runtimeNote = runtimeRestart ? `\nAOS runtime ${runtimeRestart.status}: ${runtimeRestart.message}\n`
+    : succeeded ? runtimeRestartGuidance() : '';
 
   if (isQueued) {
     const totalDuration = allResults.reduce((sum, r) => sum + r.duration, 0);
@@ -1234,7 +1263,7 @@ async function renderFinishedBuildResult(
           (structured ? `${structured}\n\n` : '') +
           `--- Log (${relevantResult?.modelName ?? targetModel}) ---\n${logContent}` + bpSection + syncSection,
       }],
-      ...((!succeeded || syncFailed) ? { isError: true } : {}),
+      ...((!succeeded || syncFailed || restartFailed) ? { isError: true } : {}),
     };
   }
 
@@ -1277,12 +1306,13 @@ async function renderFinishedBuildResult(
     }],
     // A failed sync is an error even though the compile passed: the caller asked
     // for "build and sync", and half of that did not happen.
-    ...((!succeeded || syncFailed) ? { isError: true } : {}),
+    ...((!succeeded || syncFailed || restartFailed) ? { isError: true } : {}),
   };
 }
 
 function runtimeRestartGuidance(): string {
   return '\nRuntime refresh required: Restart/reload the actual AOS host before testing new or changed objects. ' +
+    'Use restartAos:true on the initial build for the build-before-UI-test workflow and collect a runtime ready result before UI tests. ' +
     'For full IIS, recycle the AOSService application pool; for IIS Express, restart the specific ' +
     'IIS Express instance hosting this environment through its normal launcher. A stopped W3SVC ' +
     'does not identify or restart an IIS Express host. Compilation does not prove deployment or runtime availability; ' +
@@ -1332,7 +1362,7 @@ async function runPostBuildDbSync(
   params: any,
   targetModel: string,
   context: any,
-): Promise<{ section: string; failed: boolean }> {
+): Promise<{ section: string; failed: boolean; completed?: boolean }> {
   const requested = params?.dbSync;
   const tables = Array.isArray(requested)
     ? requested.filter((t: unknown) => typeof t === 'string' && t.trim().length > 0)
@@ -1346,6 +1376,7 @@ async function runPostBuildDbSync(
       section: '\n\n⚠️ dbSync was an empty list, so nothing was synced. Pass `dbSync: true` to sync ' +
         'the project scope, or name the tables: `dbSync: ["CustTable"]`.',
       failed: false,
+      completed: false,
     };
   }
   try {
@@ -1364,12 +1395,12 @@ async function runPostBuildDbSync(
       .map((c: any) => c.text)
       .join('\n')
       .trim();
-    if (!text) return { section: '', failed: false };
     // dbSyncTool sets isError when the sync fails. Dropping it put a ❌ at the
     // bottom of a response headed ✅ Build succeeded, with the flag unset — and
     // since trigger_db_sync is no longer published, this is the only sync path
     // a caller has.
     const failed = result?.isError === true;
+    if (!text) return { section: failed ? '\n\nDatabase sync failed without diagnostic text.' : '', failed };
     const heading = failed
       ? '--- Database sync (dbSync) — FAILED, the build did not ---'
       : '--- Database sync (dbSync) ---';
@@ -1464,7 +1495,7 @@ async function waitForBuildCompletion(
 
       // pid 0 means a queue advance is in flight (the next model has not been
       // spawned yet) — transient, never an orphan.
-      const finalizing = state.phase === 'finalizing';
+      const finalizing = state.phase === 'finalizing' || state.phase === 'restarting';
       const settled = state.ownerSessionId === BUILD_SESSION_ID && isBuildActive(state)
         || !finalizing && (!state.pid || isProcessAlive(state.pid));
       if (settled) {
@@ -1494,7 +1525,7 @@ function describeBuildProgress(state: BuildJobState, startedAt: number): string 
   const queue = state.buildQueue && state.buildQueue.length > 1
     ? ` (${(state.queueIndex ?? 0) + 1}/${state.buildQueue.length})`
     : '';
-  const what = state.phase === 'preparing' ? 'preparing (compiler metadata and labels)' : state.phase === 'finalizing'
+  const what = state.phase === 'restarting' ? 'restarting AOS and verifying runtime readiness' : state.phase === 'preparing' ? 'preparing (compiler metadata and labels)' : state.phase === 'finalizing'
     ? 'finalizing (runtime metadata, requested BP check/database sync)'
     : state.fullBuild ? 'full build' : 'incremental';
   return `🔨 Building ${state.modelName}${queue} — ${what}, ${elapsed}s elapsed`;
@@ -1523,6 +1554,9 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
   const dataDir: string | undefined = context?.symbolIndex?.dataDir;
   try {
     const force                 = params.force                === true;
+    if (force && activeRuntimeRestarts.size) {
+      return { content: [{ type: 'text', text: 'AOS restart is in progress. force is blocked until its outcome is recorded; collect status without force.' }], isError: true };
+    }
     const fullBuild             = params.fullBuild            === true;
     // Disabled: rebuilding referenced models drags in every custom/ISV
     // dependency on each build and slows the whole run down for no benefit —
@@ -1608,6 +1642,9 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
     // Check for an existing background build (keyed by targetModel)
     // ------------------------------------------------------------------
     const existingState = await readBuildState(targetModel, customPackagesPath);
+    if (force && existingState?.status === 'running' && existingState.restartAttempted) {
+      return { content: [{ type: 'text', text: `AOS restart outcome is unknown or still running. force is blocked to prevent overlapping/replayed runtime mutations. Verify the host manually before recovering this job.\nLog: ${existingState.logFile}\nState: ${stateFilePath(targetModel, customPackagesPath)}` }], isError: true };
+    }
 
     if (existingState && !force) {
       if (existingState.status === 'running' && existingState.ownerSessionId && existingState.ownerSessionId !== BUILD_SESSION_ID) {
@@ -1615,7 +1652,7 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
           content: [{ type: 'text', text: `❌ The owning server session ended before build finalization was recorded.\n\n` +
             `Model: ${targetModel}\nLog: ${existingState.logFile}\n` +
             `Requested post-build actions: ${JSON.stringify(existingState.postBuildRequest ?? {})}\n\n` +
-            `Completion of compilation and requested BP/database sync is unknown; no actions were replayed. ` +
+            `Completion of compilation and requested BP/database sync/AOS restart is unknown; no actions were replayed. ` +
             `The compiler may still be running. Inspect its log and any sync outcome before explicitly starting a new build with force:true.` }],
           isError: true,
         };
@@ -1778,6 +1815,11 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
     // force=true: kill existing processes and clear state
     // ------------------------------------------------------------------
     if (force) {
+      // Config/state reads above can overlap a finalizer entering restart.
+      // Recheck at the mutation boundary, with no await before cancellation.
+      if (activeRuntimeRestarts.size) {
+        return { content: [{ type: 'text', text: 'AOS restart is in progress. force is blocked until its outcome is recorded; collect status without force.' }], isError: true };
+      }
       // Cancel an old preparation/finalizer before replacing its compiler.
       activeBuildJobs.delete(stateFilePath(targetModel, customPackagesPath));
       await buildLog('WARN', `force=true — killing orphaned build processes for model: ${targetModel}`);
@@ -1853,7 +1895,8 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
     const initState: BuildJobState = {
       jobId,
       ownerSessionId: BUILD_SESSION_ID,
-      postBuildRequest: { bpCheck: params.bpCheck, dbSync: params.dbSync, projectPath: params.projectPath, packagePath: params.packagePath },
+      postBuildRequest: { bpCheck: params.bpCheck, dbSync: params.dbSync, projectPath: params.projectPath, packagePath: params.packagePath,
+        restartAos: params.restartAos === true, aosUrl: params.aosUrl ?? process.env.D365FO_UI_TEST_URL?.trim() },
       pid: 0,             // updated by spawnXppcForState
       modelName: firstModel,
       targetModel,
@@ -1965,7 +2008,7 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
           `Log:    ${firstLogFile}`,
           ``,
           `Call **build_d365fo_project** with { modelName: ${JSON.stringify(targetModel)} } to check status and collect output. Omit fullBuild and force on follow-ups.`,
-          `Requested BP/database sync runs once after a successful compile. Keep this MCP server running until finalization finishes.`,
+          `Requested BP/database sync/AOS restart runs once after a successful compile. Keep this MCP server running until finalization finishes.`,
         ].join('\n'),
       }],
     };

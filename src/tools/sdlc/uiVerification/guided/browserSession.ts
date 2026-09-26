@@ -1,4 +1,5 @@
 import { readFile, mkdir, writeFile, rm } from 'node:fs/promises';
+import { inspectSystemErrors } from '../systemErrors.js';
 import { renameSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -241,6 +242,9 @@ export class GuidedBrowser {
       this.caseId = caseId;
       this.seenCases.add(caseId);
     });
+  }
+  async inspectSystemErrors() {
+    return this.bounded(async () => inspectSystemErrors(this.page, new URL(this.profile.baseUrl).origin));
   }
   private authRequired(): boolean {
     return this.page.frames().some(frame => {
