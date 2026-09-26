@@ -8,7 +8,23 @@ dotnet build tests/axdb-sql-host/AxDbSqlHost.csproj --no-restore
 & tests/axdb-sql-host/bin/Debug/net48/AxDbSqlHost.exe
 ```
 
-The ordinary run checks AST allow/reject cases, preflight validation, disabled SQL/writes, integrated encrypted connection defaults, exact bigint/decimal(38,s) serialization, explicit NULL, and parameter truncation/rounding rejection. It prints SKIP for live coverage. It uses the installed .NET Framework runtime; SDK 7 can compile this host. The full metadata bridge still needs its normal D365 binaries and SDK supporting its C#12 setting.
+The ordinary run checks AST allow/reject cases, preflight validation, disabled SQL/writes, integrated encrypted connection defaults, exact bigint/decimal(38,s) serialization, explicit NULL, and parameter truncation/rounding rejection. It also runs production cell decoding against a strict forward-only reader double: text/binary short chunks, Unicode, empty/NULL, mixed columns, exact limits, oversize rejection and cancellation. This double catches rereads but does not replace real SqlClient testing. The ordinary run prints SKIP for live coverage when not configured. It uses the installed .NET Framework runtime; SDK 7 can compile this host. The full metadata bridge still needs its normal D365 binaries and SDK supporting its C#12 setting.
+
+## Read-only smoke test on the developer VM
+
+After building the host, use this explicit mode to check the real SQL driver against AxDB with Windows authentication. It runs `status` and SELECTs of constants/parameters only, never reads business records or invokes the mutating fixture. This mode allows AxDB as the database name and ignores `D365FO_SQL_TEST_ALLOW_MUTATION`.
+
+```powershell
+$env:D365FO_SQL_TEST_SERVER = '<your SQL server or instance>'
+$env:D365FO_SQL_TEST_DATABASE = 'AxDB'
+# Set only if your developer SQL certificate requires it:
+# $env:D365FO_SQL_TEST_TRUST_CERTIFICATE = '1'
+& tests/axdb-sql-host/bin/Debug/net48/AxDbSqlHost.exe --read-only
+```
+
+Checks cover real `status` strings, ordinary/MAX text and binary columns, empty/NULL/zero rows, adjacent numeric/text columns, exact decimal(38,8)/bigint values, long Unicode, and oversized cells. Legacy `text`/`ntext`/`image` and `rowversion` use physical columns in the separate mutating fixture below. The mode fails if no connection is configured; it cannot silently report an offline pass.
+
+## Mutating fixture (separate disposable database)
 
 Aliases and CTE references should use the same letter casing as their declaration. Validation preserves exact identifier spelling so distinct objects on case-sensitive databases are never skipped by case-folded alias matches or catalog-check deduplication.
 

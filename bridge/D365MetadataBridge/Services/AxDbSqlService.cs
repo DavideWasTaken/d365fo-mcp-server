@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.Data.SqlClient;
 using System.Data.SqlTypes;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -172,9 +175,7 @@ WHERE s.name=@schema AND o.name=@table ORDER BY c.column_id";
                             catch { result["transactionState"] = "UNKNOWN"; }
                         }
                     }
-                    var code = exception is AxDbFailure failure ? failure.Code :
-                        exception is OperationCanceledException || (exception is SqlException sql && sql.Number == -2) ? "AXDB_TIMEOUT" :
-                        exception is SqlException ? "AXDB_SQL_ERROR" : "AXDB_INVALID_REQUEST";
+                    var code = FailureCode(exception, deadline.IsCancellationRequested);
                     if (commitAttempted) code = "AXDB_COMMIT_UNKNOWN";
                     var message = commitAttempted ? "Commit acknowledgement was lost. Outcome is UNKNOWN; verify database state before any further write. Do not replay this batch." : exception.Message;
                     if (!commitAttempted && write && Equals(result["transactionState"], "UNKNOWN"))
@@ -196,6 +197,16 @@ WHERE s.name=@schema AND o.name=@table ORDER BY c.column_id";
         }
 
         private static bool normalizedStatus(string method) => string.Equals(method, "axdbStatus", StringComparison.OrdinalIgnoreCase);
+
+        internal static string FailureCode(Exception exception, bool deadlineCancelled)
+        {
+            if (deadlineCancelled) return "AXDB_TIMEOUT";
+            // SqlSequentialStream/TextReader wrap provider failures in IOException.
+            while (exception is IOException && exception.InnerException != null) exception = exception.InnerException;
+            return exception is AxDbFailure failure ? failure.Code :
+                exception is OperationCanceledException || (exception is SqlException sql && sql.Number == -2) ? "AXDB_TIMEOUT" :
+                exception is SqlException ? "AXDB_SQL_ERROR" : "AXDB_INVALID_REQUEST";
+        }
 
         private PlannedStatement Plan(AxDbSqlRequest request, bool write)
         {
@@ -240,6 +251,8 @@ WHERE (@schema='' AND o.object_id=OBJECT_ID(QUOTENAME(@table))) OR (s.name=@sche
             var rows = new List<Dictionary<string, object?>>();
             var columns = new List<object>();
             result["columns"] = columns; result["rows"] = rows; result["truncated"] = false;
+            // Keep cancellation active during synchronous bounded stream reads too.
+            using (token.Register(() => { try { command.Cancel(); } catch (InvalidOperationException) { } }))
             using (var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token).ConfigureAwait(false))
             {
                 var names = new HashSet<string>(StringComparer.Ordinal);
@@ -254,7 +267,7 @@ WHERE (@schema='' AND o.object_id=OBJECT_ID(QUOTENAME(@table))) OR (s.name=@sche
                 {
                     if (rows.Count == maxRows) { result["truncated"] = true; break; }
                     var row = new Dictionary<string, object?>();
-                    for (var i = 0; i < reader.FieldCount; i++) row[reader.GetName(i)] = Cell(reader, i);
+                    for (var i = 0; i < reader.FieldCount; i++) row[reader.GetName(i)] = Cell(reader, i, token);
                     rows.Add(row);
                     if (JsonSerializer.SerializeToUtf8Bytes(result, Json).Length > ResponseByteLimit - 4096)
                     { rows.RemoveAt(rows.Count - 1); result["truncated"] = true; break; }
@@ -278,18 +291,49 @@ WHERE (@schema='' AND o.object_id=OBJECT_ID(QUOTENAME(@table))) OR (s.name=@sche
             throw new ArgumentException("Unsupported result type: " + value.GetType().Name);
         }
 
-        private static object? Cell(SqlDataReader reader, int ordinal)
+        internal static object? Cell(DbDataReader reader, int ordinal, CancellationToken token = default)
         {
+            token.ThrowIfCancellationRequested();
             if (reader.IsDBNull(ordinal)) return null;
             var type = reader.GetDataTypeName(ordinal).ToLowerInvariant();
             // Avoid overflowing CLR decimal for SQL decimal(38,s).
-            if (type == "decimal" || type == "numeric") return ExactValue(reader.GetSqlDecimal(ordinal));
+            if (type == "decimal" || type == "numeric") return ExactValue(reader.GetProviderSpecificValue(ordinal));
             if (type == "nvarchar" || type == "varchar" || type == "nchar" || type == "char" || type == "ntext" || type == "text")
             {
-                if (reader.GetChars(ordinal, 0, null, 0, 0) > ResponseByteLimit / 2) throw new AxDbFailure("AXDB_CELL_TOO_LARGE", "One SQL cell exceeds the response budget; select a smaller substring.");
+                // Never probe length then call GetValue: SequentialAccess forbids rereading
+                // a streamed column. GetTextReader also avoids buffering legacy text/ntext.
+                using (var stream = reader.GetTextReader(ordinal))
+                {
+                    var value = new StringBuilder();
+                    var buffer = new char[4096];
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var count = stream.Read(buffer, 0, Math.Min(buffer.Length, ResponseByteLimit / 2 - value.Length + 1));
+                        token.ThrowIfCancellationRequested();
+                        if (count == 0) return value.ToString();
+                        if (value.Length + count > ResponseByteLimit / 2) throw new AxDbFailure("AXDB_CELL_TOO_LARGE", "One SQL cell exceeds the response budget; select a smaller substring.");
+                        value.Append(buffer, 0, count);
+                    }
+                }
             }
-            if (type == "varbinary" || type == "binary" || type == "image")
-                if (reader.GetBytes(ordinal, 0, null, 0, 0) > ResponseByteLimit / 2) throw new AxDbFailure("AXDB_CELL_TOO_LARGE", "One binary SQL cell exceeds the response budget.");
+            if (type == "varbinary" || type == "binary" || type == "image" || type == "timestamp" || type == "rowversion")
+            {
+                using (var stream = reader.GetStream(ordinal))
+                using (var value = new MemoryStream())
+                {
+                    var buffer = new byte[4096];
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var count = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, ResponseByteLimit / 2 - value.Length + 1));
+                        token.ThrowIfCancellationRequested();
+                        if (count == 0) return Convert.ToBase64String(value.ToArray());
+                        if (value.Length + count > ResponseByteLimit / 2) throw new AxDbFailure("AXDB_CELL_TOO_LARGE", "One binary SQL cell exceeds the response budget.");
+                        value.Write(buffer, 0, count);
+                    }
+                }
+            }
             if (!ScalarTypes.Contains(type)) throw new ArgumentException("Unsupported SQL result type: " + type + "; explicitly convert it to a supported scalar type.");
             return ExactValue(reader.GetValue(ordinal));
         }

@@ -98,3 +98,5 @@ A transaction belongs to one SQL connection, not to the browser. The SQL tool do
 ## Verification
 
 TypeScript tests cover optional setup, instance isolation, strict contracts, no-cache/no-retry behavior and bounded JSON. The standalone C# SQL host covers parser/parameters/serialization without D365 DLLs; optional integration tests require an explicitly configured disposable SQL fixture database. These checks do not prove access to your AxDB. Validate `status`, a SELECT and a targeted development write on the actual VM after building/configuring the bridge.
+
+For the SequentialAccess regression, [the SQL host's read-only smoke mode](../tests/axdb-sql-host/README.md#read-only-smoke-test-on-the-developer-vm) checks the real driver on your VM using `status` and constant SELECTs without modifying or reading business records. It covers text/binary streaming, NULL/empty values, mixed columns and size limits. After pulling a C# fix, rebuild/deploy the bridge and restart MCP; updating TypeScript alone leaves the old executable in use.

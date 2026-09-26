@@ -22,7 +22,7 @@ internal static class LiveFixture
         using (var setup = new SqlConnection(options.ConnectionString()))
         {
             setup.Open();
-            Admin(setup, "CREATE TABLE dbo.[" + table + "] (Id bigint NOT NULL PRIMARY KEY, Amount decimal(38,8), Note nvarchar(max) DEFAULT (N'fixture default'));");
+            Admin(setup, "CREATE TABLE dbo.[" + table + "] (Id bigint NOT NULL PRIMARY KEY, Amount decimal(38,8), Note nvarchar(max) DEFAULT (N'fixture default'), LegacyText text, LegacyNText ntext, LegacyBinary image, Version rowversion);");
             try
             {
                 var status = Call(service, "status", new { }); Require(status, "success", true);
@@ -44,6 +44,13 @@ internal static class LiveFixture
                 Require(query, "success", true);
                 var rows = (List<Dictionary<string, object?>>)query["rows"]!;
                 if (!Equals(rows[0]["Id"], "9223372036854775807") || !Equals(rows[0]["Amount"], "123456789012345678901234567890.12345678")) throw new Exception("Live precision loss");
+                Admin(setup, "UPDATE dbo.[" + table + "] SET LegacyText='legacy', LegacyNText=N'caffè 界', LegacyBinary=0x00FF");
+                var legacy = Call(service, "query", new { sql = "SELECT LegacyText,LegacyNText,LegacyBinary,Version,Id FROM dbo.[" + table + "]" });
+                Require(legacy, "success", true);
+                var legacyRow = ((List<Dictionary<string, object?>>)legacy["rows"]!)[0];
+                Require(legacyRow, "LegacyText", "legacy"); Require(legacyRow, "LegacyNText", "caffè 界"); Require(legacyRow, "LegacyBinary", "AP8=");
+                Require(legacyRow, "Id", "9223372036854775807");
+                if (Convert.FromBase64String((string)legacyRow["Version"]!).Length != 8) throw new Exception("Invalid rowversion decoding");
                 var mismatch = Call(service, "execute", new { statements = new[] {
                     new { sql = "UPDATE dbo.[" + table + "] SET Note='changed'", expectedRows = 1 },
                     new { sql = "DELETE dbo.[" + table + "] WHERE Id=0", expectedRows = 1 }

@@ -14,8 +14,10 @@ using D365MetadataBridge.Services;
 
 internal static class Program
 {
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--read-only") { ReadOnlySmoke.Run(); return 0; }
+        if (args.Length != 0) throw new ArgumentException("Use no arguments for offline/fixture checks, or --read-only for SQL reader smoke checks.");
         var policy = Assembly.GetExecutingAssembly().GetType("D365MetadataBridge.Services.AxDbSqlPolicy");
         if (policy == null) { Console.Error.WriteLine("FAIL: SELECT policy must be implemented before SQL is enabled."); return 1; }
         var validate = policy.GetMethod("Validate", BindingFlags.Public | BindingFlags.Static)!;
@@ -80,6 +82,8 @@ internal static class Program
         Assert(new[] { "defaultDefinition", "isPrimaryKey", "primaryKeyOrdinal" }.All(schemaColumns.Contains), "schema exposes default and primary-key columns");
         Assert(schemaAst.ScriptTokenStream.Count(token => token.Text == "@schema") == 1 && schemaAst.ScriptTokenStream.Count(token => token.Text == "@table") == 1, "schema catalog filtering stays parameterized");
         Console.WriteLine("PASS: schema catalog query parses with parameterized filtering and default/primary-key projections");
+        SequentialCellChecks.Run();
+        StreamErrorChecks.Run();
         LiveFixture.Run();
         return 0;
 
