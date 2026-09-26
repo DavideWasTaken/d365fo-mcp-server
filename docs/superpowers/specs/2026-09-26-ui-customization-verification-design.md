@@ -2,7 +2,7 @@
 
 ## Obiettivo concordato
 
-Aggiungere al MCP esistente un solo tool, `verify_ui_customization`, che esegua nel browser due casi legati al requisito della custom appena sviluppata e produca un report breve. Nessun Jev o altro modello giudice. Questo documento descrive il progetto: il runner non è ancora implementato.
+Aggiungere al MCP esistente un solo tool, `verify_ui_customization`, che esegua nel browser due casi legati al requisito della custom appena sviluppata e produca un report breve. Nessun Jev o altro modello giudice. Questo documento descrive il progetto della prima versione. Il runner è ora implementato; uso e limiti effettivi sono documentati in `docs/UI_CUSTOMIZATION_TESTING.md`. La validazione su D365FO reale resta da eseguire.
 
 ## Flusso
 
