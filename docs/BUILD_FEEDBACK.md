@@ -1,5 +1,15 @@
 # Build status, recovery, and runtime refresh
 
+## Why this fork changes the build workflow
+
+This fork modifies the existing `build_d365fo_project` tool as well as adding UI verification and SQL. In the development VM's previous workflow, MCP compilation could succeed while the running AOS still did not expose newly compiled objects. A new menu item could therefore appear missing in the browser. The workaround used on that VM was a Visual Studio build/runtime refresh or a manual IIS/IIS Express restart.
+
+The missing step was refreshing the running AOS after compilation. With `restartAos:true`, the fork completes the compile, runtime metadata generation and requested database sync, then restarts the matching local AOS host and verifies replacement-process and HTTP readiness. A second Visual Studio compilation is not part of this workflow. If compilation, metadata generation or synchronization itself fails, those errors still need resolving; restarting AOS cannot repair them.
+
+The compiler remains `xppc.exe`. The fork changes how the job runs and how its result reaches the running environment: background execution with recoverable logs/results, requested post-build actions executed once, and an optional runtime restart before UI verification. Restart is opt-in on the initial build request. Without `restartAos:true`, the tool reports that a runtime refresh is still required. A blocked/failed restart or unconfirmed readiness returns a prominent user-action warning, so the client AI must notify the user before continuing to UI tests.
+
+## Start and collect a build
+
 `build_d365fo_project` prepares and compiles in the background by default. It returns the target, compiler PID (or pending while preparing), and a local log path rather than holding the MCP request open through label compilation and the model build. This avoids losing a several-minute build result to a client's request timeout.
 
 Start with the desired actions:
