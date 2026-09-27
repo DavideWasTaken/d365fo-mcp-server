@@ -36,16 +36,24 @@ export const buildD365foProjectTool = {
         },
         bpCheck: {
           type: 'boolean',
-          description: 'On a SUCCESSFUL build, also run the best-practice checker and append its findings. Prefer this to a follow-up run_bp_check call: one build call instead of two round trips.',
+          description: 'On a SUCCESSFUL build, append best-practice findings in this call.',
         },
         dbSync: {
           type: ['boolean', 'array'],
           items: { type: 'string' },
-          description: 'On a SUCCESSFUL build, also run the database sync (SyncEngine.exe) — REQUIRED after any table/view/data-entity change. true = partial sync of the syncable objects in the project, full-model when it has none; an ARRAY syncs exactly those tables/views (much faster).',
+          description: 'On a SUCCESSFUL build, sync; REQUIRED for table/view/entity changes. true = project objects (full model if none); an array names exact tables/views.',
+        },
+        restartAos: {
+          type: 'boolean',
+          description: 'Opt in to one local IIS/IIS Express AOS restart after compile, runtime metadata and requested sync succeed. Requires aosUrl.',
+        },
+        aosUrl: {
+          type: 'string',
+          description: 'Explicit HTTP(S) environment root for restartAos; no credentials, query or fragment.',
         },
         wait: {
           type: 'boolean',
-          description: 'When true (default) the tool blocks until the build finishes and returns the final result in a single call. The agent should make exactly one call per requested build. Set false for legacy fire-and-forget polling behaviour.',
+          description: 'Default true: wait for completion in one call. false: return now and collect the result later.',
         },
         waitTimeoutMs: {
           type: 'number',
