@@ -18,6 +18,7 @@ import { join, resolve } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   bridgeBuildCommand,
+  cliCommand,
   dataRoot,
   installMode,
   isGitCheckout,
@@ -67,7 +68,17 @@ describe('data root in a checkout', () => {
     // binary is already outside the blast radius of `git pull`, and moving it
     // would strand every bridge built by an earlier version.
     expect(paths.bridgeOutDir).toBeNull();
-    expect(bridgeBuildCommand()).toBe(`cd "${paths.bridgeDir}" && dotnet build -c Release`);
+    expect(bridgeBuildCommand()).toBe(`dotnet build "${paths.bridgeProject}" -c Release`);
+  });
+
+  it('suggests commands that run in Windows PowerShell 5.1 from any directory', () => {
+    // 5.1 — the default shell on D365FO VMs — rejects `&&`, and a `cd` first
+    // only worked when chained. One invocation with absolute paths needs neither.
+    for (const command of [bridgeBuildCommand(), cliCommand('update')]) {
+      expect(command).not.toContain('&&');
+      expect(command).not.toMatch(/^cd /);
+    }
+    expect(cliCommand('update')).toBe(`node "${paths.cliEntry}" update`);
   });
 });
 

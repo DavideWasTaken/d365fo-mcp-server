@@ -30,7 +30,7 @@ describe('doctor — checkout freshness', () => {
     // The checkout's own entry point: a `d365fo-mcp` on PATH is either absent or
     // upstream's npm CLI, which would update a different installation.
     expect(result.fix).toBe(cliCommand('update'));
-    expect(result.fix).toContain('npx tsx src/cli/index.ts update');
+    expect(result.fix).toMatch(/^node ".*index\.js" update$/);
   });
 
   it('uses the singular for one commit', () => {

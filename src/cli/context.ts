@@ -171,7 +171,10 @@ export const paths = {
 
   // Code — always in the package, never in the data directory.
   distEntry: resolve(repoRoot, 'dist', 'index.js'),
+  /** The built management CLI — package.json's `bin`. */
+  cliEntry: resolve(repoRoot, 'dist', 'cli', 'index.js'),
   bridgeDir: resolve(repoRoot, 'bridge', 'D365MetadataBridge'),
+  bridgeProject: resolve(repoRoot, 'bridge', 'D365MetadataBridge', 'D365MetadataBridge.csproj'),
   get bridgeExe(): string {
     return installMode === 'git'
       ? resolve(repoRoot, 'bridge', 'D365MetadataBridge', 'bin', 'Release', 'D365MetadataBridge.exe')
@@ -219,17 +222,22 @@ export const DOTNET_MISSING =
  * A checkout has no `d365fo-mcp` on PATH of its own. The one there, if any, is
  * a global npm install — upstream's CLI, which manages a different data
  * directory and would update that instead of this checkout. So a checkout names
- * its own entry point, run from the checkout.
+ * its own built entry point by absolute path.
+ *
+ * Suggested commands are a single invocation with absolute paths, never
+ * `cd … && …`: Windows PowerShell 5.1 — the default shell on D365FO VMs —
+ * rejects `&&` as a statement separator, and one command runs from anywhere
+ * in any shell.
  */
 export function cliCommand(args: string): string {
   return installMode === 'git'
-    ? `cd "${repoRoot}" && npx tsx src/cli/index.ts ${args}`
+    ? `node "${paths.cliEntry}" ${args}`
     : `d365fo-mcp ${args}`;
 }
 
 export function bridgeBuildCommand(): string {
   const out = paths.bridgeOutDir ? ` -o "${paths.bridgeOutDir}"` : '';
-  return `cd "${paths.bridgeDir}" && dotnet build -c Release${out}`;
+  return `dotnet build "${paths.bridgeProject}" -c Release${out}`;
 }
 
 /**
