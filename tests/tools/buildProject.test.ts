@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // --- hoisted mocks -----------------------------------------------------------
 const {
@@ -1053,6 +1053,67 @@ describe('build_d365fo_project', () => {
       expect(result.isError).toBeFalsy();
     }
     expect(restartMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe('restartAos environment root', () => {
+    const WEB_CONFIG = path.join(PKG, '..', 'WebRoot', 'web.config');
+    const HOST_URL_XML = '<add key="Infrastructure.HostUrl" value="https://vlt-dev-example-devaos.axcloud.dynamics.com" />';
+    afterEach(() => vi.unstubAllEnvs());
+
+    function withWebConfig(present: boolean) {
+      readFileMock.mockImplementation(async (p: string) => {
+        if (present && p === WEB_CONFIG) return HOST_URL_XML;
+        if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+    }
+
+    async function buildAndCollect(params: Record<string, unknown>) {
+      const child = makeFakeChild(42);
+      spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+      await buildProjectTool({ projectPath: PROJECT_PATH, ...params }, {});
+      await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+      serveState(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+      readdirMock.mockResolvedValue([]);
+      return (await buildProjectTool({ projectPath: PROJECT_PATH }, {})).content[0].text as string;
+    }
+
+    it('falls back to the local AOS web.config when aosUrl and D365FO_UI_TEST_URL are unset', async () => {
+      vi.stubEnv('D365FO_UI_TEST_URL', '');
+      withWebConfig(true);
+      restartMock.mockResolvedValue({ status: 'ready', host: 'iis-express AOSService/Dynamics365 PID 33604', replacementPid: 31520, message: 'Actual runtime restarted and verified' });
+      const text = await buildAndCollect({ restartAos: true });
+      expect(restartMock).toHaveBeenCalledExactlyOnceWith('https://vlt-dev-example-devaos.axcloud.dynamics.com/');
+      // The caller cannot see the server's log: the result says what was restarted, and why that root.
+      expect(text).toContain(`Environment root: https://vlt-dev-example-devaos.axcloud.dynamics.com/ (from ${WEB_CONFIG})`);
+      expect(text).toContain('Host: iis-express AOSService/Dynamics365 PID 33604 -> PID 31520');
+      expect(text).toContain('AOS runtime ready');
+    });
+
+    it('keeps D365FO_UI_TEST_URL ahead of the web.config, so UI tests and the restart target one environment', async () => {
+      vi.stubEnv('D365FO_UI_TEST_URL', 'https://ui.example.test/');
+      withWebConfig(true);
+      const text = await buildAndCollect({ restartAos: true });
+      expect(restartMock).toHaveBeenCalledExactlyOnceWith('https://ui.example.test/');
+      expect(text).toContain('Environment root: https://ui.example.test/ (from D365FO_UI_TEST_URL)');
+    });
+
+    it('lets an explicit aosUrl win over both', async () => {
+      vi.stubEnv('D365FO_UI_TEST_URL', 'https://ui.example.test/');
+      withWebConfig(true);
+      const text = await buildAndCollect({ restartAos: true, aosUrl: 'https://dev.test/' });
+      expect(restartMock).toHaveBeenCalledExactlyOnceWith('https://dev.test/');
+      expect(text).toContain('Environment root: https://dev.test/ (from aosUrl)');
+    });
+
+    it('reports the restart blocked, naming every source, when no root is found (UDE)', async () => {
+      vi.stubEnv('D365FO_UI_TEST_URL', '');
+      withWebConfig(false);
+      const text = await buildAndCollect({ restartAos: true });
+      expect(restartMock).not.toHaveBeenCalled();
+      expect(text).toContain('no environment root');
+      expect(text).toContain('web.config');
+    });
   });
 
   it.each(['failed', 'skipped', 'sync-failed'])('blocks runtime restart when prerequisites are %s', async condition => {

@@ -17,6 +17,7 @@ import { readModuleReferences } from '../../metadata/modelDescriptor.js';
 import { recordBuild } from '../../utils/buildMarker.js';
 import type { ProgressReporter } from '../../utils/progressReporter.js';
 import { restartAosRuntime, type RuntimeRestartResult } from './aosRuntime.js';
+import { localAosUrl } from './aosWebConfig.js';
 
 const execFileAsync = util.promisify(execFile);
 // Close handlers and post-build work belong to this server lifetime.
@@ -249,7 +250,7 @@ interface QueueResult {
 interface BuildJobState {
   jobId?: string;
   ownerSessionId?: string;
-  postBuildRequest?: { bpCheck?: boolean | string; dbSync?: boolean | string | string[]; projectPath?: string; packagePath?: string; restartAos?: boolean; aosUrl?: string };
+  postBuildRequest?: { bpCheck?: boolean | string; dbSync?: boolean | string | string[]; projectPath?: string; packagePath?: string; restartAos?: boolean; aosUrl?: string; aosUrlSource?: string };
   postBuildResult?: { bpSection: string; syncSection: string; syncFailed: boolean; runtimeRestart?: RuntimeRestartResult };
   restartAttempted?: boolean;
   pid: number;
@@ -1155,7 +1156,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
       if (!metaResult.success || metaResult.skipped || sync.failed || sync.completed === false) {
         runtimeRestart = { status: 'blocked', message: 'AOS restart blocked: runtime metadata generation and requested database sync must succeed first. Do not start UI tests yet.' };
       } else if (!liveState.postBuildRequest.aosUrl) {
-        runtimeRestart = { status: 'blocked', message: 'AOS restart blocked: set aosUrl or D365FO_UI_TEST_URL to the local environment root.' };
+        runtimeRestart = { status: 'blocked', message: 'AOS restart blocked: no environment root. Pass aosUrl or set D365FO_UI_TEST_URL; on a classic VM it is read from AosService\\WebRoot\\web.config, which was not found beside the packages folder (UDE has none).' };
       } else if (activeRuntimeRestarts.size) {
         runtimeRestart = { status: 'blocked', message: 'AOS restart blocked: another runtime restart is in progress. No restart was replayed.' };
       } else {
@@ -1230,7 +1231,14 @@ async function renderFinishedBuildResult(
   const requestNote = params?.bpCheck !== undefined || params?.dbSync !== undefined || params?.restartAos !== undefined
     ? '\nPost-build actions belong to the original build request; reading this result does not add or repeat them. Use fullBuild:true for a new build with different actions.\n'
     : '';
-  const runtimeNote = runtimeRestart ? `\nAOS runtime ${runtimeRestart.status}: ${runtimeRestart.message}\n`
+  // What was restarted and why that root, in the result itself: the build log
+  // goes to the server's stderr, which the caller never sees.
+  const restartRequest = finalState.postBuildRequest;
+  const runtimeFacts = runtimeRestart
+    ? (restartRequest?.aosUrl ? `Environment root: ${restartRequest.aosUrl} (from ${restartRequest.aosUrlSource ?? 'aosUrl'})\n` : '') +
+      (runtimeRestart.host ? `Host: ${runtimeRestart.host}${runtimeRestart.replacementPid ? ` -> PID ${runtimeRestart.replacementPid}` : ''}\n` : '')
+    : '';
+  const runtimeNote = runtimeRestart ? `\n${runtimeFacts}AOS runtime ${runtimeRestart.status}: ${runtimeRestart.message}\n`
     : succeeded ? runtimeRestartGuidance() : '';
   const userAction = restartFailed
     ? '⚠️ USER ACTION REQUIRED: AOS restart/readiness was not confirmed. Inform the user of the cause below. ' +
@@ -1894,6 +1902,16 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
       await buildLog('INFO', `  extraReferenceFolders: ${ctx.extraReferenceFolders.join(', ')}`);
     }
 
+    // restartAos root: aosUrl, then the UI test URL, then the root the local AOS
+    // itself serves (web.config beside its PackagesLocalDirectory; UDE has none).
+    // Unresolved stays undefined and the restart is reported blocked after the build.
+    let aosUrl: string | undefined = params.aosUrl ?? (process.env.D365FO_UI_TEST_URL?.trim() || undefined);
+    let aosUrlSource: string | undefined = params.aosUrl !== undefined ? 'aosUrl' : aosUrl ? 'D365FO_UI_TEST_URL' : undefined;
+    if (params.restartAos === true && !aosUrl) {
+      const local = await localAosUrl([ctx.microsoftPackagesPath, ctx.customPackagesPath]);
+      if (local) { aosUrl = local.url; aosUrlSource = local.source; }
+    }
+
     // ------------------------------------------------------------------
     // Initial state
     // ------------------------------------------------------------------
@@ -1901,7 +1919,7 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
       jobId,
       ownerSessionId: BUILD_SESSION_ID,
       postBuildRequest: { bpCheck: params.bpCheck, dbSync: params.dbSync, projectPath: params.projectPath, packagePath: params.packagePath,
-        restartAos: params.restartAos === true, aosUrl: params.aosUrl ?? process.env.D365FO_UI_TEST_URL?.trim() },
+        restartAos: params.restartAos === true, aosUrl, aosUrlSource },
       pid: 0,             // updated by spawnXppcForState
       modelName: firstModel,
       targetModel,

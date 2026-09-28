@@ -47,7 +47,7 @@ export const buildD365foProjectTool = {
         },
         aosUrl: {
           type: 'string',
-          description: 'Environment root for restartAos. Defaults to D365FO_UI_TEST_URL. Must uniquely match a local IIS/IIS Express host.',
+          description: 'Environment root for restartAos. Defaults to D365FO_UI_TEST_URL, then Infrastructure.HostUrl from the local AosService\\WebRoot\\web.config (none on UDE). Must uniquely match a local IIS/IIS Express host.',
         },
         wait: {
           type: 'boolean',
