@@ -269,7 +269,7 @@ export async function restartAosRuntime(
           host: description,
           replacementPid: restart.replacementPid,
           message:
-            'AOS restart attempted, but HTTP readiness returned an unexpected external redirect. It was not followed; investigate before UI tests.',
+            'AOS restart attempted, but HTTP readiness returned an unexpected external redirect. It was not followed; investigate before testing in the browser.',
         };
       }
       if (verified.verified && ((response.status >= 200 && response.status < 300) || authChallenge)) {
@@ -280,9 +280,9 @@ export async function restartAosRuntime(
           message:
             'AOS restarted; replacement host and HTTP readiness verified. ' +
             (authChallenge
-              ? 'The expected authentication challenge was received without following redirects; UI authentication is still required. '
+              ? 'The expected authentication challenge was received without following redirects; sign-in is still required in the browser. '
               : '') +
-            'UI object behavior still requires UI verification.',
+            'HTTP readiness does not prove the new objects behave as intended; check them in the browser.',
         };
       }
       lastReason = `HTTP ${response.status}; ${verified.verified ? 'replacement host verified' : verified.message || 'replacement host not verified'}`;
@@ -295,6 +295,6 @@ export async function restartAosRuntime(
     status: 'not-ready',
     host: description,
     replacementPid: restart.replacementPid,
-    message: `AOS restart attempted but readiness was not verified within 180 seconds: ${lastReason}. Do not start UI tests yet.`,
+    message: `AOS restart attempted but readiness was not verified within 180 seconds: ${lastReason}. Do not test in the browser yet.`,
   };
 }

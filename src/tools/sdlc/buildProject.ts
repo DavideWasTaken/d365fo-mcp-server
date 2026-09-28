@@ -246,7 +246,8 @@ interface QueueResult {
 interface BuildJobState {
   jobId?: string;
   restartWorkflow?: {
-    request: { aosUrl: string; bpCheck?: boolean; dbSync?: boolean | string[]; projectPath?: string; packagePath?: string };
+    // aosUrlSource: 'aosUrl' when passed, else the web.config the root was read from.
+    request: { aosUrl: string; aosUrlSource?: string; bpCheck?: boolean; dbSync?: boolean | string[]; projectPath?: string; packagePath?: string };
     stage: 'pending' | 'prerequisites' | 'restarting' | 'complete' | 'uncertain';
     bpSection?: string;
     sync?: { section: string; failed: boolean };
@@ -1272,8 +1273,19 @@ async function renderFinishedBuildResult(
   const allResults = finalState.queueResults ?? [];
   const workflow = finalState.restartWorkflow;
   const runtimeWarning = !!workflow && workflow.result?.status !== 'ready';
+  // What was restarted and why that root, in the result itself: the build log
+  // goes to the server's stderr, which the caller never sees.
+  const runtimeFacts = workflow?.result
+    ? [
+      `Environment root: ${workflow.request.aosUrl} (from ${workflow.request.aosUrlSource ?? 'aosUrl'})`,
+      ...(workflow.result.host
+        ? [`Host: ${workflow.result.host}${workflow.result.replacementPid ? ` -> PID ${workflow.result.replacementPid}` : ''}`]
+        : []),
+      `Status: ${workflow.result.status}`,
+    ].join('\n') + '\n'
+    : '';
   const runtimeSection = workflow
-    ? `\n\n--- AOS restart ---\n${runtimeWarning ? '⚠️ ' : ''}${workflow.result?.message ?? 'AOS restart was not attempted because the build failed.'}`
+    ? `\n\n--- AOS restart ---\n${runtimeFacts}${runtimeWarning ? '⚠️ ' : ''}${workflow.result?.message ?? 'AOS restart was not attempted because the build failed.'}`
     : '';
   const savedSections = (workflow?.bpSection ?? '') + (workflow?.sync?.section ?? '') + runtimeSection;
 
@@ -1981,6 +1993,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       ...(params.restartAos === true ? { restartWorkflow: {
         request: {
           aosUrl: aosUrl!,
+          aosUrlSource,
           bpCheck: params.bpCheck === true || params.bpCheck === 'true',
           dbSync: Array.isArray(params.dbSync) ? [...params.dbSync] : params.dbSync === true || params.dbSync === 'true',
           projectPath: params.projectPath,

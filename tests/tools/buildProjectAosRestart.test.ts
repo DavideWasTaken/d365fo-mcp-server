@@ -113,8 +113,14 @@ describe('optional AOS restart build workflow', () => {
   });
   it('takes the environment root from the local AOS web.config when aosUrl is omitted', async () => {
     m.files.set(webConfig, '<add key="Infrastructure.HostUrl" value="https://usnconeboxax1aos.cloud.onebox.dynamics.com" />');
+    m.restart.mockResolvedValue({ status: 'ready', host: 'iis-express AOSService/Dynamics365 PID 33604', replacementPid: 31520, message: 'AOS ready' });
     await buildProjectTool({ ...opts, aosUrl: undefined }, {}); await finish();
     expect(m.restart).toHaveBeenCalledWith('https://usnconeboxax1aos.cloud.onebox.dynamics.com/');
+    // The caller cannot see the server's log: the result says what was restarted, and why that root.
+    const text = (await buildProjectTool({ modelName: 'MyModel', wait: false }, {})).content[0].text;
+    expect(text).toContain(`Environment root: https://usnconeboxax1aos.cloud.onebox.dynamics.com/ (from ${webConfig})`);
+    expect(text).toContain('Host: iis-express AOSService/Dynamics365 PID 33604 -> PID 31520');
+    expect(text).toContain('Status: ready');
   });
   it('lets an explicit aosUrl win over the web.config', async () => {
     m.files.set(webConfig, '<add key="Infrastructure.HostUrl" value="https://other.example.test/" />');
