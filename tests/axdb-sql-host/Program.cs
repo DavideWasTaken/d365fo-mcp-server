@@ -78,6 +78,13 @@ internal static class Program
         Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("it-IT");
         try { Assert((string)AxDbSqlService.ExactValue((SqlDecimal)number.Value)! == largeDecimal, "decimal38 culture-independent output"); }
         finally { Thread.CurrentThread.CurrentCulture = culture; }
+        // sql_variant (DATABASEPROPERTYEX, COLLATIONPROPERTY) unwraps to its base type's usual shape.
+        Assert((string)AxDbSqlService.VariantValue(new SqlString("SQL_Latin1_General_CP1_CI_AS"))! == "SQL_Latin1_General_CP1_CI_AS", "sql_variant text");
+        Assert((int)AxDbSqlService.VariantValue(new SqlInt32(1252))! == 1252, "sql_variant int");
+        Assert((string)AxDbSqlService.VariantValue(new SqlInt64(long.MaxValue))! == "9223372036854775807", "sql_variant bigint exact");
+        Assert((string)AxDbSqlService.VariantValue((SqlDecimal)number.Value)! == largeDecimal, "sql_variant decimal38 exact");
+        Assert((string)AxDbSqlService.VariantValue(new SqlBinary(new byte[] { 0, 255 }))! == "AP8=", "sql_variant binary");
+        Assert(AxDbSqlService.VariantValue(SqlString.Null) == null && AxDbSqlService.VariantValue(SqlInt32.Null) == null, "sql_variant NULL base value");
         Reject(() => Parameter("{\"name\":\"n\",\"type\":\"decimal\",\"precision\":4,\"scale\":1,\"value\":\"1.25\"}").ToSqlParameter(), "decimal rounding rejected");
         Reject(() => Parameter("{\"name\":\"n\",\"type\":\"nvarchar\",\"size\":2,\"value\":\"abc\"}").ToSqlParameter(), "nvarchar truncation rejected");
         Reject(() => Parameter("{\"name\":\"n\",\"type\":\"bigint\",\"value\":9007199254740993}").ToSqlParameter(), "numeric bigint rejected");

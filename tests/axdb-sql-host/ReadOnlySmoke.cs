@@ -39,6 +39,12 @@ internal static class ReadOnlySmoke
         if (Query(service, "SELECT CAST(N'unused' AS nvarchar(20)) AS value WHERE 1=0").Count != 0) throw new Exception("Empty query returned data");
         var exact = Query(service, "SELECT CAST(9223372036854775807 AS bigint) AS id, CAST(123456789012345678901234567890.12345678 AS decimal(38,8)) AS amount").Single();
         Equal(exact["id"], "9223372036854775807"); Equal(exact["amount"], "123456789012345678901234567890.12345678");
+        var variant = Query(service, "SELECT 7 AS beforeValue, DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS collation, COLLATIONPROPERTY('Latin1_General_100_CI_AS', 'CodePage') AS codePage, " +
+            "CAST(CAST(123456789012345678901234567890.12345678 AS decimal(38,8)) AS sql_variant) AS amount, CAST(CAST(9223372036854775807 AS bigint) AS sql_variant) AS id, CAST(NULL AS sql_variant) AS missing, 8 AS afterValue").Single();
+        if (string.IsNullOrWhiteSpace(variant["collation"] as string)) throw new Exception("DATABASEPROPERTYEX did not return the collation as text");
+        Equal(variant["codePage"], 1252); Equal(variant["amount"], "123456789012345678901234567890.12345678"); Equal(variant["id"], "9223372036854775807");
+        Equal(variant["missing"], null); Equal(variant["beforeValue"], 7); Equal(variant["afterValue"], 8);
+        Console.WriteLine("PASS: real SQL sql_variant from DATABASEPROPERTYEX/COLLATIONPROPERTY, exact decimal38/bigint inside a variant, NULL variant");
         var text = string.Concat(Enumerable.Repeat("à界😀", 3000));
         var parameters = new[] { new { name = "text", type = "nvarchar", size = -1, value = text } };
         var longResult = Call(service, "query", new { sql = "SELECT @text AS value, CONVERT(varbinary(max),@text) AS bytes, 9 AS afterValue", parameters });

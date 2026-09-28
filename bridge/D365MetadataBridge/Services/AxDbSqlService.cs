@@ -334,8 +334,34 @@ WHERE (@schema='' AND o.object_id=OBJECT_ID(QUOTENAME(@table))) OR (s.name=@sche
                     }
                 }
             }
+            // DATABASEPROPERTYEX, COLLATIONPROPERTY and SERVERPROPERTY return sql_variant; the value
+            // inside has a concrete base type. The provider-specific value keeps it exact (SqlDecimal
+            // holds decimal(38,s), which GetValue would overflow into a CLR decimal).
+            if (type == "sql_variant") return VariantValue(reader.GetProviderSpecificValue(ordinal));
             if (!ScalarTypes.Contains(type)) throw new ArgumentException("Unsupported SQL result type: " + type + "; explicitly convert it to a supported scalar type.");
             return ExactValue(reader.GetValue(ordinal));
+        }
+
+        internal static object? VariantValue(object value)
+        {
+            switch (value)
+            {
+                case INullable nullable when nullable.IsNull: return null;
+                case SqlString text: return text.Value;
+                case SqlInt64 number: return ExactValue(number.Value);
+                case SqlInt32 number: return number.Value;
+                case SqlInt16 number: return number.Value;
+                case SqlByte number: return number.Value;
+                case SqlBoolean flag: return flag.Value;
+                case SqlDouble floating: return ExactValue(floating.Value);
+                case SqlSingle floating: return ExactValue(floating.Value);
+                case SqlMoney money: return ExactValue(money.Value);
+                case SqlDateTime time: return ExactValue(time.Value);
+                case SqlGuid guid: return ExactValue(guid.Value);
+                case SqlBinary binary: return ExactValue(binary.Value);
+                // SqlDecimal, and the types SqlClient returns unwrapped (datetime2/date/time/datetimeoffset).
+                default: return ExactValue(value);
+            }
         }
 
         private static readonly HashSet<string> ScalarTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
