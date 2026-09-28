@@ -7,8 +7,13 @@
  * available" forever, and the suggested `d365fo-mcp update` — a `git pull` —
  * could never clear the warning.
  */
-import { describe, it, expect } from 'vitest';
-import { checkCheckoutFreshness } from '../../src/cli/commands/doctor.js';
+import * as fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, it, expect } from 'vitest';
+import { checkCheckoutFreshness, checkSqlSwitch } from '../../src/cli/commands/doctor.js';
+import { openStore, writeSetting } from '../../src/cli/settingsStore.js';
+import { settingByPath } from '../../src/config/settings.js';
 import { cliCommand } from '../../src/cli/context.js';
 
 describe('doctor — checkout freshness', () => {
@@ -45,5 +50,28 @@ describe('doctor — checkout freshness', () => {
 
     expect(result.severity).toBe('info');
     expect(result.fix).toBeUndefined();
+  });
+});
+
+describe('doctor — SQL switch', () => {
+  const tmp = fs.mkdtempSync(join(tmpdir(), 'doctor-sql-'));
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('warns when a server is configured but SQL is not enabled', () => {
+    // A hand-edited config: the tool is then silently not published.
+    const store = openStore(tmp, null);
+    writeSetting(store, settingByPath('sql.server')!, '.');
+    const result = checkSqlSwitch(store, 'Root');
+    expect(result?.severity).toBe('warn');
+    expect(result?.message).toContain('axdb_sql is not published');
+    expect(result?.fix).toContain('config sql');
+  });
+
+  it('is quiet when SQL is enabled, or when no server is set', () => {
+    const store = openStore(tmp, null);
+    expect(checkSqlSwitch(store, 'Root')).toBeNull();
+    writeSetting(store, settingByPath('sql.server')!, '.');
+    writeSetting(store, settingByPath('sql.enabled')!, true);
+    expect(checkSqlSwitch(store, 'Root')).toBeNull();
   });
 });

@@ -517,6 +517,24 @@ export function checkCheckoutFreshness(version: string, status: BranchStatus | n
 }
 
 /**
+ * A SQL server configured while SQL itself stays off.
+ *
+ * The runtime publishes axdb_sql only when sql.enabled is true AND a server is
+ * set. The wizard writes both together, but a config edited by hand can carry
+ * the server alone — and then the tool is simply absent, with nothing saying why.
+ */
+export function checkSqlSwitch(store: SettingsStore, label: string): CheckResult | null {
+  const server = readSetting(store, settingByPath('sql.server')!);
+  const enabled = readSetting(store, settingByPath('sql.enabled')!);
+  if (typeof server !== 'string' || !server.trim() || enabled === true) return null;
+  return {
+    severity: 'warn',
+    message: `${label}: sql.server is set (${server}) but sql.enabled is not true — axdb_sql is not published`,
+    fix: `set sql.enabled to true in ${store.configPath}, or: ${cliCommand('config sql')}`,
+  };
+}
+
+/**
  * A built bridge, and whether it was compiled from the sources now on disk.
  *
  * `git pull` or an npm update moves the sources without touching the binary,
@@ -619,6 +637,8 @@ export async function doctorCommand(): Promise<void> {
   for (const r of checkPackagesRoot(root.store, 'Root')) emit(r);
   for (const r of checkPathSetting(root.store, 'Root', 'environment.customPackagesPath')) emit(r);
   for (const r of checkPathSetting(root.store, 'Root', 'environment.microsoftPackagesPath')) emit(r);
+  const rootSql = checkSqlSwitch(root.store, 'Root');
+  if (rootSql) emit(rootSql);
 
   // Database (root)
   emit(checkDb(root.store, paths.defaultDb, 'Root'));
@@ -678,6 +698,8 @@ export async function doctorCommand(): Promise<void> {
       for (const r of checkPackagesRoot(target.store, `Instance '${inst.name}'`)) emit(r);
       for (const r of checkPathSetting(target.store, `Instance '${inst.name}'`, 'environment.customPackagesPath')) emit(r);
       for (const r of checkPathSetting(target.store, `Instance '${inst.name}'`, 'environment.microsoftPackagesPath')) emit(r);
+      const instanceSql = checkSqlSwitch(target.store, `Instance '${inst.name}'`);
+      if (instanceSql) emit(instanceSql);
       emit(checkDb(target.store, resolve(inst.dir, 'data', 'xpp-metadata.db'), `Instance '${inst.name}'`));
       if (isWindows && isXppConfigStale(target.store)) {
         emit({
