@@ -22,7 +22,7 @@ import { join, resolve } from 'node:path';
 import { settingByPath } from '../../config/settings.js';
 import { findPackagesRoot } from '../../utils/packagesRoot.js';
 import { commandExists, runExe } from '../exec.js';
-import { paths } from '../context.js';
+import { cliCommand, paths } from '../context.js';
 import { readPath, readSetting, saveStore, writeSetting } from '../settingsStore.js';
 import { Target } from '../target.js';
 import { p } from '../ui.js';
@@ -246,7 +246,7 @@ async function refreshCatalog(target: Target, deps: BpCatalogDeps): Promise<void
   const source = resolveSource(target);
   if (!source) {
     p.log.warn(isUdeTarget(target.store)
-      ? `BP catalog: could not resolve ${target.label}'s own D365FO install (its XPP config is missing or unreadable) — skipped rather than extracting from another install on this box. \`d365fo-mcp instance upgrade\` repoints a pin left behind by a UDE upgrade.`
+      ? `BP catalog: could not resolve ${target.label}'s own D365FO install (its XPP config is missing or unreadable) — skipped rather than extracting from another install on this box. \`${cliCommand('instance upgrade')}\` repoints a pin left behind by a UDE upgrade.`
       : `BP catalog: could not resolve a packages path for ${target.label} — skipped.`);
     return;
   }

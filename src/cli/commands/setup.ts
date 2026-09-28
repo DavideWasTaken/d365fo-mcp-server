@@ -11,7 +11,7 @@
  */
 import * as fs from 'node:fs';
 import { relative, resolve } from 'node:path';
-import { DOTNET_MISSING, dataRoot, installMode, isWindows, paths, repoRoot, setDataRoot } from '../context.js';
+import { DOTNET_MISSING, cliCommand, dataRoot, installMode, isWindows, paths, repoRoot, setDataRoot } from '../context.js';
 import type { SectionId } from '../../config/settings.js';
 import { settingByPath, settingsInSection } from '../../config/settings.js';
 import { commandExists, runExe, runShell } from '../exec.js';
@@ -242,7 +242,7 @@ async function configureIndex(store: SettingsStore): Promise<void> {
 
 async function maybeBuildIndex(): Promise<boolean> {
   if (!await askConfirm('Build the metadata index now? (custom: minutes, full: 1-2 h)')) {
-    p.log.warn('Skipped — run `d365fo-mcp index` before first use.');
+    p.log.warn(`Skipped — run \`${cliCommand('index')}\` before first use.`);
     return true;
   }
   return rebuildIndex(rootTarget());
@@ -254,7 +254,7 @@ function savedNote(store: SettingsStore): void {
   if (fs.existsSync(store.secretsPath)) {
     lines.push(`Secrets written to ${relative(dataRoot(), store.secretsPath)} (git-ignored, owner-only)`);
   }
-  lines.push('', 'Edit it by re-running `d365fo-mcp setup` or by hand — it is plain JSON.');
+  lines.push('', `Edit it by re-running \`${cliCommand('setup')}\` or by hand — it is plain JSON.`);
   p.note(lines.join('\n'), 'Configuration');
 }
 
@@ -272,7 +272,7 @@ export async function setupCommand(): Promise<void> {
     if (branch && branch.behind > 0) {
       p.log.warn(
         `${branch.branch} is ${branch.behind} commit${branch.behind === 1 ? '' : 's'} behind ${branch.upstream} as of the last fetch.\n` +
-        '   Updating first avoids rebuilding the index twice: d365fo-mcp update',
+        `   Updating first avoids rebuilding the index twice: ${cliCommand('update')}`,
       );
     }
   } else {

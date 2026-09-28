@@ -211,7 +211,21 @@ export const paths = {
 export const DOTNET_MISSING =
   'The .NET SDK is not on PATH, so the C# bridge cannot be built — the server will run read-only.\n' +
   '   Install it from https://dotnet.microsoft.com/download (the SDK, not just the runtime),\n' +
-  '   then run `d365fo-mcp setup` again. Reads and search work without it.';
+  `   then run \`${cliCommand('setup')}\` again. Reads and search work without it.`;
+
+/**
+ * How to run a management command on this installation.
+ *
+ * A checkout has no `d365fo-mcp` on PATH of its own. The one there, if any, is
+ * a global npm install — upstream's CLI, which manages a different data
+ * directory and would update that instead of this checkout. So a checkout names
+ * its own entry point, run from the checkout.
+ */
+export function cliCommand(args: string): string {
+  return installMode === 'git'
+    ? `cd "${repoRoot}" && npx tsx src/cli/index.ts ${args}`
+    : `d365fo-mcp ${args}`;
+}
 
 export function bridgeBuildCommand(): string {
   const out = paths.bridgeOutDir ? ` -o "${paths.bridgeOutDir}"` : '';

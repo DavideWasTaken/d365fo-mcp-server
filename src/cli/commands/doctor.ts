@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { p } from '../ui.js';
 import { settingByPath } from '../../config/settings.js';
-import { bridgeBuildCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
+import { bridgeBuildCommand, cliCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { commandExists } from '../exec.js';
 import { isLegacyInstanceLayout, listInstances, type Instance } from '../instances.js';
 import { branchStatus, type BranchStatus } from '../gitState.js';
@@ -54,7 +54,7 @@ function checkDb(store: SettingsStore, defaultDb: string, label: string): CheckR
     return {
       severity: 'warn',
       message: `${label}: database not found (${dbPath})`,
-      fix: 'd365fo-mcp index — not needed for hybrid/azure-client setups',
+      fix: `${cliCommand('index')} — not needed for hybrid/azure-client setups`,
     };
   }
   const size = fs.statSync(dbPath).size;
@@ -63,7 +63,7 @@ function checkDb(store: SettingsStore, defaultDb: string, label: string): CheckR
     return {
       severity: 'warn',
       message: `${label}: database is only ${mb} MB — index looks incomplete`,
-      fix: 'd365fo-mcp index',
+      fix: cliCommand('index'),
     };
   }
   return { severity: 'ok', message: `${label}: database OK (${mb} MB)` };
@@ -453,7 +453,7 @@ function layoutChecks(inst: Instance): CheckResult[] {
   return [{
     severity: 'warn',
     message: `Instance '${inst.name}': config is in the old layout (${inst.configFile}) — the docs all say ${target}`,
-    fix: `d365fo-mcp instance upgrade ${inst.name} moves it, or move d365fo-mcp.json and secrets.json up one level by hand`,
+    fix: `${cliCommand(`instance upgrade ${inst.name}`)} moves it, or move d365fo-mcp.json and secrets.json up one level by hand`,
   }];
 }
 
@@ -506,7 +506,7 @@ export function checkCheckoutFreshness(version: string, status: BranchStatus | n
     return {
       severity: 'warn',
       message: `d365fo-mcp ${version} (git checkout) — ${status.branch} is ${status.behind} commit${status.behind === 1 ? '' : 's'} behind ${status.upstream} as of the last fetch`,
-      fix: 'd365fo-mcp update',
+      fix: cliCommand('update'),
     };
   }
   return {
@@ -626,7 +626,7 @@ export async function doctorCommand(): Promise<void> {
       // Naming the real prerequisite beats printing a build command that
       // cannot run. Only checked when the bridge is missing — a built bridge
       // needs no SDK, and asking would be noise on every healthy install.
-      emit({ severity: 'warn', message: 'C# bridge not built and no .NET SDK to build it — server runs read-only', fix: 'install the .NET SDK from https://dotnet.microsoft.com/download, then: d365fo-mcp setup' });
+      emit({ severity: 'warn', message: 'C# bridge not built and no .NET SDK to build it — server runs read-only', fix: `install the .NET SDK from https://dotnet.microsoft.com/download, then: ${SETUP_COMMAND}` });
     }
     const dir = xppConfigDir();
     const configs = listXppConfigs();
@@ -656,7 +656,7 @@ export async function doctorCommand(): Promise<void> {
         emit({
           severity: 'warn',
           message: `Instance '${inst.name}': XPP_CONFIG_NAME no longer resolves — UDE upgraded since configuration`,
-          fix: `d365fo-mcp instance upgrade ${inst.name}`,
+          fix: cliCommand(`instance upgrade ${inst.name}`),
         });
       }
     }

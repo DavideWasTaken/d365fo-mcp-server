@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { checkCheckoutFreshness } from '../../src/cli/commands/doctor.js';
+import { cliCommand } from '../../src/cli/context.js';
 
 describe('doctor — checkout freshness', () => {
   it('is ok when the branch has nothing new upstream, whatever package.json says', () => {
@@ -26,7 +27,10 @@ describe('doctor — checkout freshness', () => {
     expect(result.severity).toBe('warn');
     expect(result.message).toContain('3 commits behind origin/main');
     expect(result.message).toContain('as of the last fetch');
-    expect(result.fix).toBe('d365fo-mcp update');
+    // The checkout's own entry point: a `d365fo-mcp` on PATH is either absent or
+    // upstream's npm CLI, which would update a different installation.
+    expect(result.fix).toBe(cliCommand('update'));
+    expect(result.fix).toContain('npx tsx src/cli/index.ts update');
   });
 
   it('uses the singular for one commit', () => {
