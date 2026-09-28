@@ -32,6 +32,21 @@ describe('bridgeAction', () => {
     expect(bridgeAction(true, false)).toBe('required');
   });
 
+  it('flags a surviving bridge as stale when the update changed its sources', () => {
+    // The checkout case the two-input version missed: `git pull` leaves the
+    // binary in place, so it read "optional" even when the pull brought C#
+    // fixes the old binary does not have.
+    expect(bridgeAction(true, true, true)).toBe('stale');
+  });
+
+  it('keeps a removed bridge required whether or not its sources moved', () => {
+    expect(bridgeAction(true, false, true)).toBe('required');
+  });
+
+  it('does not ask for a bridge that was never built, even when its sources moved', () => {
+    expect(bridgeAction(false, false, true)).toBe('none');
+  });
+
   it('does not invent work when a bridge appears from nowhere', () => {
     // Not reachable through the update flow, but the answer should still be
     // "leave it alone" rather than a rebuild prompt for something untouched.

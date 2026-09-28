@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import { DOTNET_MISSING, bridgeBuildCommand, installMode, isWindows, paths } from '../context.js';
 import { commandExists, runExe, runShell } from '../exec.js';
+import { branchStatus, changedFiles, gitHead } from '../gitState.js';
 import { listInstances } from '../instances.js';
 import { checkRelease } from '../npmRegistry.js';
 import { instanceTarget, rootTarget } from '../target.js';
@@ -23,35 +24,55 @@ import { rebuildIndex } from './indexCmd.js';
  * bridge the update destroyed is indistinguishable from one that was never
  * built, and the difference is whether the server just lost its write path.
  *
+ * A checkout adds a third input. `git pull` never deletes the binary, so for
+ * a checkout the two above always read "optional" — even when the pull
+ * brought C# fixes, which the old binary then silently goes on without.
+ * `sourcesChanged` is whether the pull touched the bridge sources.
+ *
  *   none     — there was no bridge, so this install does not use writes
- *   optional — the bridge survived; rebuilding is a post-upgrade nicety
+ *   optional — the bridge survived and its sources did not move; rebuilding
+ *              is a post-upgrade nicety
+ *   stale    — the bridge survived, but the update changed its sources, so
+ *              the binary predates them until it is rebuilt
  *   required — the update removed a bridge that was there, so the write path
  *              is gone until it is rebuilt
  */
-export type BridgeAction = 'none' | 'optional' | 'required';
+export type BridgeAction = 'none' | 'optional' | 'stale' | 'required';
 
-export function bridgeAction(hadBridge: boolean, existsNow: boolean): BridgeAction {
+export function bridgeAction(hadBridge: boolean, existsNow: boolean, sourcesChanged = false): BridgeAction {
   if (!hadBridge) return 'none';
-  return existsNow ? 'optional' : 'required';
+  if (!existsNow) return 'required';
+  return sourcesChanged ? 'stale' : 'optional';
 }
+
+/** The bridge project, as a pathspec relative to the repository root. */
+const BRIDGE_SOURCES = 'bridge/D365MetadataBridge';
 
 export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
   p.intro('d365fo-mcp update');
   if (!requireFullInstall()) return;
 
   // Say up front what the update is moving towards. A checkout tracks a branch
-  // rather than the registry, so there the comparison is informational only —
-  // being "ahead" of the latest release is the normal state on main.
-  const release = await checkRelease();
-  if (release.latest === null) {
-    p.log.warn(`Running ${release.current} — npm registry unreachable, so this update runs blind.`);
-  } else if (release.behind) {
-    p.log.step(`Running ${release.current}; latest published release is ${release.latest}.`);
+  // rather than the registry, and its package.json is only bumped when a
+  // release is published — so a registry comparison would call a checkout that
+  // already contains the latest release outdated. It names the branch instead.
+  if (installMode === 'git') {
+    const branch = branchStatus();
+    p.log.step(branch
+      ? `Git checkout of ${branch.branch} — pulling from ${branch.upstream}.`
+      : 'Git checkout — pulling from the branch it tracks.');
   } else {
-    p.log.success(`Running ${release.current} — already the latest published release.`);
-    if (installMode === 'npm' && !opts.yes && !await askConfirm('Reinstall anyway?', false)) {
-      p.outro('Nothing to update.');
-      return;
+    const release = await checkRelease();
+    if (release.latest === null) {
+      p.log.warn(`Running ${release.current} — npm registry unreachable, so this update runs blind.`);
+    } else if (release.behind) {
+      p.log.step(`Running ${release.current}; latest published release is ${release.latest}.`);
+    } else {
+      p.log.success(`Running ${release.current} — already the latest published release.`);
+      if (!opts.yes && !await askConfirm('Reinstall anyway?', false)) {
+        p.outro('Nothing to update.');
+        return;
+      }
     }
   }
 
@@ -61,6 +82,8 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
   // update destroyed the write path, and saying so beats reading the absence
   // as "this install never needed writes" and silently moving on.
   const hadBridge = isWindows && fs.existsSync(paths.bridgeExe);
+  // Also before: what the pull moved is the diff from here to the new HEAD.
+  const headBefore = installMode === 'git' ? gitHead() : null;
 
   const steps: [string, () => Promise<number>][] = installMode === 'npm'
     ? [['npm install -g d365fo-mcp@latest', () => runShell('npm install -g d365fo-mcp@latest')]]
@@ -78,14 +101,27 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
     }
   }
 
-  const action = bridgeAction(hadBridge, fs.existsSync(paths.bridgeExe));
+  // null when the diff cannot be computed: then nothing is known to have
+  // changed, and the rebuild stays the optional one it always was.
+  const changedSources = headBefore ? changedFiles(headBefore, 'HEAD', BRIDGE_SOURCES) ?? [] : [];
+  const action = bridgeAction(hadBridge, fs.existsSync(paths.bridgeExe), changedSources.length > 0);
   if (action !== 'none') {
     const gone = action === 'required';
+    const stale = action === 'stale';
     if (gone) p.log.warn('The update replaced the package, so the C# bridge binary is gone — writes stay unavailable until it is rebuilt.');
+    if (stale) {
+      p.log.warn(
+        `git pull changed ${changedSources.length} C# bridge file${changedSources.length === 1 ? '' : 's'} — ` +
+        'the built bridge predates them, so those changes are not in effect until it is rebuilt.\n' +
+        '   Stop MCP first: a running server keeps the binary locked.',
+      );
+    }
     const rebuild = opts.yes || await askConfirm(
       gone
         ? 'Rebuild the C# bridge now? (required to restore writes)'
-        : 'Rebuild the C# bridge (recommended after a D365FO version upgrade)?',
+        : stale
+          ? 'Rebuild the C# bridge now? (required for the pulled bridge changes)'
+          : 'Rebuild the C# bridge (recommended after a D365FO version upgrade)?',
     );
     if (rebuild && !await commandExists('dotnet')) {
       p.log.warn(DOTNET_MISSING);
@@ -97,7 +133,9 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
       if (await runExe('dotnet', buildArgs, { cwd: paths.bridgeDir }) !== 0) {
         p.log.error(gone
           ? 'Bridge build failed — the server stays read-only until it succeeds.'
-          : 'Bridge build failed — writes may use the previous bridge binary.');
+          : stale
+            ? 'Bridge build failed — MCP keeps running the previous bridge binary, without the pulled changes.'
+            : 'Bridge build failed — writes may use the previous bridge binary.');
         process.exitCode = 1;
         return;
       }
@@ -106,6 +144,8 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
       // Declining is allowed, but it must not be quiet: the capability was
       // there before this command ran and is not there now.
       p.log.warn(`Skipped — the server runs read-only. Rebuild later with:\n   ${bridgeBuildCommand()}`);
+    } else if (stale) {
+      p.log.warn(`Skipped — MCP keeps running the previous bridge binary, without the pulled changes. Rebuild later with:\n   ${bridgeBuildCommand()}`);
     }
   }
 
