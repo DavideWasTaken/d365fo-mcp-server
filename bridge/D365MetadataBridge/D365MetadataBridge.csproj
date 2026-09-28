@@ -127,6 +127,73 @@
   </Target>
 
   <!--
+    Record WHICH sources this binary was compiled from, next to the binary.
+
+    `git pull` (or an npm update) can move the bridge sources without touching
+    the deployed exe, and nothing else says the exe is now older than its code:
+    `update` and `doctor` compare this stamp with the sources on disk. Written by
+    the build itself so every way of building — a hand-run `dotnet build`, setup,
+    update — leaves one. The hash is the one scripts/bridgeAttest.mjs computes
+    (same files, same order, CRLF normalised), so a stamp can be read against the
+    attestation too. Runs only after a successful build: a failed build keeps the
+    previous binary and so, correctly, the previous stamp.
+  -->
+  <Target Name="WriteBridgeSourceStamp" AfterTargets="Build">
+    <WriteBridgeSourceStamp ProjectDir="$(MSBuildProjectDirectory)"
+                            RepoRoot="$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..'))"
+                            OutputFile="$(OutDir)D365MetadataBridge.sources.json" />
+    <ItemGroup>
+      <FileWrites Include="$(OutDir)D365MetadataBridge.sources.json" />
+    </ItemGroup>
+  </Target>
+
+  <UsingTask TaskName="WriteBridgeSourceStamp" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <ProjectDir ParameterType="System.String" Required="true" />
+      <RepoRoot ParameterType="System.String" Required="true" />
+      <OutputFile ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+        var files = new System.Collections.Generic.List<string>();
+        var pending = new System.Collections.Generic.Stack<string>();
+        pending.Push(System.IO.Path.GetFullPath(ProjectDir).TrimEnd('\\', '/'));
+        while (pending.Count > 0)
+        {
+            var dir = pending.Pop();
+            foreach (var sub in System.IO.Directory.GetDirectories(dir))
+            {
+                var name = System.IO.Path.GetFileName(sub);
+                if (name != "obj" && name != "bin") pending.Push(sub);
+            }
+            foreach (var file in System.IO.Directory.GetFiles(dir))
+                if (file.EndsWith(".cs", System.StringComparison.Ordinal) || file.EndsWith(".csproj", System.StringComparison.Ordinal)) files.Add(file);
+        }
+        files.Sort(System.StringComparer.Ordinal);
+        var root = System.IO.Path.GetFullPath(RepoRoot).TrimEnd('\\', '/');
+        var manifest = new System.Text.StringBuilder();
+        using (var sha = System.Security.Cryptography.SHA256.Create())
+        {
+            foreach (var file in files)
+            {
+                var rel = file.Substring(root.Length).TrimStart('\\', '/').Replace('\\', '/');
+                var content = new System.Text.UTF8Encoding(false).GetString(System.IO.File.ReadAllBytes(file)).Replace("\r\n", "\n");
+                var fileHash = System.BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(content))).Replace("-", "").ToLowerInvariant();
+                manifest.Append(rel).Append(':').Append(fileHash).Append('\n');
+            }
+            var hash = System.BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(manifest.ToString()))).Replace("-", "").ToLowerInvariant();
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(OutputFile)));
+            System.IO.File.WriteAllText(OutputFile,
+                "{\n  \"sourceHash\": \"" + hash + "\",\n  \"sourceFileCount\": " + files.Count + ",\n  \"builtAt\": \"" + System.DateTime.UtcNow.ToString("o") + "\"\n}\n");
+        }
+        ]]>
+      </Code>
+    </Task>
+  </UsingTask>
+
+  <!--
     MSBuild has no built-in task for reading a file's FileVersion (GetAssemblyIdentity
     returns the assembly version — 7.0.0.0 for every platform build, which is exactly
     the value that cannot distinguish them).

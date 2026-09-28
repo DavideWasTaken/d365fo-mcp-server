@@ -128,7 +128,7 @@ dotnet build bridge/D365MetadataBridge -c Release
 npx playwright install chromium
 ```
 
-Restart MCP after updating. Existing configuration is retained; use `npx tsx src/cli/index.ts config sql` when you want to enable or change SQL. Building the bridge and validating live AxDB access must be done on your developer VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
+Restart MCP after updating. Every bridge build writes `D365MetadataBridge.sources.json` next to the binary, so `npx tsx src/cli/index.ts doctor` and `update` report a bridge that is older than its sources — including after a hand-run `git pull` — and `update` then requires the rebuild. Existing configuration is retained; use `npx tsx src/cli/index.ts config sql` when you want to enable or change SQL. Building the bridge and validating live AxDB access must be done on your developer VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
 
 ### Migrate from an upstream npm installation
 

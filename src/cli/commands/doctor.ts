@@ -10,6 +10,7 @@ import { relative, resolve } from 'node:path';
 import { p } from '../ui.js';
 import { settingByPath } from '../../config/settings.js';
 import { bridgeBuildCommand, cliCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
+import { bridgeFreshness, type BridgeFreshness } from '../bridgeSources.js';
 import { commandExists } from '../exec.js';
 import { isLegacyInstanceLayout, listInstances, type Instance } from '../instances.js';
 import { branchStatus, type BranchStatus } from '../gitState.js';
@@ -516,6 +517,32 @@ export function checkCheckoutFreshness(version: string, status: BranchStatus | n
 }
 
 /**
+ * A built bridge, and whether it was compiled from the sources now on disk.
+ *
+ * `git pull` or an npm update moves the sources without touching the binary,
+ * and a server running the older binary works — just without the C# changes.
+ * The build writes a stamp of its sources next to the binary; see
+ * bridgeSources.ts. A bridge built before stamping existed cannot be judged,
+ * and saying so beats calling it current.
+ */
+export function checkBridgeFreshness(exePath: string, freshness: BridgeFreshness, rebuild: string): CheckResult {
+  if (freshness === 'stale') {
+    return {
+      severity: 'warn',
+      message: `C# bridge built from older sources (${exePath}) — the bridge changes since then are not in effect`,
+      fix: `stop MCP, then: ${rebuild}`,
+    };
+  }
+  if (freshness === 'unknown') {
+    return {
+      severity: 'ok',
+      message: `C# bridge built (${exePath}) — no source stamp, so whether it matches the sources is unknown; rebuilding once records it`,
+    };
+  }
+  return { severity: 'ok', message: `C# bridge built (${exePath}) and matches its sources` };
+}
+
+/**
  * Whether this copy is the latest published release.
  *
  * Never a hard failure: an old copy still works, and a VM with no route to the
@@ -617,7 +644,7 @@ export async function doctorCommand(): Promise<void> {
   // C# bridge: the only write path; Windows-only.
   if (isWindows) {
     if (fs.existsSync(paths.bridgeExe)) {
-      emit({ severity: 'ok', message: `C# bridge built (${paths.bridgeExe})` });
+      emit(checkBridgeFreshness(paths.bridgeExe, bridgeFreshness(), bridgeBuildCommand()));
     } else if (await commandExists('dotnet')) {
       // Absolute path: outside a checkout the user is nowhere near the bridge,
       // and a relative `cd bridge\...` would just fail.
