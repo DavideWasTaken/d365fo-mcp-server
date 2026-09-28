@@ -55,6 +55,53 @@ it('prefills the saved UI URL and validates it in the normal text prompt', async
   expect(readSetting(target, setting)).toBe('https://existing.example');
 });
 
+describe('askSetting — detected suggestions', () => {
+  it('offers a detected value over the documented default, but never over a stored one', async () => {
+    // sql.database defaults to AxDB; a VM whose web.config names another
+    // database should be offered that one.
+    const setting = settingByPath('sql.database')!;
+    const fresh = store();
+    text.mockImplementationOnce(async (opts: any) => {
+      expect(opts.initialValue).toBe('AxDB_Other');
+      return opts.initialValue;
+    });
+    await askSetting(fresh, setting, { initial: 'AxDB_Other' });
+
+    const configured = store();
+    writeSetting(configured, setting, 'Chosen');
+    text.mockImplementationOnce(async (opts: any) => {
+      expect(opts.initialValue).toBe('Chosen');
+      return opts.initialValue;
+    });
+    await askSetting(configured, setting, { initial: 'AxDB_Other' });
+  });
+
+  it('falls back to the default when nothing is detected', async () => {
+    text.mockImplementationOnce(async (opts: any) => {
+      expect(opts.initialValue).toBe('AxDB');
+      return opts.initialValue;
+    });
+    await askSetting(store(), settingByPath('sql.database')!);
+  });
+
+  it('pre-answers a yes/no question with the suggestion unless an answer is stored', async () => {
+    const setting = settingByPath('sql.trustServerCertificate')!; // default false
+    confirm.mockImplementationOnce(async (opts: any) => {
+      expect(opts.initialValue).toBe(true);
+      return opts.initialValue;
+    });
+    await askSetting(store(), setting, { initial: 'true' });
+
+    const configured = store();
+    writeSetting(configured, setting, false);
+    confirm.mockImplementationOnce(async (opts: any) => {
+      expect(opts.initialValue).toBe(false);
+      return opts.initialValue;
+    });
+    await askSetting(configured, setting, { initial: 'true' });
+  });
+});
+
 describe('askAdvanced', () => {
   it('asks nothing when the gate is declined', async () => {
     confirm.mockResolvedValueOnce(false);

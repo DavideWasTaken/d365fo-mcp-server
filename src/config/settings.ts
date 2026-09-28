@@ -158,7 +158,7 @@ export const SETTINGS: Setting[] = [
     path: 'environment.uiBrowserChannel',
     env: 'D365FO_UI_BROWSER_CHANNEL',
     section: 'environment',
-    tier: 'basic',
+    tier: 'advanced',
     type: 'enum',
     label: 'Browser for UI tests',
     description: 'Auto prefers Playwright Chromium and tries installed Microsoft Edge if Chromium cannot launch. Explicit Chromium or Edge never switches browsers. Applies to normal setup; explicit UI profiles keep their own browser choice.',

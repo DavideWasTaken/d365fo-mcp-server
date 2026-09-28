@@ -4,7 +4,7 @@ This fork adds `axdb_sql` for **live database debugging, persisted-data checks a
 
 ## Configure only if needed
 
-The normal `npm run setup` wizard and instance setup ask for a SQL server. **Leave it empty to disable SQL and skip all remaining SQL questions.** The disabled tool is not advertised to the agent and does not connect to a database. Revisit just this feature with:
+The normal `npm run setup` wizard and instance setup ask for a SQL server after the environment type. **Leave it empty to disable SQL and skip all remaining SQL questions.** On a classic AOSService VM the wizard first reads the AOS's own `DataAccess.DbServer` and `DataAccess.Database` from `AosService\WebRoot\web.config` and asks whether to enable SQL on them — answering no (the default) disables SQL; yes pre-fills both answers. On UDE there is no local AxDB reachable with Windows authentication, so setup does not ask; `config sql` still can. The disabled tool is not advertised to the agent and does not connect to a database. Revisit just this feature with:
 
 ```powershell
 npx tsx src/cli/index.ts config sql
@@ -14,10 +14,10 @@ For an installed CLI use `d365fo-mcp config sql`. The command also supports sele
 
 The guided steps are:
 
-1. Server or named instance, such as `localhost` or `localhost\DEV`. No server is assumed if blank.
-2. Database, normally `AxDB` on a developer VM.
+1. Server or named instance, such as `localhost` or `localhost\DEV` (offered from web.config when found). No server is assumed if blank.
+2. Database, normally `AxDB` on a developer VM (offered from web.config when found).
 3. Whether to allow `INSERT`, `UPDATE` and `DELETE` in this database.
-4. Whether to trust the local SQL Server certificate (for developer self-signed certificates).
+4. Whether to trust the local SQL Server certificate. A developer VM's SQL Server presents a self-signed certificate, so the answer defaults to yes when the server is this machine (`.`, `localhost`, `(local)`, its name) and to no otherwise.
 
 Authentication uses the **Windows account running the MCP/bridge process**. No SQL password is collected. That account must have the required SQL permissions. The connection is encrypted; certificate validation is only relaxed if selected in setup. Connections open on demand, not at startup.
 

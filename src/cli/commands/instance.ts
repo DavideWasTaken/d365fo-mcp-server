@@ -12,7 +12,7 @@ import { maybePrepareCopilotInstructions } from '../copilotFiles.js';
 import { createInstance, getInstance, listInstances, normalizeInstanceLayout, suggestPort } from '../instances.js';
 import { mcpJsonNote, placementNote, stdioServer } from '../mcpJson.js';
 import { selectXppConfig } from './config.js';
-import { configureSql } from '../sqlSetup.js';
+import { configureVerification } from '../verificationSetup.js';
 import { askAdvanced, askSetting, askSettings } from '../settingsPrompt.js';
 import { openInstanceStore, readPath, readSetting, saveStore, writeSetting } from '../settingsStore.js';
 import { instanceTarget } from '../target.js';
@@ -95,20 +95,19 @@ export async function instanceAddCommand(name: string | undefined, portArg: stri
   // told where it is for the same reason the root config does.
   pinBridgeExe(store);
   p.log.step('D365FO environment — where this instance reads its X++ packages');
-  await askSetting(store, settingByPath('environment.uiTestUrl')!);
-  await askSetting(store, settingByPath('environment.uiBrowserChannel')!);
-  await configureSql(store);
   const envType = String(await askSetting(store, envTypeSetting, {
     initial: listXppConfigs().length > 0 ? 'ude' : 'traditional',
   }));
   if (envType === 'ude') {
     await selectXppConfig(store);
+    await configureVerification(store, 'ude');
   } else {
-    await askSetting(store, settingByPath('environment.packagePath')!, {
+    const packagesRoot = await askSetting(store, settingByPath('environment.packagePath')!, {
       required: true,
       initial: findPackagesRoot() ?? undefined,
     });
     await askSetting(store, settingByPath('environment.customModels')!, { required: true });
+    await configureVerification(store, 'traditional', typeof packagesRoot === 'string' ? packagesRoot : undefined);
   }
   p.log.step('Workspace and naming');
   await askSetting(store, settingByPath('workspace.modelName')!);

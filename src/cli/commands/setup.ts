@@ -26,7 +26,7 @@ import { findPackagesRoot } from '../../utils/packagesRoot.js';
 import { rootTarget } from '../target.js';
 import { askConfirm, askSelect, askText, p, requireFullInstall } from '../ui.js';
 import { listXppConfigs } from '../xppConfig.js';
-import { configureSql } from '../sqlSetup.js';
+import { configureVerification } from '../verificationSetup.js';
 import { rebuildIndex } from './indexCmd.js';
 import { instanceAddCommand } from './instance.js';
 
@@ -164,9 +164,6 @@ function openRootStore(): SettingsStore {
 /** D365FO environment: type, then the paths/models that type needs. */
 async function configureEnvironment(store: SettingsStore, scenario: Scenario): Promise<'traditional' | 'ude'> {
   p.log.step('D365FO environment');
-  await askSetting(store, setting('environment.uiTestUrl'));
-  await askSetting(store, setting('environment.uiBrowserChannel'));
-  await configureSql(store);
 
   let envType: string;
   if (scenario === 'ude') {
@@ -202,6 +199,7 @@ async function configureEnvironment(store: SettingsStore, scenario: Scenario): P
     } else {
       p.log.info('No XPP configs found — the server will auto-detect at runtime.');
     }
+    await configureVerification(store, 'ude');
     return 'ude';
   }
 
@@ -210,8 +208,9 @@ async function configureEnvironment(store: SettingsStore, scenario: Scenario): P
   // rest of setup into "no namespaces found" (#769).
   const detected = findPackagesRoot();
   if (detected) p.log.success(`Found PackagesLocalDirectory at ${detected}`);
-  await askSetting(store, setting('environment.packagePath'), { required: true, initial: detected ?? undefined });
+  const packagesRoot = await askSetting(store, setting('environment.packagePath'), { required: true, initial: detected ?? undefined });
   await askSetting(store, setting('environment.customModels'), { required: true });
+  await configureVerification(store, 'traditional', typeof packagesRoot === 'string' ? packagesRoot : undefined);
   return 'traditional';
 }
 
