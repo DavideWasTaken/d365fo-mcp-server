@@ -130,6 +130,28 @@ npx playwright install chromium
 
 Restart MCP after updating. Existing configuration is retained; use `npx tsx src/cli/index.ts config sql` when you want to enable or change SQL. Building the bridge and validating live AxDB access must be done on your developer VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
 
+### Migrate from an upstream npm installation
+
+If upstream is already installed with `npm install -g d365fo-mcp`, its configuration and index live in that installation's data directory, not in a checkout. A checkout never reads that directory — it ignores `%LOCALAPPDATA%\d365fo-mcp\install.json` and an inherited `D365FO_CONFIG` on purpose — so a fresh checkout reports "database not found" and `npm run setup` would rebuild the index from scratch, which takes hours. Move the existing state instead:
+
+1. **Find the data directory** while the npm install is still there: run `d365fo-mcp doctor` and read the line `Installed from npm; data directory: …`. The default is `%LOCALAPPDATA%\d365fo-mcp\installation`. Then stop MCP (close Visual Studio or the editor that launches it).
+2. **Clone and build this fork** as in [Install this fork from main](#install-this-fork-from-main), but skip `npm run setup`.
+3. **Copy the state into the checkout root.** From the checkout, with `$old` set to the data directory from step 1:
+
+   ```powershell
+   $old = "$env:LOCALAPPDATA\d365fo-mcp\installation"
+   foreach ($d in 'config', 'data', 'extracted-metadata', 'instances', '.d365fo-ui') {
+     if (Test-Path "$old\$d") { robocopy "$old\$d" ".\$d" /E /NFL /NDL /NJH /NJS }
+   }
+   ```
+
+   Paths the wizard writes are relative (`./data/xpp-metadata.db`, …) and resolve from the new location. An absolute path you set by hand to somewhere under the old directory has to be edited.
+4. **Clear `bridge.exePath`.** The npm wizard pins it to `<old data directory>\bridge\D365MetadataBridge.exe`, a bridge compiled from upstream sources without SQL support — `axdb_sql` reports the missing capability for as long as the setting points there. Delete the `exePath` key from the `bridge` section of `config\d365fo-mcp.json` (and of each `instances\<name>\d365fo-mcp.json`); left empty, the server finds the checkout's own `bridge\D365MetadataBridge\bin\Release` build.
+5. **Register the server again.** The existing `.mcp.json` entry still runs the global npm package with `D365FO_CONFIG` pointing at the old directory. Point both at the checkout — `args` at `<checkout>\dist\index.js`, `D365FO_CONFIG` at `<checkout>\config\d365fo-mcp.json` — following [setup scenarios](docs/SETUP.md). For Claude Code, `claude mcp remove` the old entry and add it again with `claude mcp add-json`.
+6. **Check it from the checkout**: `npx tsx src/cli/index.ts doctor` should report `Installed from git; data directory: <checkout>` and find the database. Enable SQL with `npx tsx src/cli/index.ts config sql` if you want it.
+
+A `d365fo-mcp` command on `PATH` is still the upstream npm CLI and still manages the old directory, so run the fork's commands from the checkout as above. Once the checkout works, `npm uninstall -g d365fo-mcp` removes the ambiguity; the old data directory can then be deleted.
+
 ### Upstream package and shared servers
 
 The npm package `d365fo-mcp`, the original project's installer and its hosted server do **not** include these fork additions. Use the checkout above for UI verification and AxDB SQL.
