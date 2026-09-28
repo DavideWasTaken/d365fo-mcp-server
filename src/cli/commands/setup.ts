@@ -18,6 +18,7 @@ import { commandExists, runExe, runShell } from '../exec.js';
 import { pinBridgeExe } from '../bridgePath.js';
 import { maybePrepareCopilotInstructions } from '../copilotFiles.js';
 import { mcpJsonNote, placementNote, stdioServer } from '../mcpJson.js';
+import { branchStatus } from '../gitState.js';
 import { checkRelease } from '../npmRegistry.js';
 import { askAdvanced, askSecrets, askSetting, askSettings } from '../settingsPrompt.js';
 import { migrateLegacyEnv, openStore, readSetting, saveStore, writeSetting, type SettingsStore } from '../settingsStore.js';
@@ -263,13 +264,25 @@ export async function setupCommand(): Promise<void> {
 
   // Setting up an already-stale copy wastes the longest step there is: the
   // index build. Say so before it starts, but never block on it — plenty of
-  // D365FO VMs have no route to the registry.
-  const release = await checkRelease();
-  if (release.behind) {
-    p.log.warn(
-      `This is d365fo-mcp ${release.current}; ${release.latest} is published.\n` +
-      `   Updating first avoids rebuilding the index twice: ${installMode === 'npm' ? 'npm install -g d365fo-mcp@latest' : 'd365fo-mcp update'}`,
-    );
+  // D365FO VMs have no route to the registry. A checkout is judged against the
+  // branch it tracks instead: its package.json is not bumped per release, so
+  // the registry would call it stale even when it contains the latest release.
+  if (installMode === 'git') {
+    const branch = branchStatus();
+    if (branch && branch.behind > 0) {
+      p.log.warn(
+        `${branch.branch} is ${branch.behind} commit${branch.behind === 1 ? '' : 's'} behind ${branch.upstream} as of the last fetch.\n` +
+        '   Updating first avoids rebuilding the index twice: d365fo-mcp update',
+      );
+    }
+  } else {
+    const release = await checkRelease();
+    if (release.behind) {
+      p.log.warn(
+        `This is d365fo-mcp ${release.current}; ${release.latest} is published.\n` +
+        '   Updating first avoids rebuilding the index twice: npm install -g d365fo-mcp@latest',
+      );
+    }
   }
 
   const scenario = await askSelect<Scenario>('How will this machine use MCP? (docs/SETUP.md)', [

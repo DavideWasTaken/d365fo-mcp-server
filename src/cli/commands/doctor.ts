@@ -12,12 +12,14 @@ import { settingByPath } from '../../config/settings.js';
 import { bridgeBuildCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { commandExists } from '../exec.js';
 import { isLegacyInstanceLayout, listInstances, type Instance } from '../instances.js';
+import { branchStatus, type BranchStatus } from '../gitState.js';
 import { checkRelease } from '../npmRegistry.js';
 import { conflictingLegacyValues, readPath, readSetting, settingSource, type SettingsStore } from '../settingsStore.js';
 import { instanceTarget, rootTarget, type Target } from '../target.js';
 import { isXppConfigStale, listXppConfigs, xppConfigDir } from '../xppConfig.js';
 import { describePackagesRootScan, packagesRoots } from '../../utils/packagesRoot.js';
 import { autoDetectD365Project } from '../../utils/workspaceDetector.js';
+import { VERSION } from '../../version.js';
 import { describeWorkspaceDetection } from '../../utils/workspaceDetectionStatus.js';
 import { inferPrefixFromObjectNames } from '../../utils/modelPrefixInference.js';
 
@@ -484,12 +486,43 @@ async function checkSqliteEngine(): Promise<CheckResult> {
 }
 
 /**
+ * Whether a git checkout is current — judged against the branch it tracks.
+ *
+ * Not against the npm registry: package.json on a branch is only bumped by the
+ * release workflow at publish time, so a checkout that already contains the
+ * latest release still reports the previous version. Compared with the
+ * registry it would be told to update forever, and `d365fo-mcp update` (a
+ * `git pull`) could never clear the warning. A fork has no release of its own
+ * on npm at all.
+ */
+export function checkCheckoutFreshness(version: string, status: BranchStatus | null): CheckResult {
+  if (status === null) {
+    return {
+      severity: 'info',
+      message: `d365fo-mcp ${version} (git checkout) — no upstream branch to compare with; the npm registry does not apply to a checkout`,
+    };
+  }
+  if (status.behind > 0) {
+    return {
+      severity: 'warn',
+      message: `d365fo-mcp ${version} (git checkout) — ${status.branch} is ${status.behind} commit${status.behind === 1 ? '' : 's'} behind ${status.upstream} as of the last fetch`,
+      fix: 'd365fo-mcp update',
+    };
+  }
+  return {
+    severity: 'ok',
+    message: `d365fo-mcp ${version} (git checkout) — ${status.branch} is up to date with ${status.upstream} as of the last fetch`,
+  };
+}
+
+/**
  * Whether this copy is the latest published release.
  *
  * Never a hard failure: an old copy still works, and a VM with no route to the
  * registry must not fail its health check over it.
  */
 async function checkReleaseFreshness(): Promise<CheckResult> {
+  if (installMode === 'git') return checkCheckoutFreshness(VERSION, branchStatus());
   const status = await checkRelease();
   if (status.latest === null) {
     return { severity: 'info', message: `d365fo-mcp ${status.current} — npm registry unreachable, cannot check for a newer release` };
@@ -498,7 +531,7 @@ async function checkReleaseFreshness(): Promise<CheckResult> {
     return {
       severity: 'warn',
       message: `d365fo-mcp ${status.current} — ${status.latest} is available`,
-      fix: installMode === 'npm' ? 'npm install -g d365fo-mcp@latest' : 'd365fo-mcp update',
+      fix: 'npm install -g d365fo-mcp@latest',
     };
   }
   return { severity: 'ok', message: `d365fo-mcp ${status.current} (latest)` };
