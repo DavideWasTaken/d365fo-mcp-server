@@ -17,6 +17,7 @@ import { readModuleReferences } from '../../metadata/modelDescriptor.js';
 import { recordBuild } from '../../utils/buildMarker.js';
 import type { ProgressReporter } from '../../utils/progressReporter.js';
 import { restartAosRuntime, type RuntimeRestartResult } from './aosRuntime.js';
+import { localAosUrl } from './aosWebConfig.js';
 
 const execFileAsync = util.promisify(execFile);
 
@@ -1622,9 +1623,11 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
   try {
     const force                 = params.force                === true;
     const fullBuild             = params.fullBuild            === true;
-    if (params.restartAos === true) {
+    // An explicit aosUrl is validated up front; without one, the local AOS's
+    // web.config is read once the packages root is known (below).
+    if (params.restartAos === true && params.aosUrl !== undefined) {
       let url: URL;
-      try { url = new URL(params.aosUrl); } catch { throw new Error('restartAos requires an explicit HTTP(S) aosUrl environment root.'); }
+      try { url = new URL(params.aosUrl); } catch { throw new Error('restartAos requires an HTTP(S) aosUrl environment root.'); }
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
         throw new Error('restartAos requires an HTTP(S) aosUrl environment root without credentials, query or fragment.');
       }
@@ -1682,6 +1685,22 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
         }],
         isError: true,
       };
+    }
+
+    // restartAos without aosUrl: the root the local AOS itself serves, from the
+    // web.config beside its PackagesLocalDirectory. UDE has none — explicit only.
+    let aosUrl: string | undefined = params.aosUrl;
+    let aosUrlSource = 'aosUrl';
+    if (params.restartAos === true && aosUrl === undefined) {
+      const local = await localAosUrl([microsoftPackagesPath, customPackagesPath]);
+      if (!local) {
+        throw new Error(
+          'restartAos requires aosUrl: no AosService\\WebRoot\\web.config beside the packages folder names the local AOS ' +
+          '(a UDE machine has none). Pass the environment root explicitly.',
+        );
+      }
+      aosUrl = local.url;
+      aosUrlSource = local.source;
     }
 
     // ------------------------------------------------------------------
@@ -1950,6 +1969,9 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
     if (ctx.extraReferenceFolders.length > 0) {
       await buildLog('INFO', `  extraReferenceFolders: ${ctx.extraReferenceFolders.join(', ')}`);
     }
+    if (params.restartAos === true) {
+      await buildLog('INFO', `  restartAos:            ${aosUrl} (from ${aosUrlSource})`);
+    }
 
     // ------------------------------------------------------------------
     // Initial state
@@ -1958,7 +1980,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       jobId: crypto.randomUUID(),
       ...(params.restartAos === true ? { restartWorkflow: {
         request: {
-          aosUrl: params.aosUrl,
+          aosUrl: aosUrl!,
           bpCheck: params.bpCheck === true || params.bpCheck === 'true',
           dbSync: Array.isArray(params.dbSync) ? [...params.dbSync] : params.dbSync === true || params.dbSync === 'true',
           projectPath: params.projectPath,

@@ -36,6 +36,7 @@ vi.mock('../../src/tools/sdlc/dbSync.js', () => ({ dbSyncTool: m.sync }));
 vi.mock('../../src/tools/sdlc/runBpCheck.js', () => ({ runBpCheckTool: m.bp }));
 import { buildProjectTool } from '../../src/tools/sdlc/buildProject.js';
 const opts = { modelName: 'MyModel', restartAos: true, aosUrl: 'https://dev.example.test/', wait: false };
+const webConfig = path.join('C:\\Packages', '..', 'WebRoot', 'web.config');
 const state = () => JSON.parse([...m.files.entries()].find(([p]) => p.includes('d365build_state'))![1]);
 async function finish(log = 'Errors: 0', code = 0) {
   m.files.set(state().logFile.replace('.log', '.xppc.err'), log);
@@ -104,9 +105,21 @@ describe('optional AOS restart build workflow', () => {
     expect(m.spawn).toHaveBeenCalledTimes(1);
     resolve({ status: 'ready', message: 'AOS ready' }); await closing;
   });
-  it('requires explicit environment root before starting an opted-in build', async () => {
+  it('requires an environment root before starting an opted-in build when no web.config names one', async () => {
+    // UDE, or a packages folder without an AosService\WebRoot beside it.
     const result = await buildProjectTool({ ...opts, aosUrl: undefined }, {});
     expect(result.isError).toBe(true); expect(m.spawn).not.toHaveBeenCalled();
+    expect(result.content[0].text).toContain('aosUrl');
+  });
+  it('takes the environment root from the local AOS web.config when aosUrl is omitted', async () => {
+    m.files.set(webConfig, '<add key="Infrastructure.HostUrl" value="https://usnconeboxax1aos.cloud.onebox.dynamics.com" />');
+    await buildProjectTool({ ...opts, aosUrl: undefined }, {}); await finish();
+    expect(m.restart).toHaveBeenCalledWith('https://usnconeboxax1aos.cloud.onebox.dynamics.com/');
+  });
+  it('lets an explicit aosUrl win over the web.config', async () => {
+    m.files.set(webConfig, '<add key="Infrastructure.HostUrl" value="https://other.example.test/" />');
+    await buildProjectTool(opts, {}); await finish();
+    expect(m.restart).toHaveBeenCalledWith(opts.aosUrl);
   });
   it('keeps ordinary builds free of runtime actions', async () => {
     await buildProjectTool({ modelName: 'MyModel', wait: false }, {}); await finish();

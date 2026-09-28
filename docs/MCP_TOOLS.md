@@ -161,7 +161,7 @@ Two things shared by `create` and `modify`:
 
 ## 🏗️ SDLC & Build (4)
 
-`build_d365fo_project` also accepts `restartAos: true` with an explicit local environment root in `aosUrl`. After successful compilation, runtime metadata generation and requested database synchronization, it restarts the matching IIS/IIS Express AOS and checks host readiness. This is opt-in; the default `wait: true` behavior is unchanged. Collecting a completed result does not repeat the restart, and a blocked or unsuccessful restart is reported explicitly. See [Optional AOS restart](AOS_RUNTIME_RESTART.md) for requirements and limitations.
+`build_d365fo_project` also accepts `restartAos: true`, with the local environment root in `aosUrl` — optional on a classic AOSService VM, where it defaults to `Infrastructure.HostUrl` from `AosService\WebRoot\web.config`. After successful compilation, runtime metadata generation and requested database synchronization, it restarts the matching IIS/IIS Express AOS and checks host readiness. This is opt-in; the default `wait: true` behavior is unchanged. Collecting a completed result does not repeat the restart, and a blocked or unsuccessful restart is reported explicitly. See [Optional AOS restart](AOS_RUNTIME_RESTART.md) for requirements and limitations.
 
 > Local-only — require a Windows D365FO VM; excluded from the Azure `read-only` mode.
 

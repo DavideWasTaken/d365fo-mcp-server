@@ -29,6 +29,20 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Added
+- **`build_d365fo_project` can restart the local AOS after a successful build**
+  (`restartAos: true`, opt-in). On a development VM a build can succeed while
+  new objects — a new menu item, say — stay unavailable in the browser until
+  the runtime reloads; this refreshes it in the same call. The restart runs only
+  after compilation, runtime metadata generation and any requested database
+  sync have succeeded, restarts exactly one local host — the IIS `AOSService`
+  application pool or an IIS Express instance, relaunched with its original
+  arguments — whose binding matches the environment root, then polls that root
+  until the AOS answers. The root is `aosUrl`, or on a classic AOSService VM
+  `Infrastructure.HostUrl` from `AosService\WebRoot\web.config`; UDE has no
+  local AOS and needs `aosUrl`. Ambiguous or non-local matches block rather than
+  guess, collecting a result never repeats the restart, and a blocked,
+  failed or unconfirmed restart is reported explicitly. The default build is
+  unchanged. See `docs/AOS_RUNTIME_RESTART.md`.
 - **Extension classes can follow their own naming style.** `EXTENSION_NAMING_STYLE`
   drove two independent decisions — the token of an element extension
   (`CustTable.ContosoRobotics`) and that of a CoC class

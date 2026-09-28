@@ -45,11 +45,11 @@ export const buildD365foProjectTool = {
         },
         restartAos: {
           type: 'boolean',
-          description: 'Opt in to one local IIS/IIS Express AOS restart after compile, runtime metadata and requested sync succeed. Requires aosUrl.',
+          description: 'Opt in to one local IIS/IIS Express AOS restart after compile, runtime metadata and requested sync succeed. aosUrl defaults to the local AOS web.config.',
         },
         aosUrl: {
           type: 'string',
-          description: 'Explicit HTTP(S) environment root for restartAos; no credentials, query or fragment.',
+          description: 'HTTP(S) environment root for restartAos; no credentials, query or fragment. Omit on a classic VM to use Infrastructure.HostUrl from AosService\\WebRoot\\web.config; required on UDE.',
         },
         wait: {
           type: 'boolean',

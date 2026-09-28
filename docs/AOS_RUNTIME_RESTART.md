@@ -7,12 +7,21 @@ On a Windows development environment, successful compilation and runtime metadat
 ```json
 {
   "modelName": "MyModel",
+  "restartAos": true
+}
+```
+
+On a classic AOSService VM the environment root comes from the local AOS itself: `Infrastructure.HostUrl` in `AosService\WebRoot\web.config`, beside the `PackagesLocalDirectory` the build uses. The build log records the root and the file it came from. Pass `aosUrl` to override it, and on UDE, which has no local AOS and so no such file:
+
+```json
+{
+  "modelName": "MyModel",
   "restartAos": true,
   "aosUrl": "https://your-local-development-environment/"
 }
 ```
 
-Pass the environment root, not the MCP endpoint or a menu item URL. Add `dbSync: true` or an explicit table list when database synchronization is needed. Supply these options on the initial build request. The existing `wait: true` default is unchanged; `wait: false` lets the client collect the result later.
+`aosUrl` is the environment root, not the MCP endpoint or a menu item URL. The restart uses it to choose the one local IIS/IIS Express host whose binding matches it, and then polls it to confirm the AOS answers again. Add `dbSync: true` or an explicit table list when database synchronization is needed. Supply these options on the initial build request. The existing `wait: true` default is unchanged; `wait: false` lets the client collect the result later.
 
 Omitting `restartAos` preserves the existing build workflow. This feature does not require a browser tool or browser configuration.
 
