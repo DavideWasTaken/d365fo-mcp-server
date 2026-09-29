@@ -84,18 +84,23 @@ describe('optional AOS restart build workflow', () => {
     expect(m.restart).not.toHaveBeenCalled(); expect(state().status).toBe('failed');
   });
   it.each(['Metadata Error: broken', 'Errors: 2'])('withholds the restart, but keeps the ordinary build verdict, when the log reports: %s', async log => {
-    await buildProjectTool({ ...opts, fullBuild: true }, {}); await finish(log);
+    await buildProjectTool({ ...opts, fullBuild: true, dbSync: true }, {}); await finish(log);
     expect(m.restart).not.toHaveBeenCalled();
+    // The requested sync still runs, as it would without restartAos.
+    expect(m.sync).toHaveBeenCalledTimes(1);
     // The same log gives the same verdict with or without restartAos.
     expect(state().status).toBe('succeeded');
     expect(state().restartWorkflow.result.message).toContain('xppc log reports errors');
   });
   it.each([{ success: false, skipped: false }, { success: true, skipped: true }])('blocks restart when metadata is not generated: %j', async result => {
     m.metadata.mockResolvedValue({ ...result, message: 'No metadata' });
-    await buildProjectTool(opts, {}); await finish();
+    await buildProjectTool({ ...opts, dbSync: true, bpCheck: true }, {}); await finish();
     expect(m.restart).not.toHaveBeenCalled();
     const response = await buildProjectTool({ modelName: 'MyModel', wait: false }, {});
     expect(response.isError).toBe(true); expect(response.content[0].text).toContain('AOS restart blocked');
+    // A blocked restart does not take the requested sync and BP check with it.
+    expect(m.sync).toHaveBeenCalledTimes(1); expect(m.bp).toHaveBeenCalledTimes(1);
+    expect(response.content[0].text).toContain('Sync succeeded'); expect(response.content[0].text).toContain('BP checked');
   });
   it.each([{ dbSync: [] }, { dbSync: [' '] }])('empty sync selection blocks restart: %j', async ({ dbSync }) => {
     await buildProjectTool({ ...opts, dbSync }, {}); await finish();
@@ -232,6 +237,15 @@ describe('optional AOS restart build workflow', () => {
     expect(m.spawn).toHaveBeenCalledTimes(1);
   });
 
+  it('releases its reservation and state when xppc could not be started', async () => {
+    m.spawn.mockImplementationOnce(() => { throw new Error('spawn failed'); });
+    const failed = await buildProjectTool(opts, {});
+    expect(failed.isError).toBe(true);
+    expect(m.files.has(reservationKey)).toBe(false); expect(m.files.has(stateKey('MyModel'))).toBe(false);
+    await buildProjectTool({ modelName: 'OtherModel', wait: false }, {});
+    expect(m.spawn).toHaveBeenCalledTimes(2);
+  });
+
   describe('a reservation whose server died', () => {
     /** The state and reservation a server leaves behind when it dies mid-workflow. */
     function abandon(stage: string, xppcPid = DEAD_PID, reservationExtra: object = { ownerPid: DEAD_PID }) {
@@ -266,6 +280,19 @@ describe('optional AOS restart build workflow', () => {
       abandon('pending', process.pid);
       const response = await buildProjectTool({ modelName: 'OtherModel', wait: false }, {});
       expect(response.isError).toBe(true); expect(m.files.has(reservationKey)).toBe(true); expect(m.spawn).not.toHaveBeenCalled();
+    });
+
+    it('stays when its owner is alive but not ours to signal (EPERM)', async () => {
+      abandon('pending');
+      const kill = vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+        if (pid === DEAD_PID) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        return true;
+      }) as any);
+      try {
+        const response = await buildProjectTool({ modelName: 'OtherModel', wait: false }, {});
+        expect(response.isError).toBe(true); expect(m.files.has(reservationKey)).toBe(true);
+        expect(m.files.has(stateKey('MyModel'))).toBe(true); expect(m.spawn).not.toHaveBeenCalled();
+      } finally { kill.mockRestore(); }
     });
 
     it('stays when it predates ownerPid', async () => {

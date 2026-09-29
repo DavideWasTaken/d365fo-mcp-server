@@ -547,8 +547,19 @@ async function clearBuildState(targetModel: string, customPackagesPath: string):
   await unlink(stateFilePath(targetModel, customPackagesPath)).catch(() => {});
 }
 
+/**
+ * EPERM means the process exists but this one may not signal it — an elevated
+ * MCP server seen from a non-elevated one. Reading that as dead let a second
+ * server reap a live server's restart reservation and build state
+ * (releaseAbandonedRestartReservation), as operationLocks.ts already knows.
+ */
 function isProcessAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    return e?.code === 'EPERM';
+  }
 }
 
 /** Last N lines of a log file (used while a build is running). */
@@ -1333,27 +1344,29 @@ async function finishRestartWorkflow(
     // Do not publish succeeded until every requested stage has settled.
     await writeBuildState({ ...state, status: 'running', phase: 'finalizing' }, packagesPath);
   };
+  // The build succeeded, so the requested BP check and sync run exactly as they
+  // would without restartAos. Only the restart itself depends on what follows:
+  // a blocked restart used to skip them too, leaving a table change unsynced
+  // with nothing in the result to say so.
+  workflow.stage = 'prerequisites';
+  await persistIntent();
+  workflow.bpSection = await runPostBuildBpCheck(workflow.request, state.targetModel, context);
+  workflow.sync = await runPostBuildDbSync(workflow.request, state.targetModel, context);
+  const syncRequested = workflow.request.dbSync === true || Array.isArray(workflow.request.dbSync);
   if (reportedErrors) {
     // Restarting the AOS onto a model whose log reports errors would load
     // exactly what the compiler complained about.
     workflow.result = { status: 'blocked', message: 'AOS restart blocked: the xppc log reports errors (see the diagnostics above).' };
   } else if (!metadata.success || metadata.skipped) {
     workflow.result = { status: 'blocked', message: `AOS restart blocked: runtime metadata was not generated. ${metadata.message}` };
-  } else {
-    workflow.stage = 'prerequisites';
-    await persistIntent();
-    workflow.bpSection = await runPostBuildBpCheck(workflow.request, state.targetModel, context);
-    workflow.sync = await runPostBuildDbSync(workflow.request, state.targetModel, context);
-    const syncRequested = workflow.request.dbSync === true || Array.isArray(workflow.request.dbSync);
+  } else if (syncRequested && (workflow.sync.failed || !workflow.sync.section ||
     // An empty selection or response cannot establish that requested sync ran.
-    if (syncRequested && (workflow.sync.failed || !workflow.sync.section ||
-      (Array.isArray(workflow.request.dbSync) && !workflow.request.dbSync.some(t => typeof t === 'string' && t.trim())))) {
-      workflow.result = { status: 'blocked', message: 'AOS restart blocked: requested database sync did not succeed.' };
-    } else {
-      workflow.stage = 'restarting';
-      await persistIntent();
-      workflow.result = await restartAosRuntime(workflow.request.aosUrl);
-    }
+    (Array.isArray(workflow.request.dbSync) && !workflow.request.dbSync.some(t => typeof t === 'string' && t.trim())))) {
+    workflow.result = { status: 'blocked', message: 'AOS restart blocked: requested database sync did not succeed.' };
+  } else {
+    workflow.stage = 'restarting';
+    await persistIntent();
+    workflow.result = await restartAosRuntime(workflow.request.aosUrl);
   }
   workflow.stage = workflow.result?.status === 'failed' ? 'uncertain' : 'complete';
 }
@@ -2197,8 +2210,26 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
         jobId: initState.jobId!, targetModel, customPackagesPath, owner: restartOwner, ownerPid: process.pid,
       } satisfies RestartReservation), { encoding: 'utf-8', flag: 'wx' });
     }
-    await writeBuildState(initState, customPackagesPath);
-    const pid = await spawnXppcForState(ctx, initState);
+    let pid: number;
+    try {
+      await writeBuildState(initState, customPackagesPath);
+      pid = await spawnXppcForState(ctx, initState);
+    } catch (error) {
+      // Nothing was spawned, so nothing will ever finish this job: a 'running'
+      // state and a restart reservation left behind would hold every later
+      // build (of every model, for the reservation) until the server restarts.
+      // Admission is still held here: clear directly, not via clearOwnedBuildState.
+      if (await ownsBuild(initState, customPackagesPath).catch(() => false)) {
+        await clearBuildState(targetModel, customPackagesPath);
+      }
+      if (initState.restartWorkflow) {
+        const reservation = await readRestartReservation().catch(() => null);
+        if (reservation && reservation.jobId === initState.jobId && reservation.owner === restartOwner) {
+          await unlink(restartReservationPath).catch(() => {});
+        }
+      }
+      throw error;
+    }
     releaseAdmission();
 
     // ------------------------------------------------------------------
