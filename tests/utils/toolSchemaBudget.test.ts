@@ -194,6 +194,8 @@ const CHARS_PER_TOKEN = 4;
 // name is resolved to its declaring types, and with 'all' it is not).
 // Measured payload after: 45_015. The ceiling stays where it is on purpose: the
 // 85 chars under it are what the index/field-group targetTypes need next.
+// They took 63 of them (#1067): the two enum values and the "Table.Name" form in
+// targetType's description. Measured payload after: 45_078.
 const TOTAL_BUDGET = 45_100;
 const LARGEST_TOOL_BUDGET = 5_780;
 

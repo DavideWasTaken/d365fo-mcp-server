@@ -329,6 +329,17 @@ describe('find_references — metadata references from the bridge', () => {
     expect(sent).not.toMatch(/TableIndexs|TableFieldGroups/);
   });
 
+  it('asks for the table instead of reporting zero for an owner-less index or field group', async () => {
+    for (const targetType of ['index', 'field-group'] as const) {
+      const bridge = bridgeWithMetadataRows();
+      const text = await runTool({ targetName: 'AccountIdx', targetType }, bridge);
+      expect(bridge.findReferences).not.toHaveBeenCalled();
+      expect(text).toContain('NOT a count of zero');
+      expect(text).toContain('Table.AccountIdx');
+      expect(text).not.toMatch(/Total References Found/);
+    }
+  });
+
   it('looks up a form data source method as Form.DataSource.method', async () => {
     const bridge = bridgeWithMetadataRows();
     await runTool({ targetName: 'VendOpenTrans.VendTransOpen.editMarkTrans', targetType: 'method' }, bridge);

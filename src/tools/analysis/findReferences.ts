@@ -341,6 +341,19 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
       memberName = cleanTargetName.slice(dot + 1).trim();
     }
 
+    // An index or field group is a member of its table. Sent as a bare name, the bridge
+    // expands it to "/Tables/<name>", "/Classes/<name>", … and matches nothing, which the
+    // unsearchable-type answer then reported as an authoritative zero.
+    if ((targetType === 'index' || targetType === 'field-group') && !owner && !isAotPath) {
+      const what = targetType === 'index' ? 'a table index' : 'a field group';
+      return { content: [{ type: 'text', text:
+        `# References to \`${cleanTargetName}\`\n\n` +
+        `**Target Type:** ${targetType}\n` +
+        `**Result:** not searched — this is NOT a count of zero\n\n` +
+        `${what[0].toUpperCase()}${what.slice(1)} is looked up under its table. Pass \`Table.${cleanTargetName}\` ` +
+        `as targetName (e.g. \`CustTable.AccountIdx\`) or set \`ownerName\`.\n` }] };
+    }
+
     // parentObjectName powers the cross-type ("you used a form name as a class") hint
     const parentObjectName: string | null =
       owner ?? ((targetType === 'class' || targetType === 'method') ? memberName : null);
