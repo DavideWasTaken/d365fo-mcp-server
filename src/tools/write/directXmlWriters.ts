@@ -334,6 +334,10 @@ const CONTROL_TYPE_TO_FORM_CONTROL: Record<string, { iType: string; typeValue: s
   // becomes a String control over enum data.
   enum:        { iType: 'AxFormComboBoxControl', typeValue: 'ComboBox' },
   button:      { iType: 'AxFormButtonControl',   typeValue: 'Button' },
+  // Both are advertised by the controlType param; unmapped, they fell through to
+  // DEFAULT_FORM_CONTROL and a requested button was written as a String field.
+  commandbutton:      { iType: 'AxFormCommandButtonControl',      typeValue: 'CommandButton' },
+  menufunctionbutton: { iType: 'AxFormMenuFunctionButtonControl', typeValue: 'MenuFunctionButton' },
   group:       { iType: 'AxFormGroupControl',    typeValue: 'Group' },
 };
 const DEFAULT_FORM_CONTROL = { iType: 'AxFormStringControl', typeValue: 'String' };
