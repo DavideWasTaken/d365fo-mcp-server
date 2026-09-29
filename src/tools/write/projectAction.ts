@@ -103,8 +103,19 @@ async function handleMembership(op: 'add-object' | 'remove-object', args: Record
     if (objectType === 'label-file') {
       if (op === 'remove-object') { fail('label-file removal is not supported.'); continue; }
       try {
-        const langs = a.languages?.length ? a.languages : await labelLanguages(cfg, modelName, objectName, a.packagePath);
-        if (!langs.length) { fail('no label descriptor files (<name>_<lang>.xml) found in the model — check the label file name.'); continue; }
+        const onDisk = await labelLanguages(cfg, modelName, objectName, a.packagePath);
+        if (!onDisk.length) { fail('no label descriptor files (<name>_<lang>.xml) found in the model — check the label file name.'); continue; }
+        // An explicit list is checked against the files too: an entry for a language
+        // with no file fails the VS build later, and the value lands in an Include path.
+        let langs = onDisk;
+        if (a.languages?.length) {
+          const missing = a.languages.filter(l => !onDisk.some(d => d.toLowerCase() === l.toLowerCase()));
+          if (missing.length) {
+            fail(`no ${objectName}_<lang>.xml for ${missing.join(', ')} — on disk: ${onDisk.join(', ')}.`);
+            continue;
+          }
+          langs = onDisk.filter(d => a.languages!.some(l => l.toLowerCase() === d.toLowerCase()));
+        }
         const added = await mgr.addLabelToProject(projectPath, objectName, langs);
         rows.push(added.length ? `✅ ${id}: added (${langs.join(', ')}).` : `ℹ️ ${id}: already in the project.`);
       } catch (e) { fail((e as Error)?.message ?? String(e)); }
