@@ -41,6 +41,25 @@ const TYPE_TO_XREF_CONTAINER: Record<string, string> = {
 };
 
 /**
+ * The xref container a `targetType` names. A bare name reaches the bridge as a
+ * bare name, which it expands across EVERY container — so a where-used on the
+ * table CustTable also counted the form, the menu item and the query named
+ * CustTable (963 extra references on a live database). A targetType that names
+ * a type scopes the lookup to it: "/Tables/CustTable", whose metadata twin the
+ * bridge adds itself.
+ */
+const TARGET_TYPE_TO_XREF_CONTAINER: Record<string, string> = {
+  table: 'Tables',
+  class: 'Classes',
+  enum: 'Enums',
+  edt: 'Edts',
+  form: 'Forms',
+  query: 'Queries',
+  view: 'Views',
+  report: 'Reports',
+};
+
+/**
  * Detect and normalize a label where-used target. Labels live in the xref DB
  * under "/Labels/@<ref>", where <ref> is either the old concatenated form
  * ("@WAX2194") or the newer "@LabelFile:LabelId" form
@@ -134,7 +153,9 @@ function describeUnsearchableType(
   //
   // It is authoritative for these five types specifically BECAUSE of the container
   // fix in this change: a bare name now expands to /Edts/, /Forms/, /Queries/,
-  // /Views/ and /Reports/, so the query reaches the rows that exist instead of
+  // /Views/ and /Reports/ — and to the metadata shape of each (EdtString/, Form/,
+  // QuerySimple/, View/, Report/ …, where table fields, data sources and control
+  // bindings are recorded) — so the query reaches the rows that exist instead of
   // matching nothing by construction. Calling that "inconclusive" would put back
   // the defect this function was written to remove, one layer down — and the text
   // did worse than hedge, telling the reader to "re-run once the xref bridge is
@@ -172,7 +193,7 @@ function describeUnsearchableType(
   out += `mostly from declarative metadata that is not in the text index at all. Running it would `;
   out += `have produced a number with no relationship to the real answer.\n\n`;
   out += `**What to do:**\n`;
-  out += `- Re-run once the xref bridge is available (full server mode with a UDE/local xref DB)\n`;
+  out += `- Re-run once the xref bridge is available (full server mode; on UDE the XPP config names the xref DB, on a traditional VM set \`bridge.xrefDbName\`, usually DYNAMICSXREFDB)\n`;
   if (suggestion) {
     out += `- Or pass the explicit AOT path as \`targetName\`: \`${suggestion}\`\n`;
   }
@@ -256,6 +277,7 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
     // is known, resolve its container type and build "/<Container>/<Owner>/<Methods|Fields>/<member>".
     let bridgeTargets: string[] = [cleanTargetName];
     let memberScoped = false;
+    const typeContainer = targetType ? TARGET_TYPE_TO_XREF_CONTAINER[targetType] : undefined;
     if (isAotPath) {
       memberScoped = cleanTargetName.includes('/Methods/') || cleanTargetName.includes('/Fields/');
     } else if (owner && memberSegments.length > 0) {
@@ -265,6 +287,8 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
         // Owner not indexed — hand the qualified name to the bridge to resolve across container types.
         : [`${owner}.${memberName}`];
       memberScoped = true;
+    } else if (typeContainer && !cleanTargetName.includes('/')) {
+      bridgeTargets = [`/${typeContainer}/${cleanTargetName}`];
     }
 
     // Try C# bridge first (DYNAMICSXREFDB — live cross-references)

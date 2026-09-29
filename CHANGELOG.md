@@ -125,6 +125,27 @@ those are called out explicitly below.
   `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
+- **`find_references` includes declarative metadata references.** The bridge looked
+  a target up only in its X++ shape (`/Tables/X`, `/Edts/X`), on the belief that
+  targets are always plural with a leading slash. Metadata references are stored
+  singular and without it, and for an EDT under its concrete subtype (`Table/X`,
+  `Form/X`, `EdtString/X`, members `Table/X/TableFieldString/F`, `Table/X/Method/M`):
+  on a live DYNAMICSXREFDB 2.3M of 19.5M references. A custom table's where-used
+  returned 334 of its 785 references, missing every form data source and entity
+  mapping; a custom EDT's, 12 of 108, missing every table field typed with it. Both
+  shapes are queried now — including for `Owner.member` and explicit AOT paths, whose
+  metadata twins are derived for methods of tables, classes, forms, views, data entities
+  and maps, and for fields of tables, maps, views and data entities, each field under
+  its exact type segment (a wildcard also matched a field group of the same name) —
+  and metadata rows read as "object › member › property".
+  The bridge returns exact totals split into code and metadata (references whose source
+  no longer exists in the database are left out of both, as they are of the rows), and up to 500 rows per
+  shape instead of 500 in all: sorted by source path, code rows used to fill the cap, so
+  a large table (CustTable) showed no metadata reference at all. The list gives each
+  shape its share of `limit`. A `targetType` that names a type now scopes a bare name to
+  it (`CustTable` with `table` no longer counts the form, menu item and query named
+  CustTable). The bridge's `--xref-database` help no longer claims a default it does
+  not have.
 - **The cross-reference database can be configured on a traditional VM.** The bridge got
   its DYNAMICSXREFDB server and name only from the XPP config, which exists only on UDE,
   so on a traditional VM it always started without cross-references and `find_references`
