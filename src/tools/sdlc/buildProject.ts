@@ -1708,9 +1708,27 @@ function describeBuildProgress(state: BuildJobState, startedAt: number): string 
     ? ` (${(state.queueIndex ?? 0) + 1}/${state.buildQueue.length})`
     : '';
   const what = state.phase === 'finalizing'
-    ? 'finalizing (runtime metadata)'
+    ? restartStageLabel(state) ?? 'finalizing (runtime metadata)'
     : state.fullBuild ? 'full build' : 'incremental';
   return `🔨 Building ${state.modelName}${queue} — ${what}, ${elapsed}s elapsed`;
+}
+
+/**
+ * What a restart workflow is doing after the compile, or undefined before it.
+ *
+ * Those steps (best-practice check, DB sync, then the restart and up to three
+ * minutes of readiness polling) all ran under "finalizing (runtime metadata)",
+ * and a wait that timed out during them said the build "keeps compiling". A
+ * caller whose client had given up could not tell a slow compile from an AOS
+ * restart in flight — the one moment a second restartAos call must not be read
+ * as a request for another restart.
+ */
+function restartStageLabel(state: BuildJobState): string | undefined {
+  switch (state.restartWorkflow?.stage) {
+    case 'prerequisites': return 'compiled; running the requested best-practice check / database sync before the AOS restart';
+    case 'restarting': return 'compiled; restarting the AOS and waiting until it answers (up to 3 min)';
+    default: return undefined;
+  }
 }
 
 /**
@@ -1720,12 +1738,16 @@ function describeBuildProgress(state: BuildJobState, startedAt: number): string 
  * waitTimeoutMs instead, so a caller that wants to keep waiting can do it in one
  * call rather than guessing a number.
  */
-function renderWaitTimeoutGuidance(elapsedSec: number, timeoutMs: number): string {
+function renderWaitTimeoutGuidance(elapsedSec: number, timeoutMs: number, state?: BuildJobState | null): string {
   // Twice what has already elapsed, rounded up to a whole minute and never
   // below 10 — enough headroom that the next call is very unlikely to time out.
   const suggestMin = Math.max(10, Math.ceil((elapsedSec * 2) / 60));
+  const stage = state && state.phase === 'finalizing' ? restartStageLabel(state) : undefined;
   return [
-    `The build is NOT finished and nothing is lost — it keeps compiling in the background.`,
+    stage
+      ? `The build is NOT finished and nothing is lost: it ${stage.replace(/^compiled; /, 'compiled and is now ')}. ` +
+        `It continues in the background, and collecting the result later does not restart the AOS again.`
+      : `The build is NOT finished and nothing is lost — it keeps compiling in the background.`,
     `Waited ${elapsedSec}s of the ${Math.round(timeoutMs / 1000)}s window.`,
     `To keep waiting in a single call: build_d365fo_project { waitTimeoutMs: ${suggestMin * 60_000} }  (${suggestMin} min).`,
     `Calling again without waitTimeoutMs re-attaches to the same build — it does not start a second one.`,
@@ -1976,7 +1998,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
               type: 'text',
               text:
                 `⏳ ${queueProgress} (PID: ${existingState.pid}, running ${elapsed}s; wait timeout reached)${completedLine}\n\n` +
-                renderWaitTimeoutGuidance(elapsed, timeoutMs) + '\n\n' +
+                renderWaitTimeoutGuidance(elapsed, timeoutMs, wait.state) + '\n\n' +
                 `--- Latest log ---\n${tailLog}`,
             }],
           };
@@ -1984,7 +2006,9 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
         return {
           content: [{
             type: 'text',
-            text: `⏳ ${queueProgress} (PID: ${existingState.pid}, running ${elapsed}s)${completedLine}\n\nCall again to refresh.\n\n--- Latest log ---\n${logTail}`,
+            text: `⏳ ${queueProgress} (PID: ${existingState.pid}, running ${elapsed}s)${completedLine}` +
+              (existingState.phase === 'finalizing' && restartStageLabel(existingState) ? `\nNow: ${restartStageLabel(existingState)}` : '') +
+              `\n\nCall again to refresh.\n\n--- Latest log ---\n${logTail}`,
           }],
         };
       }
@@ -2236,7 +2260,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
             `Target: ${targetModel}${queueDetail}`,
             `Log:    ${firstLogFile}`,
             ``,
-            renderWaitTimeoutGuidance(elapsed, timeoutMs),
+            renderWaitTimeoutGuidance(elapsed, timeoutMs, wait.state),
             ``,
             `--- Latest log ---`,
             tailLog,

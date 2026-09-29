@@ -291,6 +291,24 @@ describe('optional AOS restart build workflow', () => {
     expect(response.isError).toBe(true); expect(response.content[0].text).toContain('Mutation outcome unknown');
     expect(m.spawn).toHaveBeenCalledTimes(1); expect(m.restart).toHaveBeenCalledTimes(1);
   });
+  it('says the AOS is restarting, not compiling, while the restart is in flight', async () => {
+    let resolve!: (value: any) => void;
+    m.restart.mockImplementation(() => new Promise(r => { resolve = r; }));
+    await buildProjectTool(opts, {});
+    const closing = finish(); await vi.waitFor(() => expect(m.restart).toHaveBeenCalled());
+    // wait:false snapshot
+    const snapshot = await buildProjectTool({ ...opts }, {});
+    expect(snapshot.content[0].text).toContain('restarting the AOS and waiting until it answers');
+    // wait:true that runs out of its window, with progress along the way
+    const progress: string[] = [];
+    const timedOut = await buildProjectTool({ ...opts, wait: true, waitTimeoutMs: 1 }, {}, async (message: string) => { progress.push(message); });
+    expect(timedOut.content[0].text).toContain('compiled and is now restarting the AOS');
+    expect(timedOut.content[0].text).toContain('does not restart the AOS again');
+    expect(timedOut.content[0].text).not.toContain('keeps compiling');
+    expect(progress.join('\n')).toContain('restarting the AOS');
+    expect(m.restart).toHaveBeenCalledTimes(1);
+    resolve({ status: 'ready', message: 'AOS ready' }); await closing;
+  });
   it('wait:true completes the captured restart before returning', async () => {
     const responsePromise = buildProjectTool({ ...opts, wait: true }, {});
     await vi.waitFor(() => expect(m.children.at(-1)?.handlers.close).toBeDefined());
