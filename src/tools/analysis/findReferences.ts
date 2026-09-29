@@ -41,6 +41,25 @@ const TYPE_TO_XREF_CONTAINER: Record<string, string> = {
 };
 
 /**
+ * The xref container a `targetType` names. A bare name reaches the bridge as a
+ * bare name, which it expands across EVERY container — so a where-used on the
+ * table CustTable also counted the form, the menu item and the query named
+ * CustTable (963 extra references on a live database). A targetType that names
+ * a type scopes the lookup to it: "/Tables/CustTable", whose metadata twin the
+ * bridge adds itself.
+ */
+const TARGET_TYPE_TO_XREF_CONTAINER: Record<string, string> = {
+  table: 'Tables',
+  class: 'Classes',
+  enum: 'Enums',
+  edt: 'Edts',
+  form: 'Forms',
+  query: 'Queries',
+  view: 'Views',
+  report: 'Reports',
+};
+
+/**
  * Detect and normalize a label where-used target. Labels live in the xref DB
  * under "/Labels/@<ref>", where <ref> is either the old concatenated form
  * ("@WAX2194") or the newer "@LabelFile:LabelId" form
@@ -258,6 +277,7 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
     // is known, resolve its container type and build "/<Container>/<Owner>/<Methods|Fields>/<member>".
     let bridgeTargets: string[] = [cleanTargetName];
     let memberScoped = false;
+    const typeContainer = targetType ? TARGET_TYPE_TO_XREF_CONTAINER[targetType] : undefined;
     if (isAotPath) {
       memberScoped = cleanTargetName.includes('/Methods/') || cleanTargetName.includes('/Fields/');
     } else if (owner && memberSegments.length > 0) {
@@ -267,6 +287,8 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
         // Owner not indexed — hand the qualified name to the bridge to resolve across container types.
         : [`${owner}.${memberName}`];
       memberScoped = true;
+    } else if (typeContainer && !cleanTargetName.includes('/')) {
+      bridgeTargets = [`/${typeContainer}/${cleanTargetName}`];
     }
 
     // Try C# bridge first (DYNAMICSXREFDB — live cross-references)

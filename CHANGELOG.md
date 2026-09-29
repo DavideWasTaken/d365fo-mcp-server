@@ -138,8 +138,10 @@ those are called out explicitly below.
   The bridge returns exact totals split into code and metadata, and up to 500 rows per
   shape instead of 500 in all: sorted by source path, code rows used to fill the cap, so
   a large table (CustTable) showed no metadata reference at all. The list gives each
-  shape its share of `limit`. The bridge's `--xref-database` help no longer claims a
-  default it does not have.
+  shape its share of `limit`. A `targetType` that names a type now scopes a bare name to
+  it (`CustTable` with `table` no longer counts the form, menu item and query named
+  CustTable). The bridge's `--xref-database` help no longer claims a default it does
+  not have.
 - **`d365fo_file(action="project")` only touches projects under the configured solution
   roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
   like a projects folder", which every Visual Studio repo on the machine passes, and so

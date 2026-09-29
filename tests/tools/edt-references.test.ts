@@ -245,6 +245,20 @@ describe('find_references — metadata references from the bridge', () => {
     expect(text).toContain('X++ code and declarative metadata references');
   });
 
+  it('scopes a bare name to the type targetType names, not every same-named object', async () => {
+    // Bare, "CustTable" also matched the form, menu item and query named CustTable.
+    for (const [targetType, path] of [['table', '/Tables/CustTable'], ['edt', '/Edts/CustTable'], ['form', '/Forms/CustTable']]) {
+      const bridge = bridgeWithMetadataRows();
+      await runTool({ targetName: 'CustTable', targetType }, bridge);
+      expect(bridge.findReferences as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(path);
+      expect(bridge.findReferences as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    }
+    // Without a type there is nothing to scope to: the bridge expands the bare name.
+    const bridge = bridgeWithMetadataRows();
+    await runTool({ targetName: 'CustTable' }, bridge);
+    expect(bridge.findReferences as ReturnType<typeof vi.fn>).toHaveBeenCalledWith('CustTable');
+  });
+
   it('reports the exact totals and shows both code and metadata rows when the bridge sampled', async () => {
     // The live case: 785 references to a table, 451 of them metadata; the bridge
     // returns up to 500 rows per shape with the true totals alongside.
