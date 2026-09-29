@@ -16,8 +16,8 @@ export const findReferencesTool = {
         },
         targetType: {
           type: 'string',
-          enum: ['class', 'method', 'field', 'table', 'enum', 'edt', 'form', 'query', 'view', 'data-entity', 'map', 'report', 'menu-item', 'label', 'all'],
-          description: 'Scopes a bare name to that type. An enum value: "Enum::Value" with "enum".'
+          enum: ['class', 'method', 'field', 'table', 'enum', 'edt', 'form', 'query', 'view', 'data-entity', 'map', 'report', 'menu-item', 'index', 'field-group', 'label', 'all'],
+          description: 'Scopes a bare name to that type. An enum value: "Enum::Value" with "enum"; an index or field group: "Table.Name".'
         },
         ownerName: {
           type: 'string',

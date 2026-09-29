@@ -16,7 +16,7 @@ export const FindReferencesArgsSchema = z.object({
   // "name" is accepted as an alias for "targetName"
   targetName: z.string().optional().describe('Name of the target. For a precise, type-scoped method where-used, qualify it as "Owner.method" (e.g. "SalesTable.initFromSalesQuotationTable") or pass an AOT path ("/Tables/SalesTable/Methods/initFromSalesQuotationTable"). A bare method name matches that name on every type. For a label, pass the label id ("@WAX2194" or "@LabelFile:LabelId").'),
   name: z.string().optional().describe('Alias for targetName.'),
-  targetType: z.enum(['method', 'class', 'table', 'field', 'enum', 'edt', 'form', 'query', 'view', 'data-entity', 'map', 'report', 'menu-item', 'label', 'all']).optional().describe('Type of the target to search for. For an enum value pass "Enum::Value" (or "Enum.Value") with targetType "enum".'),
+  targetType: z.enum(['method', 'class', 'table', 'field', 'enum', 'edt', 'form', 'query', 'view', 'data-entity', 'map', 'report', 'menu-item', 'index', 'field-group', 'label', 'all']).optional().describe('Type of the target to search for. For an enum value pass "Enum::Value" (or "Enum.Value") with targetType "enum"; for a table index or field group, "Table.Name" with targetType "index" or "field-group"; for a form data source method, "Form.DataSource.method".'),
   ownerName: z.string().optional().describe('Declaring table/class/form that owns the method, when targetName is just the bare method name. Used to scope the where-used to a single type (matches Visual Studio xref).'),
   scope: z.enum(['all', 'workspace', 'standard', 'custom']).optional().default('all').describe('Search scope'),
   limit: z.number().optional().default(50).describe('Maximum results to return'),
@@ -341,6 +341,19 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
       memberName = cleanTargetName.slice(dot + 1).trim();
     }
 
+    // An index or field group is a member of its table. Sent as a bare name, the bridge
+    // expands it to "/Tables/<name>", "/Classes/<name>", … and matches nothing, which the
+    // unsearchable-type answer then reported as an authoritative zero.
+    if ((targetType === 'index' || targetType === 'field-group') && !owner && !isAotPath) {
+      const what = targetType === 'index' ? 'a table index' : 'a field group';
+      return { content: [{ type: 'text', text:
+        `# References to \`${cleanTargetName}\`\n\n` +
+        `**Target Type:** ${targetType}\n` +
+        `**Result:** not searched — this is NOT a count of zero\n\n` +
+        `${what[0].toUpperCase()}${what.slice(1)} is looked up under its table. Pass \`Table.${cleanTargetName}\` ` +
+        `as targetName (e.g. \`CustTable.AccountIdx\`) or set \`ownerName\`.\n` }] };
+    }
+
     // parentObjectName powers the cross-type ("you used a form name as a class") hint
     const parentObjectName: string | null =
       owner ?? ((targetType === 'class' || targetType === 'method') ? memberName : null);
@@ -361,12 +374,30 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
     let enumValueOwner: string | null = null;
     const typeContainers = targetType ? TARGET_TYPE_TO_XREF_CONTAINER[targetType] : undefined;
     if (isAotPath) {
-      memberScoped = /\/(Methods|Fields|EnumValues)\//.test(cleanTargetName);
+      memberScoped = /\/(Methods|Fields|EnumValues|TableIndexs|TableFieldGroups)\//.test(cleanTargetName);
     } else if (owner && targetType === 'enum') {
       // "Enum.Value": an enum's members are its values, "/Enums/<E>/EnumValues/<v>".
       bridgeTargets = [`/Enums/${owner}/EnumValues/${memberName}`];
       memberScoped = true;
       enumValueOwner = owner;
+    } else if (owner && (targetType === 'index' || targetType === 'field-group')) {
+      // Only when asked for: an index or field group very often has the name of a field of
+      // the same table (1,751 tables have such a field group on a live database, 886 such an
+      // index), so an untyped "Table.Name" must stay the field. X++ spells the segments
+      // "TableIndexs" and "TableFieldGroups".
+      const db = symbolIndex.getReadDb();
+      const segment = targetType === 'index' ? 'TableIndexs' : 'TableFieldGroups';
+      const allowed = targetType === 'index' ? ['Tables', 'Maps'] : ['Tables', 'Views', 'DataEntityViews', 'Maps'];
+      const containers = resolveXrefContainers(db, owner).filter(c => allowed.includes(c));
+      bridgeTargets = (containers.length > 0 ? containers : ['Tables'])
+        .map(c => `/${c}/${owner}/${segment}/${memberName}`);
+      memberScoped = true;
+    } else if (owner && wantsMethod && /^[^.]+\.[^.]+$/.test(owner)) {
+      // "Form.DataSource.method": the data source's own method, stored under the data
+      // source by its name (not its table's).
+      const [form, dataSource] = owner.split('.');
+      bridgeTargets = [`/Forms/${form}/DataSources/${dataSource}/Methods/${memberName}`];
+      memberScoped = true;
     } else if (owner && memberSegments.length > 0) {
       const db = symbolIndex.getReadDb();
       const paths = resolveXrefContainers(db, owner)
