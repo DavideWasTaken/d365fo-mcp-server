@@ -125,6 +125,12 @@ those are called out explicitly below.
   `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
+- **The name-based `find_references` fallback no longer counts a method's declaration as
+  a call to it, and says what a table count leaves out.** In the declaring method's own
+  body the first `name(` is `public void name(`, which was reported as a caller; it is
+  skipped now (a recursive call still counts). A table target used to get a bare number,
+  although its declarative references — form data sources, relations, entity mappings —
+  are only in the cross-reference database; it now says so, as an EDT target already did.
 - **`d365fo_file(action="project")` only touches projects under the configured solution
   roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
   like a projects folder", which every Visual Studio repo on the machine passes, and so
