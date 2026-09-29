@@ -65,10 +65,11 @@ describe('optional AOS restart build workflow', () => {
     expect(m.restart).toHaveBeenCalledWith(opts.aosUrl);
     expect(m.metadata.mock.invocationCallOrder[0]).toBeLessThan(m.sync.mock.invocationCallOrder[0]);
     expect(m.sync.mock.invocationCallOrder[0]).toBeLessThan(m.restart.mock.invocationCallOrder[0]);
-    const collected = await buildProjectTool({ modelName: 'MyModel', wait: false, dbSync: ['WrongTable'] }, {});
+    // A status call — or the original request retried — collects the same result:
+    // no second restart or sync.
+    const collected = await buildProjectTool({ modelName: 'MyModel', wait: false }, {});
     expect(collected.content[0].text).toContain('AOS ready');
-    // A re-issued restart request collects the same result again: no second restart or sync.
-    const reissued = await buildProjectTool({ ...opts, dbSync: ['WrongTable'] }, {});
+    const reissued = await buildProjectTool({ ...opts, dbSync: ['MyTable'], bpCheck: true }, {});
     expect(reissued.content[0].text).toContain('AOS ready');
     expect(m.restart).toHaveBeenCalledTimes(1); expect(m.sync).toHaveBeenCalledTimes(1); expect(m.spawn).toHaveBeenCalledTimes(1);
   });
@@ -361,12 +362,16 @@ describe('optional AOS restart build workflow', () => {
       expect(response.content[0].text).not.toContain('unexpectedly');
     } finally { kill.mockRestore(); }
   });
-  it('fork: collecting a plain build never runs a sync, whatever the collecting call passes', async () => {
-    // Post-build actions belong to the request that started the build.
+  it('fork: collecting never runs a sync; asking for one the saved build did not run starts a new build', async () => {
+    // Post-build actions belong to the request that started the build: the
+    // collecting call never runs them. A request that ADDS one is a new build.
     await buildProjectTool({ modelName: 'MyModel', wait: false }, {}); await finish();
-    const collected = await buildProjectTool({ modelName: 'MyModel', dbSync: true }, {});
-    expect(collected.content[0].text).toContain('original build request');
     expect(m.sync).not.toHaveBeenCalled();
+    const started = await buildProjectTool({ modelName: 'MyModel', dbSync: true }, {});
+    expect(started.content[0].text).toContain('started');
+    expect(m.sync).not.toHaveBeenCalled();
+    await finish();
+    expect(m.sync).toHaveBeenCalledTimes(1); expect(m.spawn).toHaveBeenCalledTimes(2);
   });
   it('fork: a plain build runs its requested sync once in the close handler and saves it', async () => {
     await buildProjectTool({ modelName: 'MyModel', wait: false, dbSync: ['MyTable'] }, {}); await finish();

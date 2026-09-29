@@ -88,7 +88,11 @@ vi.mock('../../src/utils/packagesRoot.js', async () => {
 const { pruneMock } = vi.hoisted(() => ({ pruneMock: vi.fn() }));
 vi.mock('../../src/tools/sdlc/compilerMetadataPrune.js', () => ({ pruneStaleCompilerMetadata: pruneMock }));
 const { bpMock, syncMock, labelsMock, metadataMock, restartMock } = vi.hoisted(() => ({ bpMock: vi.fn(), syncMock: vi.fn(), labelsMock: vi.fn(), metadataMock: vi.fn(), restartMock: vi.fn() }));
-vi.mock('../../src/tools/sdlc/runBpCheck.js', () => ({ runBpCheckTool: bpMock }));
+vi.mock('../../src/tools/sdlc/runBpCheck.js', async () => ({
+  runBpCheckTool: bpMock,
+  // The real parser: a large BP section is summarized from it.
+  parseBpFindings: (await vi.importActual<any>('../../src/tools/sdlc/runBpCheck.js')).parseBpFindings,
+}));
 vi.mock('../../src/tools/sdlc/dbSync.js', () => ({ dbSyncTool: syncMock }));
 vi.mock('../../src/tools/write/compileLabels.js', () => ({ compileModelLabels: labelsMock }));
 vi.mock('../../src/tools/xml/generateMetadata.js', () => ({ generateRuntimeMetadata: metadataMock }));
@@ -952,14 +956,58 @@ describe('build_d365fo_project', () => {
     const finalState = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
     serveState(finalState);
     readdirMock.mockResolvedValue([]);
-    for (let i = 0; i < 2; i++) {
-      const result = await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: ['OtherTable'] }, {});
+    // A status call, or the original request retried, collects without replay.
+    for (const request of [{ projectPath: PROJECT_PATH }, { projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['mytable'] }]) {
+      const result = await buildProjectTool(request, {});
       expect(result.content[0].text).toContain('Tables synced');
       expect(result.content[0].text).toContain('BP findings saved');
-      expect(result.content[0].text).toContain('original build request');
     }
     expect(bpMock).toHaveBeenCalledTimes(1);
     expect(syncMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts a new build when a request asks for a sync the saved build did not run', async () => {
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child);
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, wait: false, dbSync: ['MyTable'] }, {});
+    await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    serveState(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+    readdirMock.mockResolvedValue([]);
+    const result = await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: ['OtherTable'] }, {});
+    expect(result.content[0].text).toContain('started');
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('summarizes a BP check too large for a build result and keeps the full text in a file', async () => {
+    const finding = (i: number) =>
+      `BPUpgradeCodeRecId: dynamics://Class/MyClass${i}/Method/run\nWarning AxClass [(1,1),(2,2)] Rule text ${i}`;
+    const huge = '⚠️ BP Check completed with issues\n\n' + Array.from({ length: 800 }, (_, i) => finding(i)).join('\n');
+    bpMock.mockResolvedValue({ content: [{ type: 'text', text: huge }] });
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child);
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, wait: false, bpCheck: true }, {});
+    await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    const state = JSON.parse(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+    const section: string = state.postBuild.bpSection;
+    expect(section.length).toBeLessThan(huge.length / 10);
+    expect(section).toContain('BP Check completed with issues');
+    expect(section).toContain('run_bp_check');
+    expect(section).toContain(`${state.logFile}.bp.txt`);
+    expect(writeFileMock.mock.calls.some(c => c[0] === `${state.logFile}.bp.txt` && c[1] === huge)).toBe(true);
+  });
+
+  it('keeps a small BP check whole in the build result', async () => {
+    const child = makeFakeChild(42);
+    spawnMock.mockReturnValue(child);
+    allowPaths([PROJECT_PATH, XPPC, PKG]);
+    await buildProjectTool({ projectPath: PROJECT_PATH, wait: false, bpCheck: true }, {});
+    await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+    const state = JSON.parse(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
+    expect(state.postBuild.bpSection).toContain('BP findings saved');
+    expect(state.postBuild.bpSection).not.toContain('summary');
   });
 
   it('does not run post-build actions after a failed compile', async () => {

@@ -404,6 +404,28 @@ async function clearOwnedBuildState(state: BuildJobState, packagesPath: string):
 const activeBuildJobs = new Map<string, string>();
 
 /**
+ * Fork: whether a request asks for a BP check or a sync that the saved build
+ * did not run — then it is a request for a new build, not for the saved result.
+ * `true` (project scope) covers any table list; a list covers the tables it names.
+ */
+function requestAddsPostBuildActions(
+  params: any,
+  saved: { bpCheck?: boolean; dbSync?: boolean | string[] } | undefined,
+): boolean {
+  const wantsBp = params.bpCheck === true || params.bpCheck === 'true';
+  if (wantsBp && !saved?.bpCheck) return true;
+  const asked = params.dbSync;
+  const askedTables = Array.isArray(asked) ? asked.filter((t: unknown) => typeof t === 'string' && t.trim()) : null;
+  const wantsSync = askedTables ? askedTables.length > 0 : asked === true || asked === 'true';
+  if (!wantsSync) return false;
+  const had = saved?.dbSync;
+  if (had === true) return false;
+  if (!Array.isArray(had) || !askedTables) return true;
+  const synced = new Set(had.map(t => String(t).trim().toLowerCase()));
+  return askedTables.some((t: string) => !synced.has(t.trim().toLowerCase()));
+}
+
+/**
  * Fork: the environment root of D365FO_UI_TEST_URL, which may carry a path or a
  * query for the UI tests; the restart needs only its origin. Undefined when it
  * is unset or not an HTTP(S) URL without credentials.
@@ -1342,7 +1364,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
         // Fork: a plain build's requested BP check / sync run here, once, like a
         // restart workflow's, and their output is saved for the status call that
         // collects the result. Still 'finalizing' until saveFinishedState.
-        final.postBuild.bpSection = await runPostBuildBpCheck(final.postBuild.request, final.targetModel, ctx.toolContext);
+        final.postBuild.bpSection = await runPostBuildBpCheck(final.postBuild.request, final.targetModel, ctx.toolContext, `${final.logFile}.bp.txt`);
         if (!(await ownsBuild(liveState, customPackagesPath))) return;
         final.postBuild.sync = await runPostBuildDbSync(final.postBuild.request, final.targetModel, ctx.toolContext);
         if (!(await ownsBuild(liveState, customPackagesPath))) return;
@@ -1389,7 +1411,7 @@ async function finishRestartWorkflow(
   // with nothing in the result to say so.
   workflow.stage = 'prerequisites';
   await persistIntent();
-  workflow.bpSection = await runPostBuildBpCheck(workflow.request, state.targetModel, context);
+  workflow.bpSection = await runPostBuildBpCheck(workflow.request, state.targetModel, context, `${state.logFile}.bp.txt`);
   workflow.sync = await runPostBuildDbSync(workflow.request, state.targetModel, context);
   const syncRequested = workflow.request.dbSync === true || Array.isArray(workflow.request.dbSync);
   if (reportedErrors) {
@@ -1570,6 +1592,56 @@ function runtimeRestartGuidance(): string {
 }
 
 /**
+ * Past this size a build result carries a summary of the BP check, not its text.
+ *
+ * run_bp_check prints xppbp's raw output, then every finding again as a
+ * moniker-checked list — on a model with ~5,000 warnings that put 2.7 MB into
+ * one build result, past what an MCP client shows inline, burying the compile
+ * verdict. The complete text is kept in a file next to the build log, and
+ * run_bp_check returns it on request.
+ */
+const BP_SECTION_CHAR_LIMIT = 12_000;
+const BP_SUMMARY_RULES = 25;
+const BP_SAMPLE_FINDINGS = 15;
+
+export function summarizeBpOutput(
+  text: string,
+  findings: Array<{ moniker: string | null; target: string; severity?: string; path?: string }>,
+  savedTo?: string,
+): string {
+  const verdict = text.split('\n')[0].trim();
+  const byRule = new Map<string, { count: number; severity?: string }>();
+  for (const f of findings) {
+    const rule = f.moniker ?? '(rule not named on the line)';
+    const entry = byRule.get(rule) ?? { count: 0, severity: f.severity };
+    entry.count++;
+    entry.severity ??= f.severity;
+    byRule.set(rule, entry);
+  }
+  const rules = [...byRule.entries()].sort((a, b) => b[1].count - a[1].count);
+  const lines = [
+    verdict,
+    '',
+    `${findings.length} finding(s) across ${rules.length} rule(s). The full output ` +
+      `(${text.split('\n').length} lines) is too large for a build result` +
+      (savedTo ? ` and is saved to: ${savedTo}` : '') +
+      '. For the complete list, call run_bp_check with this modelName.',
+  ];
+  if (rules.length > 0) {
+    lines.push('', 'Findings by rule:');
+    for (const [rule, { count, severity }] of rules.slice(0, BP_SUMMARY_RULES)) {
+      lines.push(`  ${count} × ${rule}${severity ? ` (${severity})` : ''}`);
+    }
+    if (rules.length > BP_SUMMARY_RULES) lines.push(`  … and ${rules.length - BP_SUMMARY_RULES} more rule(s)`);
+    lines.push('', `First ${Math.min(BP_SAMPLE_FINDINGS, findings.length)} finding(s):`);
+    for (const f of findings.slice(0, BP_SAMPLE_FINDINGS)) {
+      lines.push(`  • ${f.moniker ?? '(rule not named)'}: ${f.path ?? f.target}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
  * Model-wide BP check appended to a successful build when bpCheck:true.
  *
  * Advisory by construction: any failure here is reported as a line, never as a
@@ -1579,11 +1651,13 @@ async function runPostBuildBpCheck(
   params: any,
   targetModel: string,
   context: any,
+  /** Where to keep the complete output when the build result carries only a summary. */
+  fullOutputFile?: string,
 ): Promise<string> {
   if (params?.bpCheck !== true && params?.bpCheck !== 'true') return '';
   try {
-    const { runBpCheckTool } = await import('./runBpCheck.js');
-    const result: any = await runBpCheckTool(
+    const bp = await import('./runBpCheck.js');
+    const result: any = await bp.runBpCheckTool(
       { modelName: targetModel, projectPath: params?.projectPath, packagePath: params?.packagePath },
       context,
     );
@@ -1592,7 +1666,15 @@ async function runPostBuildBpCheck(
       .map((c: any) => c.text)
       .join('\n')
       .trim();
-    return text ? `\n\n--- Best practices (bpCheck=true) ---\n${text}` : '';
+    if (!text) return '';
+    if (text.length <= BP_SECTION_CHAR_LIMIT) return `\n\n--- Best practices (bpCheck=true) ---\n${text}`;
+    let saved: string | undefined;
+    if (fullOutputFile) {
+      saved = await writeFile(fullOutputFile, text, 'utf-8').then(() => fullOutputFile, () => undefined);
+    }
+    let findings: ReturnType<typeof bp.parseBpFindings> = [];
+    try { findings = bp.parseBpFindings(text); } catch { /* the summary still gives the verdict and the file */ }
+    return `\n\n--- Best practices (bpCheck=true) — summary ---\n${summarizeBpOutput(text, findings, saved)}`;
   } catch (e: any) {
     return `\n\n⚠️ bpCheck requested but could not run: ${e?.message ?? e}`;
   }
@@ -1997,10 +2079,13 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // {fullBuild:true} came back as "Collected the result of the build that
       // ended 19:27:58 … nothing was recompiled by this call".)
       // A restartAos request for a finished build that did not restart is a
-      // request for a new build. Fork: any other finished result stays
+      // request for a new build, and so (fork) is one asking for a BP check or
+      // a sync the saved build did not run. A repeat of the original request —
+      // a retried status call — still collects the saved result, which stays
       // collectable until sources change (below) — see activeBuildJobs.
       const fullBuildNeedsFreshRun = existingState.status !== 'running' &&
-        (fullBuild || (params.restartAos === true && !existingState.restartWorkflow));
+        (fullBuild || (params.restartAos === true && !existingState.restartWorkflow) ||
+          requestAddsPostBuildActions(params, existingState.restartWorkflow?.request ?? existingState.postBuild?.request));
       if (fullBuildNeedsFreshRun) {
         await buildLog('INFO', `discarding finished state for ${targetModel} and recompiling`);
         await clearBuildState(targetModel, customPackagesPath);
