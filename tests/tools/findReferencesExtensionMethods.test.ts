@@ -129,6 +129,22 @@ describe('find_references — a bare method name', () => {
     expect(bridge.findReferences).toHaveBeenCalledWith('CustTable');
   });
 
+  it('keeps an EDT or enum name a type lookup, even when a method has that name', async () => {
+    // EDTs and enums own no members, so they are not xref member containers — but a
+    // bare name that is one is still a type, not a method.
+    const index: FakeIndex = {
+      ...INDEX,
+      types: { ...INDEX.types, MyAmountEdt: 'edt', MyStatusEnum: 'enum' },
+      methods: { ...INDEX.methods, MyAmountEdt: ['MyHelper'], MyStatusEnum: ['MyHelper'] },
+    };
+    for (const name of ['MyAmountEdt', 'MyStatusEnum']) {
+      const { ctx, bridge } = context(index, {});
+      await run({ targetName: name }, ctx);
+      expect(bridge.findReferences).toHaveBeenCalledWith(name);
+      expect(bridge.findReferences).not.toHaveBeenCalledWith(`/Classes/MyHelper/Methods/${name}`);
+    }
+  });
+
   it('stays a bare-name lookup when too many types declare the method', async () => {
     const { ctx, bridge } = context(INDEX, {});
     await run({ targetName: 'find', targetType: 'method' }, ctx);

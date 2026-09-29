@@ -339,7 +339,9 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
       // A bare method name, when it is not also a type name (then it stays a type
       // lookup): query the types that declare it, extension classes included.
       const db = symbolIndex.getReadDb();
-      const isTypeName = targetType !== 'method' && resolveXrefContainers(db, memberName).length > 0;
+      // Any object type counts, not only the ones that own members: an EDT or enum
+      // named like some method must stay a type lookup.
+      const isTypeName = targetType !== 'method' && detectObjectTypeInDb(db, memberName).length > 0;
       const paths = isTypeName ? null : declaringMethodPaths(db, memberName);
       if (paths) {
         bridgeTargets = paths;
