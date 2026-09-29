@@ -184,6 +184,16 @@ const CHARS_PER_TOKEN = 4;
 // src/Metadata the server could read and not write, so every <ModuleReferences>
 // entry — a mandatory step before code that names a type from another model —
 // was a hand-edited XML carve-out. Parameters stay in the op-spec registry.
+//
+// Then find_references published the targetTypes #1064 had taught its handler
+// (data-entity, map, menu-item: +32 chars) and paid for them inside its own
+// schema: targetType's description repeated the label rule the tool description
+// already states, the tool description closed on "Essential for impact analysis
+// before refactoring", and targetType advertised `default: 'all'` — untrue, since
+// an omitted targetType takes the untyped path, which is NOT 'all' (a bare method
+// name is resolved to its declaring types, and with 'all' it is not).
+// Measured payload after: 45_015. The ceiling stays where it is on purpose: the
+// 85 chars under it are what the index/field-group targetTypes need next.
 const TOTAL_BUDGET = 45_100;
 const LARGEST_TOOL_BUDGET = 5_780;
 

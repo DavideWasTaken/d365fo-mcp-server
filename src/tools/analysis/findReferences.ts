@@ -12,7 +12,7 @@ import { tryBridgeReferences } from '../../bridge/bridgeAdapter.js';
 import * as fs from 'fs';
 import { readIndexedMethodSources } from '../../utils/indexedMethodSource.js';
 
-const FindReferencesArgsSchema = z.object({
+export const FindReferencesArgsSchema = z.object({
   // "name" is accepted as an alias for "targetName"
   targetName: z.string().optional().describe('Name of the target. For a precise, type-scoped method where-used, qualify it as "Owner.method" (e.g. "SalesTable.initFromSalesQuotationTable") or pass an AOT path ("/Tables/SalesTable/Methods/initFromSalesQuotationTable"). A bare method name matches that name on every type. For a label, pass the label id ("@WAX2194" or "@LabelFile:LabelId").'),
   name: z.string().optional().describe('Alias for targetName.'),
