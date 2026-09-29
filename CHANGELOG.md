@@ -125,6 +125,17 @@ those are called out explicitly below.
   `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
+- **`d365fo_file(action="project")` only touches projects under the configured solution
+  roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
+  like a projects folder", which every Visual Studio repo on the machine passes, and so
+  does `%TEMP%`. One call could take a project out of another repo's solution and
+  delete its files, or add a project there. `create`, `delete`, `add-object` and
+  `remove-object` now refuse a path outside `D365FO_SOLUTIONS_PATH`, `workspacePath` or
+  `solutionPath`. The error names these settings. The active project does not
+  count as a root, because `create` activates what it makes and a project created in a
+  foreign folder would otherwise vouch for the next call there. `delete` checks the
+  projects folder rather than the project, since the shared `.sln` it rewrites sits one
+  level above the project folder.
 - **`generate_object` names an extension class what `create` will write** (#1041).
   The pattern generator assembled `{Base}{Infix}…_Extension` by hand, while
   `d365fo_file(action="create")` normalises every `_Extension` name with the token

@@ -140,6 +140,8 @@ const REDIRECT_ANSWERS: Record<string, string> = {
     '    Same parameters as add-object, plus allowOrphan (default false): without it an object no other',
     '    project of the model references is refused, since it would leave Visual Studio.',
     '',
+    'Every operation refuses a path outside the configured solution roots (D365FO_SOLUTIONS_PATH,',
+    '  workspacePath, solutionPath). A refusal is a configuration question for the user, not a path to retry.',
     'Reload the project/solution in Visual Studio afterwards if it is open.',
   ].join('\n'),
 

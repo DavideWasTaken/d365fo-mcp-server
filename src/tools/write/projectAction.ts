@@ -10,6 +10,7 @@ import { getConfigManager } from '../../utils/configManager.js';
 import { findD365FileOnDisk } from '../../utils/objectFileLookup.js';
 import { PackageResolver } from '../../utils/packageResolver.js';
 import { extractModelNameFromProject } from '../../utils/workspaceDetector.js';
+import { assertProjectPathAllowed } from '../../utils/pathContainment.js';
 import { ProjectFileManager } from '../../workspace/projectFile.js';
 import { solutionsListingProject, solutionMateProjects } from '../../workspace/projectScaffold.js';
 import { axFolderForObjectType, hasAxFolder, resolveMembership } from '../../workspace/projectMembership.js';
@@ -68,6 +69,9 @@ async function handleMembership(op: 'add-object' | 'remove-object', args: Record
       (candidates.length ? `\nProjects of the model:\n${candidates.slice(0, 15).map(c => `  - ${c}`).join('\n')}` : ''));
   }
   if (!projectPath.toLowerCase().endsWith('.rnrproj')) return bad('projectPath must be a .rnrproj file.');
+  // The active project included: it may have been activated by a create in any folder.
+  const contained = await assertProjectPathAllowed(projectPath);
+  if (!contained.ok) return bad(contained.reason!);
 
   // A path the caller supplied must be a known project, not just any .rnrproj.
   const known = cfg.getAllDetectedProjects().some(p => p.projectPath && path.resolve(p.projectPath).toLowerCase() === projectPath.toLowerCase());
