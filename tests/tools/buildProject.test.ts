@@ -634,6 +634,7 @@ describe('build_d365fo_project', () => {
     expect(closeCallback).toBeDefined();
 
     readFileMock.mockImplementation(async (p: string) => {
+      if (p.includes('d365build_state')) return writeFileMock.mock.calls.filter((c: any[]) => c[0].includes('d365build_state')).at(-1)?.[1];
       if (p.endsWith('.xppc.err')) return "Compile Error: Class Method dynamics://MyModel/MyClass/myMethod: [(28,27),(28,28)]: ';' expected.";
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
@@ -666,6 +667,7 @@ describe('build_d365fo_project', () => {
     expect(closeCallback).toBeDefined();
 
     readFileMock.mockImplementation(async (p: string) => {
+      if (p.includes('d365build_state')) return writeFileMock.mock.calls.filter((c: any[]) => c[0].includes('d365build_state')).at(-1)?.[1];
       if (p.endsWith('.xppc.err')) return 'Compile Warning: MyClass: potential issue.';
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
