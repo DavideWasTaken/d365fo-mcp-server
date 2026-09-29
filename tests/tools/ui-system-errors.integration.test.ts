@@ -17,7 +17,7 @@ describe('D365 system error detector', () => {
   });
   it('captures Italian platform errors independently of business messages and nested regions', async () => {
     await page.setContent(
-      '<div role="alertdialog"><h2>Più errori ricevuti</h2><div role="alert">Impossibile aprire l\'oggetto menu item AVABom.</div><p>Nessuna distinta base trovata</p></div>',
+      '<div role="alertdialog"><h2>Più errori ricevuti</h2><div role="alert">Impossibile aprire l\'oggetto menu item MyBom.</div><p>Nessuna distinta base trovata</p></div>',
     );
     const result = await inspectSystemErrors(page, origin);
     expect(result.complete).toBe(true);
