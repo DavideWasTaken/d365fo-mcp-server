@@ -29,6 +29,19 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Added
+- **`build_d365fo_project` can restart the local AOS after a successful build**
+  (`restartAos: true`, off by default). A build can succeed while a new object,
+  for example a menu item, is still missing in the browser until the AOS is
+  restarted. With `restartAos` the tool does that restart itself, once
+  compilation, runtime metadata and any requested DB sync have succeeded. It
+  restarts only the one local IIS `AOSService` pool or IIS Express instance that
+  matches the environment URL, then waits until the AOS answers again. The URL
+  is `aosUrl`, or on a classic VM `Infrastructure.HostUrl` from
+  `AosService\WebRoot\web.config` (UDE needs `aosUrl`). When the match is
+  ambiguous or the restart can't be confirmed, it says so instead of guessing,
+  and collecting the result later never restarts again. If the server exits
+  before the restart stage, the next build releases its reservation; only an
+  exit during the restart itself needs a manual check. See `docs/AOS_RUNTIME_RESTART.md`.
 - **`d365fo_file(action="project")` manages Visual Studio projects.** The server could
   add objects to an existing `.rnrproj` but not make, remove or re-populate one, so a new
   ticket started with a hand-written project file and a hand-edited `.sln`. One action,
