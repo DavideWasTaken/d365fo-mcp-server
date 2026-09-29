@@ -71,6 +71,69 @@ function resolveXrefContainers(db: any, ownerName: string): string[] {
 }
 
 /**
+ * [ExtensionOf] classes of `ownerName` that declare `memberName`.
+ *
+ * A method added to a table or class by an extension class is stored in
+ * DYNAMICSXREFDB under the EXTENSION class — "/Classes/<Ext>/Methods/<m>" — and
+ * only there: "/Tables/<Owner>/Methods/<m>" does not exist. So "Owner.m" has to
+ * look there too, or a method every caller reaches as Owner.m reports 0. The
+ * index already records each class extension, its base and its methods.
+ */
+function extensionClassesDeclaring(db: any, ownerName: string, memberName: string): string[] {
+  let rows: Array<{ extension_name?: string; added_methods?: string | null }> = [];
+  try {
+    rows = db.prepare(
+      `SELECT extension_name, added_methods FROM extension_metadata
+       WHERE base_object_name = ? COLLATE NOCASE AND extension_type = 'class-extension'`,
+    ).all(ownerName);
+  } catch {
+    return []; // extension_metadata not built
+  }
+  const wanted = memberName.toLowerCase();
+  const out = new Set<string>();
+  for (const row of rows) {
+    if (!row?.extension_name || !row.added_methods) continue;
+    let methods: unknown;
+    try { methods = JSON.parse(row.added_methods); } catch { continue; }
+    if (Array.isArray(methods) && methods.some(m => typeof m === 'string' && m.toLowerCase() === wanted)) {
+      out.add(row.extension_name);
+    }
+  }
+  return [...out];
+}
+
+/** Past this many declaring types a bare method name stays a bare-name lookup. */
+const MAX_DECLARING_TYPES = 25;
+
+/**
+ * Every type that declares a method called `methodName`, as xref paths — or
+ * null when there are none or too many to query one by one.
+ *
+ * A bare method name reached the bridge as a bare name, which it expands to
+ * TYPE paths ("/Tables/<name>", …): for a method that matches nothing, and the
+ * caller fell back to the name-based search. Resolving the declaring types from
+ * the index queries the paths the calls are actually recorded under, extension
+ * classes included (their methods are indexed with the extension as parent).
+ */
+function declaringMethodPaths(db: any, methodName: string): string[] | null {
+  let rows: Array<{ parent_name?: string }> = [];
+  try {
+    rows = db.prepare(
+      `SELECT DISTINCT parent_name FROM symbols
+       WHERE type = 'method' AND name = ? AND parent_name IS NOT NULL
+       LIMIT ${MAX_DECLARING_TYPES + 1}`,
+    ).all(methodName);
+  } catch {
+    return null;
+  }
+  const parents = rows.map(r => r?.parent_name).filter((p): p is string => !!p);
+  if (parents.length === 0 || parents.length > MAX_DECLARING_TYPES) return null;
+  const paths = parents.flatMap(parent =>
+    resolveXrefContainers(db, parent).map(c => `/${c}/${parent}/Methods/${methodName}`));
+  return paths.length > 0 ? paths : null;
+}
+
+/**
  * Authoritative "no references" result for a member-scoped lookup that cleanly
  * returned nothing from the xref bridge. Does NOT fall back to the name-only FTS
  * scan — that would pool callers of every same-named member across all types.
@@ -259,12 +322,29 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
     if (isAotPath) {
       memberScoped = cleanTargetName.includes('/Methods/') || cleanTargetName.includes('/Fields/');
     } else if (owner && memberSegments.length > 0) {
-      const containers = resolveXrefContainers(symbolIndex.getReadDb(), owner);
+      const db = symbolIndex.getReadDb();
+      const containers = resolveXrefContainers(db, owner);
       bridgeTargets = containers.length > 0
         ? containers.flatMap(c => memberSegments.map(seg => `/${c}/${owner}/${seg}/${memberName}`))
         // Owner not indexed — hand the qualified name to the bridge to resolve across container types.
         : [`${owner}.${memberName}`];
+      // A method an [ExtensionOf] class adds to the owner lives under that class.
+      if (wantsMethod) {
+        for (const ext of extensionClassesDeclaring(db, owner, memberName)) {
+          bridgeTargets.push(`/Classes/${ext}/Methods/${memberName}`);
+        }
+      }
       memberScoped = true;
+    } else if (wantsMethod && targetType !== 'all') {
+      // A bare method name, when it is not also a type name (then it stays a type
+      // lookup): query the types that declare it, extension classes included.
+      const db = symbolIndex.getReadDb();
+      const isTypeName = targetType !== 'method' && resolveXrefContainers(db, memberName).length > 0;
+      const paths = isTypeName ? null : declaringMethodPaths(db, memberName);
+      if (paths) {
+        bridgeTargets = paths;
+        memberScoped = true;
+      }
     }
 
     // Try C# bridge first (DYNAMICSXREFDB — live cross-references)

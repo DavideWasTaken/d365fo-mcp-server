@@ -125,6 +125,15 @@ those are called out explicitly below.
   `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
+- **`find_references` finds methods added by `[ExtensionOf]` classes.** The
+  cross-reference database records such a method under the extension class only
+  (`/Classes/<Ext>/Methods/<m>`); `Owner.method` queried `/Tables/<Owner>/Methods/<m>`,
+  which does not exist, and reported 0 for a method with callers. It now also queries
+  every class extension of the owner that declares the method, from the index's
+  extension records. A bare method name (no owner) is resolved to the types that
+  declare it and queried by their full paths, instead of reaching the bridge as a bare
+  name that matches nothing and falling back to the name-based search; past 25
+  declaring types it stays a bare-name lookup.
 - **`d365fo_file(action="project")` only touches projects under the configured solution
   roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
   like a projects folder", which every Visual Studio repo on the machine passes, and so
