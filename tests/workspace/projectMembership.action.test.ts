@@ -167,6 +167,25 @@ describe('label files and the active project', () => {
       .content[0].text).toContain('already in the project');
   });
 
+  it('checks an explicit languages list against the files on disk', async () => {
+    const pkg = await labelTree(['en-US', 'fi']);
+    // A language with no file used to be written into the project, failing the VS build later.
+    const bogus = await call('add-object', {
+      projectPath: a, objectType: 'label-file', objectName: 'ContosoProj', packagePath: pkg, languages: ['en-US', 'de'],
+    });
+    expect(bogus.isError).toBe(true);
+    expect(bogus.content[0].text).toContain('ContosoProj_<lang>.xml for de');
+    expect(await fs.readFile(a, 'utf-8')).not.toContain('AxLabelFile\\ContosoProj_');
+    // A listed language that exists is added alone, spelled as on disk.
+    const one = await call('add-object', {
+      projectPath: a, objectType: 'label-file', objectName: 'ContosoProj', packagePath: pkg, languages: ['EN-us'],
+    });
+    expect(one.isError, one.content[0].text).toBeFalsy();
+    const xml = await fs.readFile(a, 'utf-8');
+    expect(xml).toContain('AxLabelFile\\ContosoProj_en-US');
+    expect(xml).not.toContain('AxLabelFile\\ContosoProj_fi');
+  });
+
   it('reports a label file with no descriptors, and refuses removal', async () => {
     const pkg = await labelTree([]);
     const none = await call('add-object', { projectPath: a, objectType: 'label-file', objectName: 'ContosoProj', packagePath: pkg });
