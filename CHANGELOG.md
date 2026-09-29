@@ -29,6 +29,24 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Added
+- **`d365fo_file(action="project")` manages Visual Studio projects.** The server could
+  add objects to an existing `.rnrproj` but not make, remove or re-populate one, so a new
+  ticket started with a hand-written project file and a hand-edited `.sln`. One action,
+  picked with `params.operation`:
+  - `create` writes `<projectsRoot>/<name>/<name>.rnrproj` (BOM + CRLF, fresh GUID, build
+    tasks version taken from a sibling project) and registers it in the solution — a
+    shared `<Model>.sln` (with `dependsOn` written as `ProjectDependencies`) or a new
+    per-project `.sln`, detected from the folder; an undecidable layout stops and asks.
+    The new project becomes the active one.
+  - `delete` takes a project out of its solution (entry, configuration and dependency
+    lines) and, with `removeFiles`, deletes only its own files. A folder holding anything
+    else, or a project no solution lists, is refused. Model metadata is never touched.
+  - `add-object` / `remove-object` register existing objects in, or unregister them from,
+    a project (up to 20 per call), including label files (`objectType="label-file"`, add
+    only). The files stay; removing the last reference needs `allowOrphan`.
+
+  Nothing is overwritten, and the folder must already look like a projects folder.
+  Contract: `get_knowledge(kind="op-spec", topic="project")`.
 - **Extension classes can follow their own naming style.** `EXTENSION_NAMING_STYLE`
   drove two independent decisions — the token of an element extension
   (`CustTable.ContosoRobotics`) and that of a CoC class

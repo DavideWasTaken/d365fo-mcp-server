@@ -21,6 +21,7 @@ export const d365foFileTool = {
     name: 'd365fo_file',
     description: `Create, modify, delete, undo, or generate a D365FO AOT object. Choose an \`action\`:
 • create → write a NEW object file into PackagesLocalDirectory (UTF-8 BOM, auto-added to .rnrproj). THE WRITE STEP — incomplete until isError=false; ⚠️/❌ = failure. Extensions: objectName="Base.PrefixExtension".
+• project → VS project + .sln ops via params.operation: create|delete|add-object|remove-object.
 • modify → edit an EXISTING object. APPLIES IMMEDIATELY, no dry-run — confirm with the user first; revert with action="undo". Needs \`operation\`.
 • delete → remove an object's XML from disk AND un-register it from every .rnrproj of the model that lists it. IRREVERSIBLE — confirm with the user first.
 • undo → roll back \`filePath\`: git-tracked → git checkout HEAD, which discards ALL uncommitted changes to that file, not just the last edit; untracked → deleted.
@@ -32,7 +33,7 @@ Model + prefix auto-applied.`,
       properties: {
         action: {
           type: 'string',
-          enum: ['create', 'modify', 'delete', 'undo', 'generate'],
+          enum: ['create', 'project', 'modify', 'delete', 'undo', 'generate'],
         },
         objectType: {
           type: 'string',
