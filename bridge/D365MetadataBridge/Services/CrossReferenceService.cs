@@ -168,9 +168,6 @@ namespace D365MetadataBridge.Services
             string[] memberContainers = { "Tables", "Classes", "Forms", "Views", "DataEntityViews", "Queries", "Maps" };
 
             var pathVariants = new List<string>();
-            // LIKE patterns with a wildcard INSIDE the path (a field whose metadata
-            // segment names its type). Built from escaped literals; never "/%"-extended.
-            var memberPatterns = new List<string>();
             bool memberQualified = false;
             if (objectPath.Contains("/"))
             {
@@ -237,7 +234,7 @@ namespace D365MetadataBridge.Services
             // Every X++-shaped target also exists in the metadata shape; query both,
             // whichever way the target was given.
             foreach (var p in pathVariants.ToList())
-                AddMetadataTwins(p, pathVariants, memberPatterns);
+                AddMetadataTwins(p, pathVariants);
             pathVariants = pathVariants.Distinct(StringComparer.Ordinal).ToList();
 
             // Also add sub-paths (methods, fields) so we catch method-level references.
@@ -264,12 +261,11 @@ namespace D365MetadataBridge.Services
                 allParams.Add(($"@P{i}", pathVariants[i]));
             }
             var likeConditions = new List<string>();
-            var likePatterns = extraPaths.Concat(memberPatterns).ToList();
-            for (int i = 0; i < likePatterns.Count; i++)
+            for (int i = 0; i < extraPaths.Count; i++)
             {
                 var pname = $"@L{i}";
                 likeConditions.Add($"tgt.Path LIKE {pname}");
-                allParams.Add((pname, likePatterns[i]));
+                allParams.Add((pname, extraPaths[i]));
             }
 
             var whereClause = $"tgt.Path IN ({string.Join(",", paramNames)})";
@@ -281,7 +277,11 @@ namespace D365MetadataBridge.Services
             // "Form/…" metadata row, so a table with 500 code references (CustTable)
             // returned no metadata at all — the very rows this lookup exists to add. The
             // candidate names are resolved once: the LIKEs against Names are the costly
-            // part, the joins on [References].TargetId are indexed.
+            // part, the joins on [References].TargetId are indexed. The totals join the
+            // source name exactly as the rows do: [References] keeps rows whose SourceId is
+            // no longer in Names (77 of the 93 references to one table field on a live
+            // database), and counting those made the rows look like a sample of a total
+            // nobody could list.
             string ShapeRows(string shape) => $@"
                 SELECT * FROM (
                     SELECT TOP ({RowsPerShape})
@@ -302,7 +302,8 @@ namespace D365MetadataBridge.Services
                 ) AS rows
                 ORDER BY CASE WHEN TargetPath LIKE N'/%' THEN 0 ELSE 1 END, SourcePath, Line;
                 SELECT COUNT(*), SUM(CASE WHEN t.Path LIKE N'/%' THEN 0 ELSE 1 END)
-                FROM #xrefTargets t INNER JOIN [References] r ON r.TargetId = t.Id;
+                FROM #xrefTargets t INNER JOIN [References] r ON r.TargetId = t.Id
+                INNER JOIN dbo.Names src ON src.Id = r.SourceId;
                 DROP TABLE #xrefTargets;";
             int total = 0, metadataTotal = 0;
 
@@ -386,13 +387,48 @@ namespace D365MetadataBridge.Services
         };
 
         /// <summary>
-        /// Add the metadata twin of an X++-shaped target path: "/Tables/T" → "Table/T",
-        /// "/Edts/E" → "EdtString/E", … ; for a table member, "/Tables/T/Methods/m" →
-        /// "Table/T/Method/m" and "/Tables/T/Fields/f" → the pattern
-        /// "Table/T/TableField%/f" (the segment names the field's type: TableFieldString,
-        /// TableFieldEnum, …). Metadata-shaped and unknown paths add nothing.
+        /// The segment a field is stored under in the metadata shape, per container — it
+        /// names the field's type, so there is one per type. Every segment found as a
+        /// target in a live DYNAMICSXREFDB. Listed rather than matched with
+        /// "TableField%": in LIKE "%" also crosses "/", so "Table/T/TableField%/Name"
+        /// matched the field group "Table/T/TableFieldGroup/Name" as well — and a table
+        /// with a field and a field group of the same name is common
+        /// (AccountingDistributionTemplate.Name).
         /// </summary>
-        private static void AddMetadataTwins(string xppPath, List<string> exact, List<string> patterns)
+        private static readonly Dictionary<string, string[]> MetadataFieldSegments = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["Tables"] = new[]
+            {
+                "TableFieldString", "TableFieldEnum", "TableFieldReal", "TableFieldInt64", "TableFieldInt",
+                "TableFieldDate", "TableFieldUtcDateTime", "TableFieldGuid", "TableFieldContainer", "TableFieldTime",
+            },
+            ["Maps"] = new[]
+            {
+                "MapFieldString", "MapFieldEnum", "MapFieldReal", "MapFieldInt64", "MapFieldInt",
+                "MapFieldDate", "MapFieldUtcDateTime", "MapFieldGuid", "MapFieldContainer", "MapFieldTime",
+            },
+            ["Views"] = new[]
+            {
+                "ViewFieldBound", "ViewFieldComputedString", "ViewFieldComputedEnum", "ViewFieldComputedReal",
+                "ViewFieldComputedInt64", "ViewFieldComputedInt", "ViewFieldComputedDate", "ViewFieldComputedUtcDateTime",
+            },
+            ["DataEntityViews"] = new[]
+            {
+                "DataEntityViewMappedField", "DataEntityViewUnmappedFieldString", "DataEntityViewUnmappedFieldEnum",
+                "DataEntityViewUnmappedFieldReal", "DataEntityViewUnmappedFieldInt64", "DataEntityViewUnmappedFieldInt",
+                "DataEntityViewUnmappedFieldDate", "DataEntityViewUnmappedFieldUtcDateTime",
+                "DataEntityViewUnmappedFieldGuid", "DataEntityViewUnmappedFieldContainer",
+            },
+        };
+
+        /// <summary>
+        /// Add the metadata twin of an X++-shaped target path: "/Tables/T" → "Table/T",
+        /// "/Edts/E" → "EdtString/E", … ; for a member, "/Views/V/Methods/m" →
+        /// "View/V/Method/m" (tables, classes, forms, views, data entities, maps) and
+        /// "/Tables/T/Fields/f" → "Table/T/TableFieldString/f", "Table/T/TableFieldEnum/f", …
+        /// (tables, maps, views, data entities). Metadata-shaped and unknown paths add nothing.
+        /// </summary>
+        private static void AddMetadataTwins(string xppPath, List<string> exact)
         {
             if (!xppPath.StartsWith("/")) return;
             var parts = xppPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
@@ -401,10 +437,17 @@ namespace D365MetadataBridge.Services
             {
                 foreach (var t in types) exact.Add($"{t}/{parts[1]}");
             }
-            else if (parts.Length == 4 && parts[0] == "Tables")
+            else if (parts.Length == 4)
             {
-                if (parts[2] == "Methods") exact.Add($"Table/{parts[1]}/Method/{parts[3]}");
-                else if (parts[2] == "Fields") patterns.Add($"Table/{EscapeLike(parts[1])}/TableField%/{EscapeLike(parts[3])}");
+                if (parts[2] == "Methods")
+                {
+                    foreach (var t in types) exact.Add($"{t}/{parts[1]}/Method/{parts[3]}");
+                }
+                else if (parts[2] == "Fields" && MetadataFieldSegments.TryGetValue(parts[0], out var segments))
+                {
+                    foreach (var t in types)
+                        foreach (var s in segments) exact.Add($"{t}/{parts[1]}/{s}/{parts[3]}");
+                }
             }
         }
 

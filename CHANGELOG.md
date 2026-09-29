@@ -134,8 +134,12 @@ those are called out explicitly below.
   returned 334 of its 785 references, missing every form data source and entity
   mapping; a custom EDT's, 12 of 108, missing every table field typed with it. Both
   shapes are queried now — including for `Owner.member` and explicit AOT paths, whose
-  metadata twins are derived — and metadata rows read as "object › member › property".
-  The bridge returns exact totals split into code and metadata, and up to 500 rows per
+  metadata twins are derived for methods of tables, classes, forms, views, data entities
+  and maps, and for fields of tables, maps, views and data entities, each field under
+  its exact type segment (a wildcard also matched a field group of the same name) —
+  and metadata rows read as "object › member › property".
+  The bridge returns exact totals split into code and metadata (references whose source
+  no longer exists in the database are left out of both, as they are of the rows), and up to 500 rows per
   shape instead of 500 in all: sorted by source path, code rows used to fill the cap, so
   a large table (CustTable) showed no metadata reference at all. The list gives each
   shape its share of `limit`. A `targetType` that names a type now scopes a bare name to
