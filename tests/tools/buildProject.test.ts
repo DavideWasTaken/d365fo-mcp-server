@@ -983,7 +983,8 @@ describe('build_d365fo_project', () => {
   it('summarizes a BP check too large for a build result and keeps the full text in a file', async () => {
     const finding = (i: number) =>
       `BPUpgradeCodeRecId: dynamics://Class/MyClass${i}/Method/run\nWarning AxClass [(1,1),(2,2)] Rule text ${i}`;
-    const huge = '⚠️ BP Check completed with issues\n\n' + Array.from({ length: 800 }, (_, i) => finding(i)).join('\n');
+    const huge = '⚠️ BP Check completed with issues\n\n' + Array.from({ length: 800 }, (_, i) => finding(i)).join('\n') +
+      '\nCodeAnalysis Warning: not a BP rule line\nErrors: 0\nWarnings: 801';
     bpMock.mockResolvedValue({ content: [{ type: 'text', text: huge }] });
     const child = makeFakeChild(42);
     spawnMock.mockReturnValue(child);
@@ -994,6 +995,10 @@ describe('build_d365fo_project', () => {
     const section: string = state.postBuild.bpSection;
     expect(section.length).toBeLessThan(huge.length / 10);
     expect(section).toContain('BP Check completed with issues');
+    // xppbp's own total, and an honest label on the parsed count.
+    expect(section).toContain('xppbp totals: Errors 0, Warnings 801.');
+    expect(section).toContain('800 finding(s) the parser recognises');
+    expect(section).toContain('800 × BPUpgradeCodeRecId');
     expect(section).toContain('run_bp_check');
     expect(section).toContain(`${state.logFile}.bp.txt`);
     expect(writeFileMock.mock.calls.some(c => c[0] === `${state.logFile}.bp.txt` && c[1] === huge)).toBe(true);

@@ -1486,7 +1486,8 @@ async function renderFinishedBuildResult(
   const sync = workflow?.sync ?? finalState.postBuild?.sync ?? { section: '', failed: false };
   const savedSections = bpSection + sync.section + runtimeSection;
   const requestNote = collected && (params?.bpCheck !== undefined || params?.dbSync !== undefined || params?.restartAos !== undefined)
-    ? '\nPost-build actions belong to the original build request; reading this result does not add or repeat them. Use fullBuild:true for a new build with different actions.\n'
+    ? '\nThis collects the saved result; its post-build actions ran once and are not repeated. ' +
+      'A request that adds an action (bpCheck, a dbSync table, restartAos) starts a new build.\n'
     : '';
   // Fork: the build-before-UI-test workflow. A result the caller must not treat
   // as deployed says so first; a green build without restartAos says a runtime
@@ -1619,11 +1620,17 @@ export function summarizeBpOutput(
     byRule.set(rule, entry);
   }
   const rules = [...byRule.entries()].sort((a, b) => b[1].count - a[1].count);
+  // xppbp's own tally is the total; the parser recognises only BP-moniker lines
+  // (not CodeAnalysis ones, for instance), so its count can be lower.
+  const total = (label: string) => [...text.matchAll(new RegExp(`^\\s*${label}\\s*:\\s*(\\d+)\\s*$`, 'gim'))].at(-1)?.[1];
+  const totals = [['Errors', total('Errors')], ['Warnings', total('Warnings')]]
+    .filter(([, n]) => n !== undefined).map(([label, n]) => `${label} ${n}`).join(', ');
   const lines = [
     verdict,
     '',
-    `${findings.length} finding(s) across ${rules.length} rule(s). The full output ` +
-      `(${text.split('\n').length} lines) is too large for a build result` +
+    ...(totals ? [`xppbp totals: ${totals}.`] : []),
+    `Counted below: ${findings.length} finding(s) the parser recognises (BP rule lines), across ${rules.length} rule(s). ` +
+      `The full output (${text.split('\n').length} lines) is too large for a build result` +
       (savedTo ? ` and is saved to: ${savedTo}` : '') +
       '. For the complete list, call run_bp_check with this modelName.',
   ];
