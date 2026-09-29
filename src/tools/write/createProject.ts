@@ -4,6 +4,7 @@ import * as path from 'path';
 import { z } from 'zod';
 import { getConfigManager } from '../../utils/configManager.js';
 import { isStandardModel } from '../../utils/modelClassifier.js';
+import { extractModelNameFromProject } from '../../utils/workspaceDetector.js';
 import {
   scaffoldProject, removeProject, validateProjectName, ScaffoldError, inferProjectsRoot, looksLikeProjectsRoot,
   type SolutionMode,
@@ -89,10 +90,13 @@ export async function handleCreateProject(args: Record<string, unknown>) {
     return fail(`unexpected error — ${(e as Error)?.message ?? e}`);
   }
 
-  // Make it the target of the next create.
+  // Make it the target of the next create. forceProject, not setRuntimeContext: a
+  // projectPath the detection cache has never seen makes setRuntimeContext drop the
+  // detected project (the model then reads null) AND the write anchor, so a project
+  // made for another model would let the next create write there unchecked.
   let activated = false;
   if (a.activate !== false) {
-    try { cfg.setRuntimeContext({ projectPath: result.projectPath }); activated = true; } catch { /* advisory */ }
+    try { activated = (await cfg.forceProject(result.projectPath)) !== null; } catch { /* advisory */ }
   }
 
   const lines = [
@@ -129,17 +133,20 @@ export async function handleDeleteProject(args: Record<string, unknown>) {
   await cfg.ensureLoaded();
 
   let projectPath = a.projectPath?.trim() || '';
-  const modelName = a.modelName?.trim() || cfg.getModelName() || '';
-  const siblings = cfg.getProjectsForModel(modelName);
   if (!projectPath) {
     if (!a.projectName) return bad('pass projectPath (the .rnrproj) or projectName.');
     const nameError = validateProjectName(a.projectName);
     if (nameError) return bad(nameError);
-    const root = a.projectsRoot?.trim() || inferProjectsRoot(siblings) || '';
+    const locatingModel = a.modelName?.trim() || cfg.getModelName() || '';
+    const root = a.projectsRoot?.trim() || inferProjectsRoot(cfg.getProjectsForModel(locatingModel)) || '';
     if (!root) return bad('cannot tell where the project lives — pass projectPath.');
     projectPath = path.join(root, a.projectName, `${a.projectName}.rnrproj`);
   }
   projectPath = path.resolve(projectPath);
+  // Orphans are judged against the projects of the model THIS project builds, which
+  // need not be the configured one.
+  const modelName = (await extractModelNameFromProject(projectPath)) || a.modelName?.trim() || cfg.getModelName() || '';
+  const siblings = cfg.getProjectsForModel(modelName);
   // This unlinks files: stay inside a folder that looks like a projects folder.
   if (!(await looksLikeProjectsRoot(path.dirname(path.dirname(projectPath))))) {
     return bad(`${projectPath} is not inside a projects folder (no .sln/.rnrproj around it) — refusing.`);

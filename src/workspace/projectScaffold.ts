@@ -127,22 +127,37 @@ export function renderRnrproj(opts: {
 
 // ── .sln ─────────────────────────────────────────────────────────────────────
 
-interface SlnProject { name: string; relPath: string; guid: string }
+interface SlnProject { name: string; relPath: string; guid: string; typeGuid: string }
 
-const SLN_PROJECT_RE = /^Project\("\{[^}]+\}"\)\s*=\s*"([^"]*)",\s*"([^"]*)",\s*"(\{[^}]+\})"/gm;
+const SLN_PROJECT_RE = /^Project\("(\{[^}]+\})"\)\s*=\s*"([^"]*)",\s*"([^"]*)",\s*"(\{[^}]+\})"/gm;
 
 export function parseSolutionProjects(sln: string): SlnProject[] {
-  return [...sln.matchAll(SLN_PROJECT_RE)].map(m => ({ name: m[1], relPath: m[2], guid: m[3].toUpperCase() }));
+  return [...sln.matchAll(SLN_PROJECT_RE)].map(m => ({
+    typeGuid: m[1].toUpperCase(), name: m[2], relPath: m[3], guid: m[4].toUpperCase(),
+  }));
 }
 
-/** Resolve a caller's project name to a project of the solution: display name, file stem or "<name> (…)" prefix. */
-function findSolutionProject(projects: SlnProject[], wanted: string): SlnProject | undefined {
+/**
+ * Resolve a caller's project name to projects of the solution: display name, file stem
+ * or "<name> (…)" prefix, the first tier that matches. More than one hit is ambiguous —
+ * the caller refuses rather than wire a dependency on whichever the file lists first.
+ */
+function findSolutionProjects(projects: SlnProject[], wanted: string): SlnProject[] {
   const w = wanted.toLowerCase();
   const stem = (p: SlnProject) => path.win32.basename(p.relPath).replace(/\.rnrproj$/i, '').toLowerCase();
-  return projects.find(p => p.name.toLowerCase() === w)
-    ?? projects.find(p => stem(p) === w)
-    ?? projects.find(p => p.name.toLowerCase().startsWith(w + ' '));
+  const tiers: Array<(p: SlnProject) => boolean> = [
+    p => p.name.toLowerCase() === w,
+    p => stem(p) === w,
+    p => p.name.toLowerCase().startsWith(w + ' '),
+  ];
+  for (const matches of tiers) {
+    const hits = projects.filter(matches);
+    if (hits.length) return hits;
+  }
+  return [];
 }
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function eolOf(text: string): string {
   return text.includes('\r\n') ? '\r\n' : '\n';
@@ -167,6 +182,34 @@ const CONFIG_KEYS = (guid: string) => [
   `\t\t${guid}.Debug|Any CPU.Build.0 = Debug|Any CPU`,
 ];
 
+/**
+ * Configuration lines for a project joining `sln`: one pair per solution configuration,
+ * mapped the way an existing D365FO project of the solution maps it (repos differ:
+ * Release → Release|Any CPU in some, → Debug|Any CPU in others). A solution that
+ * declares no configurations gets the Debug pair.
+ */
+function configLinesFor(sln: string, guid: string): string[] {
+  const declared = /GlobalSection\(SolutionConfigurationPlatforms\)\s*=\s*preSolution([\s\S]*?)EndGlobalSection/.exec(sln)?.[1] ?? '';
+  const configs = [...declared.matchAll(/^[ \t]*([^=\r\n]+?)[ \t]*=/gm)].map(m => m[1]);
+  if (!configs.length) return CONFIG_KEYS(guid);
+
+  const sibling = parseSolutionProjects(sln).find(p => p.typeGuid === D365FO_PROJECT_TYPE_GUID);
+  const mapped = new Map<string, string>();
+  if (sibling) {
+    const re = new RegExp(`^[ \\t]*${escapeRe(sibling.guid)}\\.(.+?)\\.(ActiveCfg|Build\\.0)[ \\t]*=[ \\t]*(.+?)[ \\t]*$`, 'gim');
+    for (const m of sln.matchAll(re)) mapped.set(`${m[1].toLowerCase()}.${m[2].toLowerCase()}`, m[3]);
+  }
+  const out: string[] = [];
+  for (const cfg of configs) {
+    const active = mapped.get(`${cfg.toLowerCase()}.activecfg`) ?? `${cfg.split('|')[0]}|Any CPU`;
+    out.push(`\t\t${guid}.${cfg}.ActiveCfg = ${active}`);
+    // A sibling left out of the build in this configuration leaves the new one out too.
+    const build = sibling ? mapped.get(`${cfg.toLowerCase()}.build.0`) : active;
+    if (build) out.push(`\t\t${guid}.${cfg}.Build.0 = ${build}`);
+  }
+  return out;
+}
+
 /** Add a project to solution text. Pure — the caller reads and writes the file. */
 export function addProjectToSolutionText(sln: string, opts: {
   displayName: string; relPath: string; guid: string; dependsOnGuids: string[];
@@ -190,16 +233,17 @@ export function addProjectToSolutionText(sln: string, opts: {
     ].join(eol) + eol;
     return sln.replace(/\s*$/, eol) + block + sections;
   }
+  const configLines = configLinesFor(sln, opts.guid);
   let out = sln.slice(0, globalAt) + block + sln.slice(globalAt);
 
   const cfgRe = /(GlobalSection\(ProjectConfigurationPlatforms\)\s*=\s*postSolution[\s\S]*?)(\r?\n[ \t]*EndGlobalSection)/;
   if (cfgRe.test(out)) {
-    out = out.replace(cfgRe, (_m, body: string, end: string) => body + eol + CONFIG_KEYS(opts.guid).join(eol) + end);
+    out = out.replace(cfgRe, (_m, body: string, end: string) => body + eol + configLines.join(eol) + end);
   } else {
     // A solution with no project-configuration section: add one before EndGlobal.
     out = out.replace(/^EndGlobal\s*$/m, [
       '\tGlobalSection(ProjectConfigurationPlatforms) = postSolution',
-      ...CONFIG_KEYS(opts.guid),
+      ...configLines,
       '\tEndGlobalSection',
       'EndGlobal',
     ].join(eol));
@@ -306,6 +350,11 @@ async function exists(p: string): Promise<boolean> {
 export async function scaffoldProject(opts: ScaffoldProjectOptions): Promise<ScaffoldResult> {
   const nameError = validateProjectName(opts.projectName);
   if (nameError) throw new ScaffoldError(nameError);
+  // The display name sits between quotes on a .sln line: a quote or a line break in it
+  // would end that line early and let the rest be read as further solution entries.
+  if (opts.displayName !== undefined && [...opts.displayName].some(c => c === '"' || c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) {
+    throw new ScaffoldError('displayName may not contain a double quote, a line break or another control character');
+  }
   if (!opts.modelName || !/^[A-Za-z0-9_]+$/.test(opts.modelName)) {
     throw new ScaffoldError(`modelName "${opts.modelName}" is not a valid model name`);
   }
@@ -380,8 +429,14 @@ export async function scaffoldProject(opts: ScaffoldProjectOptions): Promise<Sca
     }
     const missing: string[] = [];
     for (const dep of dependsOn) {
-      const hit = findSolutionProject(existing, dep);
-      if (hit) dependsOnGuids.push(hit.guid); else missing.push(dep);
+      const hits = findSolutionProjects(existing, dep);
+      if (hits.length > 1) {
+        throw new ScaffoldError(
+          `dependsOn "${dep}" matches ${hits.length} projects of ${path.basename(sharedSln)}: ` +
+          `${hits.map(h => h.name).join(', ')} — pass the exact name.`,
+        );
+      }
+      if (hits.length) dependsOnGuids.push(hits[0].guid); else missing.push(dep);
     }
     if (missing.length) {
       throw new ScaffoldError(
@@ -444,7 +499,6 @@ export async function scaffoldProject(opts: ScaffoldProjectOptions): Promise<Sca
 // ── Removal ──────────────────────────────────────────────────────────────────
 
 const norm = (p: string) => p.replace(/\//g, '\\').toLowerCase();
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Remove a project's block, configuration lines and dependency lines from solution text. Pure; null when not listed. */
 export function removeProjectFromSolutionText(sln: string, relPath: string): { text: string; guid: string } | null {

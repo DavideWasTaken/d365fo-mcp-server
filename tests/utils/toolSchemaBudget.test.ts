@@ -185,7 +185,7 @@ const CHARS_PER_TOKEN = 4;
 // entry — a mandatory step before code that names a type from another model —
 // was a hand-edited XML carve-out. Parameters stay in the op-spec registry.
 const TOTAL_BUDGET = 45_100;
-const LARGEST_TOOL_BUDGET = 5_840;
+const LARGEST_TOOL_BUDGET = 5_780;
 
 async function getTools(): Promise<Array<{ name: string }>> {
   const ctx: any = { symbolIndex: {}, parser: {} };
@@ -232,9 +232,13 @@ describe('tool schema token budget', () => {
     const tools = await getTools();
     const byName = new Map(tools.map(t => [t.name, t]));
 
-    // d365fo_file's cap moved 5,780 -> 5,840 (+~110 serialized chars) for action
-    // "project" (create/delete/add-object/remove-object): the .rnrproj and .sln
-    // entry were the last hand-written files in the flow. Parameters stay in the op-spec.
+    // Action "project" (create/delete/add-object/remove-object — the .rnrproj and
+    // .sln entry were the last hand-written files in the flow) cost ~117 serialized
+    // chars and was paid for inside d365fo_file's own schema, not with a cap raise:
+    // the opening line re-listed the actions its bullets list, create named its file
+    // encoding, delete and the Windows note restated what the bullets already say,
+    // objectType said [delete] takes the enum it is published with, and properties
+    // restated the op-spec paragraph. d365fo_file 5,715 -> 5,705; payload 45,093.
     //
     // d365fo_file's cap moved 5,700 -> 5,780 when objectType "model-descriptor"
     // and operations add-/remove-module-reference were published (5,640 -> 5,707
@@ -243,7 +247,7 @@ describe('tool schema token budget', () => {
     // hand-edited-XML hole under src/Metadata — a model descriptor was the only
     // file the server could read but not write. The parameters stay out of the
     // schema, in the op-spec registry, like every other operation's.
-    for (const [name, cap] of [['d365fo_file', 5_840], ['generate_object', 3_400]] as const) {
+    for (const [name, cap] of [['d365fo_file', 5_780], ['generate_object', 3_400]] as const) {
       const tool: any = byName.get(name);
       expect(tool, `${name} is not published`).toBeDefined();
       const chars = JSON.stringify(tool).length;

@@ -19,13 +19,13 @@
 
 export const d365foFileTool = {
     name: 'd365fo_file',
-    description: `Create, modify, delete, undo, or generate a D365FO AOT object. Choose an \`action\`:
-• create → write a NEW object file into PackagesLocalDirectory (UTF-8 BOM, auto-added to .rnrproj). THE WRITE STEP — incomplete until isError=false; ⚠️/❌ = failure. Extensions: objectName="Base.PrefixExtension".
-• project → VS project + .sln ops via params.operation: create|delete|add-object|remove-object.
+    description: `D365FO AOT object files and VS projects. Choose an \`action\`:
+• create → write a NEW object file into PackagesLocalDirectory (auto-added to .rnrproj). THE WRITE STEP — incomplete until isError=false; ⚠️/❌ = failure. Extensions: objectName="Base.PrefixExtension".
+• project → VS project + .sln ops via params.operation: create|delete (confirm first)|add-object|remove-object.
 • modify → edit an EXISTING object. APPLIES IMMEDIATELY, no dry-run — confirm with the user first; revert with action="undo". Needs \`operation\`.
-• delete → remove an object's XML from disk AND un-register it from every .rnrproj of the model that lists it. IRREVERSIBLE — confirm with the user first.
+• delete → remove an object's XML from disk AND un-register it from every .rnrproj listing it. IRREVERSIBLE — confirm with the user first.
 • undo → roll back \`filePath\`: git-tracked → git checkout HEAD, which discards ALL uncommitted changes to that file, not just the last edit; untracked → deleted.
-• generate → XML as TEXT only, no write (Azure/Linux fallback). Try create first. create/modify/delete/undo need Windows.
+• generate → XML as TEXT only, no write (Azure/Linux fallback). Try create first. The rest need Windows.
 📖 Parameters are NOT inlined here: get_knowledge(kind="op-spec", topic="<operation>"|"<objectType>") returns the contract for the one you picked — pass its values nested in \`params\` (modify) / \`properties\` (create), along with any packageName/packagePath/solutionPath/workspacePath override.
 Model + prefix auto-applied.`,
     inputSchema: {
@@ -52,7 +52,7 @@ Model + prefix auto-applied.`,
           ],
           description:
             'Each security/menu-item type is its own AOT folder — NEVER use security-privilege for duty or role. ' +
-            '[modify]/[generate] cover the core families + their *-extension variants; [delete] takes the same enum as [create].'
+            '[modify]/[generate] cover the core families + their *-extension variants.'
         },
         objectName: {
           type: 'string',
@@ -71,7 +71,7 @@ Model + prefix auto-applied.`,
           additionalProperties: true,
           description:
             '[create] Per-objectType creation properties (label, fields[], extends, enumValues[], primaryTable, …) — ' +
-            'not in this schema; fetch yours with the op-spec lookup above.'
+            'per the op-spec lookup above.'
         },
         addToProject: { type: 'boolean', description: 'Add to the ACTIVE .rnrproj — keep the default.', default: true },
         projectPath: {
@@ -126,7 +126,7 @@ Model + prefix auto-applied.`,
           type: 'object',
           additionalProperties: true,
           description:
-            '[modify] Operation-specific parameters as ONE nested object, per the op-spec lookup above. ' +
+            '[modify|project] Operation-specific parameters as ONE nested object, per the op-spec lookup above. ' +
             'A missing/wrong one returns that COMPLETE spec — follow it, do not guess.',
         },
         createBackup: { type: 'boolean', description: '[modify] Back up before modifying.', default: false },

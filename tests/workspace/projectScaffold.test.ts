@@ -91,6 +91,23 @@ describe('addProjectToSolutionText', () => {
     expect(cfg).toContain('{AAAAAAAA-0000-0000-0000-000000000001}.Debug|Any CPU.Build.0');
   });
 
+  // 7 of the 115 solutions in a real 187-project repo also declare Release; a project
+  // given only the Debug pair is unconfigured there. The mapping is the sibling's:
+  // those repos split between Release -> Release|Any CPU and Release -> Debug|Any CPU.
+  it('configures the new project for every solution configuration, mapped like its sibling', () => {
+    const withRelease = EXISTING_SLN.slice(1)
+      .replace('\t\tDebug|Any CPU = Debug|Any CPU', '\t\tDebug|Any CPU = Debug|Any CPU\r\n\t\tRelease|Any CPU = Release|Any CPU')
+      .replace('.Debug|Any CPU.Build.0 = Debug|Any CPU',
+        '.Debug|Any CPU.Build.0 = Debug|Any CPU\r\n\t\t{2F5073BA-ECD9-4907-A3DC-8D6CC8DCF661}.Release|Any CPU.ActiveCfg = Debug|Any CPU');
+    const out = addProjectToSolutionText(withRelease, {
+      displayName: 'C-1', relPath: 'C-1\\C-1.rnrproj', guid: '{AAAAAAAA-0000-0000-0000-000000000001}', dependsOnGuids: [],
+    });
+    expect(out).toContain('{AAAAAAAA-0000-0000-0000-000000000001}.Debug|Any CPU.Build.0 = Debug|Any CPU');
+    expect(out).toContain('{AAAAAAAA-0000-0000-0000-000000000001}.Release|Any CPU.ActiveCfg = Debug|Any CPU');
+    // The sibling is not built in Release, so neither is the new project.
+    expect(out).not.toContain('{AAAAAAAA-0000-0000-0000-000000000001}.Release|Any CPU.Build.0');
+  });
+
   it('writes dependencies as a ProjectSection in the .sln', () => {
     const out = addProjectToSolutionText(EXISTING_SLN.slice(1), {
       displayName: 'C-1', relPath: 'C-1\\C-1.rnrproj', guid: '{AAAAAAAA-0000-0000-0000-000000000001}',
@@ -152,6 +169,29 @@ describe('scaffoldProject — shared solution', () => {
     await expect(scaffoldProject({
       projectName: 'T-001', modelName: 'ContosoInventory', projectsRoot: root, solutionMode: 'auto',
     })).rejects.toThrow(/already exists/);
+    expect(await fs.readFile(path.join(root, 'ContosoInventory.sln'), 'utf-8')).toBe(EXISTING_SLN);
+  });
+
+  it('refuses a dependsOn that matches more than one project, instead of taking the first', async () => {
+    await sharedRepo();
+    // "T-001" is neither project's display name nor file stem, only a prefix of both names.
+    const sln = EXISTING_SLN.replace('"T-001\\T-001.rnrproj"', '"New\\New.rnrproj"').replace('EndProject', 'EndProject\r\n' +
+      'Project("{FC65038C-1B2F-41E1-A629-BED71D161FFF}") = "T-001 (old)", "Old\\Old.rnrproj", "{2F5073BA-ECD9-4907-A3DC-8D6CC8DCF662}"\r\nEndProject');
+    await fs.writeFile(path.join(root, 'ContosoInventory.sln'), sln, 'utf-8');
+    await expect(scaffoldProject({
+      projectName: 'P-1', modelName: 'ContosoInventory', projectsRoot: root, solutionMode: 'auto', dependsOn: ['T-001'],
+    })).rejects.toThrow(/matches 2 projects/);
+    expect(await fs.readFile(path.join(root, 'ContosoInventory.sln'), 'utf-8')).toBe(sln);
+  });
+
+  it('refuses a displayName that would break out of its .sln line, and writes nothing', async () => {
+    await sharedRepo();
+    for (const displayName of ['A", "..\\..\\evil.rnrproj', 'A\r\nEndProject']) {
+      await expect(scaffoldProject({
+        projectName: 'P-1', modelName: 'ContosoInventory', projectsRoot: root, solutionMode: 'auto', displayName,
+      })).rejects.toThrow(/displayName/);
+    }
+    await expect(fs.access(path.join(root, 'P-1'))).rejects.toThrow();
     expect(await fs.readFile(path.join(root, 'ContosoInventory.sln'), 'utf-8')).toBe(EXISTING_SLN);
   });
 

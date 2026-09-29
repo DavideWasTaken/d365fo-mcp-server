@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { getConfigManager } from '../../utils/configManager.js';
 import { findD365FileOnDisk } from '../../utils/objectFileLookup.js';
 import { PackageResolver } from '../../utils/packageResolver.js';
+import { extractModelNameFromProject } from '../../utils/workspaceDetector.js';
 import { ProjectFileManager } from '../../workspace/projectFile.js';
 import { solutionsListingProject, solutionMateProjects } from '../../workspace/projectScaffold.js';
 import { axFolderForObjectType, hasAxFolder, resolveMembership } from '../../workspace/projectMembership.js';
@@ -74,7 +75,14 @@ async function handleMembership(op: 'add-object' | 'remove-object', args: Record
     return bad(`${projectPath} is not listed in a solution beside it and is not a detected project — refusing.`);
   }
 
-  const modelName = a.modelName?.trim() || cfg.getModelName() || undefined;
+  // The project's own <Model> decides: an object of any other model registered in it
+  // fails the VS build, and orphans are judged against that model's projects.
+  const projectModel = await extractModelNameFromProject(projectPath);
+  if (projectModel && a.modelName?.trim() && a.modelName.trim().toLowerCase() !== projectModel.toLowerCase()) {
+    return bad(`${path.basename(projectPath)} builds model ${projectModel}, not ${a.modelName.trim()} — ` +
+      `a project holds objects of its own model only.`);
+  }
+  const modelName = projectModel || a.modelName?.trim() || cfg.getModelName() || undefined;
   const self = projectPath.toLowerCase();
   const siblings = [...new Map(
     [...cfg.getProjectsForModel(modelName), ...(await solutionMateProjects(projectPath))]

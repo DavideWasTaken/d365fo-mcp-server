@@ -50,13 +50,15 @@ those are called out explicitly below.
     tasks version taken from a sibling project) and registers it in the solution — a
     shared `<Model>.sln` (with `dependsOn` written as `ProjectDependencies`) or a new
     per-project `.sln`, detected from the folder; an undecidable layout stops and asks.
-    The new project becomes the active one.
+    It is configured for every configuration the solution declares, mapped the way its
+    existing projects are. The new project becomes the active one, and a project made
+    for another model keeps the write anchor on the workspace's own model.
   - `delete` takes a project out of its solution (entry, configuration and dependency
     lines) and, with `removeFiles`, deletes only its own files. A folder holding anything
     else, or a project no solution lists, is refused. Model metadata is never touched.
   - `add-object` / `remove-object` register existing objects in, or unregister them from,
-    a project (up to 20 per call), including label files (`objectType="label-file"`, add
-    only). The files stay; removing the last reference needs `allowOrphan`.
+    a project (up to 20 per call, objects of its own model only), including label
+    files (`objectType="label-file"`, add only). The files stay; removing the last reference needs `allowOrphan`.
 
   Nothing is overwritten, and the folder must already look like a projects folder.
   Contract: `get_knowledge(kind="op-spec", topic="project")`.

@@ -5,9 +5,13 @@ import * as path from 'path';
 
 // The file lookup resolves against a model tree; point it at a temp one.
 const found = new Map<string, string>();
+const lookedUpIn: Array<string | undefined> = [];
 vi.mock('../../src/utils/objectFileLookup.js', async (orig) => ({
   ...(await orig<typeof import('../../src/utils/objectFileLookup.js')>()),
-  findD365FileOnDisk: async (type: string, name: string) => found.get(`${type}:${name}`) ?? null,
+  findD365FileOnDisk: async (type: string, name: string, model?: string) => {
+    lookedUpIn.push(model);
+    return found.get(`${type}:${name}`) ?? null;
+  },
 }));
 
 import { d365foFileTool } from '../../src/tools/d365foFile.js';
@@ -25,6 +29,7 @@ let b: string;
 beforeEach(async () => {
   registerCustomModel('ContosoCore');
   found.clear();
+  lookedUpIn.length = 0;
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'membership-'));
   await fs.writeFile(path.join(root, 'ContosoCore.sln'), SLN);
   await fs.mkdir(path.join(root, 'T-000'));
@@ -44,6 +49,26 @@ const call = (operation: string, params: Record<string, unknown>) =>
 const has = async (project: string, include: string) => (await readProjectIncludes(project)).has(include.toLowerCase());
 
 describe('d365fo_file(action="project") operations', () => {
+  // A project holds objects of its own <Model> only: registering one from another
+  // model fails the VS build. The configured model is not that model in general —
+  // a project just created for another model is the common case.
+  it('looks objects up in the model the project builds, and refuses a different modelName', async () => {
+    const other = (await scaffoldProject({ projectName: 'T-009', modelName: 'ContosoOther', projectsRoot: root, solutionMode: 'shared' })).projectPath;
+    const d365 = (params: Record<string, unknown>) => d365foFileTool({
+      method: 'tools/call',
+      params: { name: 'd365fo_file', arguments: { action: 'project', params: { operation: 'add-object', ...params } } },
+    } as any, {} as any) as Promise<any>;
+
+    const r = await d365({ projectPath: other, objectType: 'class', objectName: 'CtsoHelper' });
+    expect(r.isError, r.content[0].text).toBeFalsy();
+    expect(lookedUpIn).toEqual(['ContosoOther']);
+
+    const wrong = await d365({ projectPath: other, modelName: 'ContosoCore', objectType: 'class', objectName: 'CtsoHelper' });
+    expect(wrong.isError).toBe(true);
+    expect(wrong.content[0].text).toContain('builds model ContosoOther');
+  });
+
+
   it('add-object registers an existing object; a second add reports it is already there', async () => {
     const r = await call('add-object', { projectPath: a, objectType: 'class', objectName: 'CtsoHelper' });
     expect(r.isError, r.content[0].text).toBeFalsy();
@@ -144,7 +169,13 @@ describe('label files and the active project', () => {
   });
 
   it('a project just created is the active one, so add-object needs no projectPath', async () => {
-    const cfg = getConfigManager();
+    // Activation goes through forceProject, which sets the detected project as well as
+    // runtimeContext — restore all of it, or the next test inherits an active project.
+    const cfg: any = getConfigManager();
+    const saved = {
+      autoDetectedProject: cfg.autoDetectedProject, autoDetectionAttempted: cfg.autoDetectionAttempted,
+      toolForcedProject: cfg.toolForcedProject, runtimeContext: cfg.runtimeContext,
+    };
     try {
       const made = await call('create', { projectName: 'T-003', projectsRoot: root });
       expect(made.isError, made.content[0].text).toBeFalsy();
@@ -153,7 +184,7 @@ describe('label files and the active project', () => {
       expect(r.isError, r.content[0].text).toBeFalsy();
       expect(await has(path.join(root, 'T-003', 'T-003.rnrproj'), 'axclass\\ctsohelper')).toBe(true);
     } finally {
-      cfg.setRuntimeContext({ projectPath: undefined });
+      Object.assign(cfg, saved);
     }
   });
 
