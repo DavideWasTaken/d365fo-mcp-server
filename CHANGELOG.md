@@ -131,6 +131,15 @@ those are called out explicitly below.
   skipped now (a recursive call still counts). A table target used to get a bare number,
   although its declarative references — form data sources, relations, entity mappings —
   are only in the cross-reference database; it now says so, as an EDT target already did.
+- **A button added with `add-control` shows its caption** (#1047). The label was always
+  written as `<Label>`, but buttons keep their caption in `<Text>` and groups in
+  `<Caption>`. D365FO dropped the unknown element without an error, so the button
+  rendered blank while the tool reported success. The caption element now follows the
+  control type, in the order shipped forms use, on both the form-extension writer and
+  the bridge. A data binding that the control type cannot carry (for example
+  `dataField` on a Button) is no longer written; the reply says it was skipped.
+  `controlType: "CommandButton"` and `"MenuFunctionButton"` in a form extension were
+  written as String controls; they now produce the requested button.
 - **`d365fo_file(action="project")` only touches projects under the configured solution
   roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
   like a projects folder", which every Visual Studio repo on the machine passes, and so
