@@ -902,6 +902,30 @@ export const SETTINGS: Setting[] = [
     description: 'Absolute path the C# bridge appends its own diagnostics to.',
   },
   {
+    path: 'bridge.xrefDbServer',
+    env: 'D365FO_XREF_DB_SERVER',
+    section: 'bridge',
+    tier: 'advanced',
+    type: 'string',
+    label: 'Cross-reference database server',
+    description:
+      'SQL Server holding the X++ cross-reference database that find_references reads through the bridge. ' +
+      'Leave empty to use the XPP config (UDE), or localhost when only the database name is set. ' +
+      'Takes precedence over the XPP config.',
+  },
+  {
+    path: 'bridge.xrefDbName',
+    env: 'D365FO_XREF_DB_NAME',
+    section: 'bridge',
+    tier: 'advanced',
+    type: 'string',
+    label: 'Cross-reference database name',
+    description:
+      'Name of the X++ cross-reference database — DYNAMICSXREFDB on a traditional VM, where no XPP config ' +
+      'names it and find_references otherwise falls back to a name-based search. Leave empty to use the ' +
+      'XPP config (UDE). Takes precedence over the XPP config.',
+  },
+  {
     path: 'bridge.fsScanTimeoutMs',
     env: 'D365FO_FS_SCAN_TIMEOUT_MS',
     section: 'bridge',

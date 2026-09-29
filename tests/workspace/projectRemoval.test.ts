@@ -9,6 +9,7 @@ import {
 import { ProjectFileManager } from '../../src/workspace/projectFile.js';
 import { registerCustomModel } from '../../src/utils/modelClassifier.js';
 import { d365foFileTool } from '../../src/tools/d365foFile.js';
+import { getConfigManager } from '../../src/utils/configManager.js';
 
 const BASE_SLN = '﻿' + [
   '',
@@ -36,8 +37,13 @@ beforeEach(async () => {
   await fs.writeFile(path.join(root, 'T-001', 'T-001.rnrproj'),
     '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><PropertyGroup><Model>ContosoCore</Model></PropertyGroup></Project>');
   await fs.writeFile(path.join(root, 'ContosoCore.sln'), BASE_SLN, 'utf-8');
+  // The temp folder stands in for a configured solution root (project-path containment).
+  getConfigManager().setRuntimeContext({ solutionPath: root });
 });
-afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => {
+  getConfigManager().setRuntimeContext({ solutionPath: undefined });
+  await fs.rm(root, { recursive: true, force: true });
+});
 
 const sln = () => fs.readFile(path.join(root, 'ContosoCore.sln'), 'utf-8');
 const exists = (p: string) => fs.access(p).then(() => true, () => false);
@@ -135,13 +141,16 @@ describe('d365fo_file(action="project", operation="delete")', () => {
     expect(parseSolutionProjects(await sln())).toEqual([]);
   });
 
-  it('refuses a path outside a projects folder', async () => {
+  // %TEMP% itself passed the old "looks like a projects folder" test — other runs leave
+  // .sln files one folder down — so only the solution-listing check stopped this. The
+  // configured roots stop it first.
+  it('refuses a path outside the configured solution roots', async () => {
     const stray = await fs.mkdtemp(path.join(os.tmpdir(), 'stray-'));
     try {
       await fs.writeFile(path.join(stray, 'Z.rnrproj'), '<Project/>');
       const r: any = await call({ projectPath: path.join(stray, 'Z.rnrproj'), removeFiles: true });
       expect(r.isError).toBe(true);
-      expect(r.content[0].text).toContain('not listed in any solution');
+      expect(r.content[0].text).toContain('outside the configured solution roots');
       expect(await exists(path.join(stray, 'Z.rnrproj'))).toBe(true);
     } finally { await fs.rm(stray, { recursive: true, force: true }); }
   });

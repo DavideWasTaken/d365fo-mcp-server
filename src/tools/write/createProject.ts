@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { getConfigManager } from '../../utils/configManager.js';
 import { isStandardModel } from '../../utils/modelClassifier.js';
 import { extractModelNameFromProject } from '../../utils/workspaceDetector.js';
+import { assertProjectPathAllowed } from '../../utils/pathContainment.js';
 import {
   scaffoldProject, removeProject, validateProjectName, ScaffoldError, inferProjectsRoot, looksLikeProjectsRoot,
   type SolutionMode,
@@ -65,6 +66,8 @@ export async function handleCreateProject(args: Record<string, unknown>) {
     );
   }
   projectsRoot = path.resolve(projectsRoot);
+  const contained = await assertProjectPathAllowed(projectsRoot);
+  if (!contained.ok) return fail(contained.reason!);
   if (!(await looksLikeProjectsRoot(projectsRoot))) {
     return fail(
       `${projectsRoot} holds no .sln or .rnrproj (directly or one folder down), so it does not look like a ` +
@@ -143,6 +146,10 @@ export async function handleDeleteProject(args: Record<string, unknown>) {
     projectPath = path.join(root, a.projectName, `${a.projectName}.rnrproj`);
   }
   projectPath = path.resolve(projectPath);
+  // The projects folder, not just the .rnrproj: the shared .sln this rewrites sits
+  // beside the project folder, one level above the project itself.
+  const contained = await assertProjectPathAllowed(path.dirname(path.dirname(projectPath)));
+  if (!contained.ok) return bad(contained.reason!);
   // Orphans are judged against the projects of the model THIS project builds, which
   // need not be the configured one.
   const modelName = (await extractModelNameFromProject(projectPath)) || a.modelName?.trim() || cfg.getModelName() || '';

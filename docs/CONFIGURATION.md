@@ -156,6 +156,8 @@ The metadata-provider child process — the only write path to the AOT.
 | `bridge.maxRestarts` | advanced | `BRIDGE_MAX_RESTARTS` | `3` | Circuit breaker: after this many respawns within 60 s the server stops trying. |
 | `bridge.exePath` | advanced | `D365FO_BRIDGE_EXE_PATH` | — | Absolute path to D365MetadataBridge.exe. Leave empty to auto-detect inside the installation — the setup wizard fills this in for an npm install, where the binary is built outside the package so that updating the package does not delete it. |
 | `bridge.logFile` | advanced | `D365FO_BRIDGE_LOG_FILE` | — | Absolute path the C# bridge appends its own diagnostics to. |
+| `bridge.xrefDbServer` | advanced | `D365FO_XREF_DB_SERVER` | — | SQL Server holding the X++ cross-reference database that find_references reads through the bridge. Leave empty to use the XPP config (UDE), or localhost when only the database name is set. Takes precedence over the XPP config. |
+| `bridge.xrefDbName` | advanced | `D365FO_XREF_DB_NAME` | — | Name of the X++ cross-reference database — DYNAMICSXREFDB on a traditional VM, where no XPP config names it and find_references otherwise falls back to a name-based search. Leave empty to use the XPP config (UDE). Takes precedence over the XPP config. |
 | `bridge.fsScanTimeoutMs` | advanced | `D365FO_FS_SCAN_TIMEOUT_MS` | `3000` | Budget for the filesystem scan used when the bridge cannot answer an extension lookup (minimum 500). |
 | `bridge.disableFsFallback` | advanced | `D365FO_DISABLE_FS_FALLBACK` | `false` | Makes extension lookups bridge-only. Turn on to diagnose stale-index issues — results get stricter, not faster. |
 
@@ -265,6 +267,8 @@ Downloading a pre-built index from blob storage instead of building it locally.
     "maxRestarts": 3,
     "exePath": "",
     "logFile": "",
+    "xrefDbServer": "",
+    "xrefDbName": "",
     "fsScanTimeoutMs": 3000,
     "disableFsFallback": false
   },

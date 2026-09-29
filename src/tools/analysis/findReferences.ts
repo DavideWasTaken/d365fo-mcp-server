@@ -41,6 +41,25 @@ const TYPE_TO_XREF_CONTAINER: Record<string, string> = {
 };
 
 /**
+ * The xref container a `targetType` names. A bare name reaches the bridge as a
+ * bare name, which it expands across EVERY container — so a where-used on the
+ * table CustTable also counted the form, the menu item and the query named
+ * CustTable (963 extra references on a live database). A targetType that names
+ * a type scopes the lookup to it: "/Tables/CustTable", whose metadata twin the
+ * bridge adds itself.
+ */
+const TARGET_TYPE_TO_XREF_CONTAINER: Record<string, string> = {
+  table: 'Tables',
+  class: 'Classes',
+  enum: 'Enums',
+  edt: 'Edts',
+  form: 'Forms',
+  query: 'Queries',
+  view: 'Views',
+  report: 'Reports',
+};
+
+/**
  * Detect and normalize a label where-used target. Labels live in the xref DB
  * under "/Labels/@<ref>", where <ref> is either the old concatenated form
  * ("@WAX2194") or the newer "@LabelFile:LabelId" form
@@ -68,6 +87,69 @@ function resolveXrefContainers(db: any, ownerName: string): string[] {
     if (container) containers.add(container);
   }
   return [...containers];
+}
+
+/**
+ * [ExtensionOf] classes of `ownerName` that declare `memberName`.
+ *
+ * A method added to a table or class by an extension class is stored in
+ * DYNAMICSXREFDB under the EXTENSION class — "/Classes/<Ext>/Methods/<m>" — and
+ * only there: "/Tables/<Owner>/Methods/<m>" does not exist. So "Owner.m" has to
+ * look there too, or a method every caller reaches as Owner.m reports 0. The
+ * index already records each class extension, its base and its methods.
+ */
+function extensionClassesDeclaring(db: any, ownerName: string, memberName: string): string[] {
+  let rows: Array<{ extension_name?: string; added_methods?: string | null }> = [];
+  try {
+    rows = db.prepare(
+      `SELECT extension_name, added_methods FROM extension_metadata
+       WHERE base_object_name = ? COLLATE NOCASE AND extension_type = 'class-extension'`,
+    ).all(ownerName);
+  } catch {
+    return []; // extension_metadata not built
+  }
+  const wanted = memberName.toLowerCase();
+  const out = new Set<string>();
+  for (const row of rows) {
+    if (!row?.extension_name || !row.added_methods) continue;
+    let methods: unknown;
+    try { methods = JSON.parse(row.added_methods); } catch { continue; }
+    if (Array.isArray(methods) && methods.some(m => typeof m === 'string' && m.toLowerCase() === wanted)) {
+      out.add(row.extension_name);
+    }
+  }
+  return [...out];
+}
+
+/** Past this many declaring types a bare method name stays a bare-name lookup. */
+const MAX_DECLARING_TYPES = 25;
+
+/**
+ * Every type that declares a method called `methodName`, as xref paths — or
+ * null when there are none or too many to query one by one.
+ *
+ * A bare method name reached the bridge as a bare name, which it expands to
+ * TYPE paths ("/Tables/<name>", …): for a method that matches nothing, and the
+ * caller fell back to the name-based search. Resolving the declaring types from
+ * the index queries the paths the calls are actually recorded under, extension
+ * classes included (their methods are indexed with the extension as parent).
+ */
+function declaringMethodPaths(db: any, methodName: string): string[] | null {
+  let rows: Array<{ parent_name?: string }> = [];
+  try {
+    rows = db.prepare(
+      `SELECT DISTINCT parent_name FROM symbols
+       WHERE type = 'method' AND name = ? AND parent_name IS NOT NULL
+       LIMIT ${MAX_DECLARING_TYPES + 1}`,
+    ).all(methodName);
+  } catch {
+    return null;
+  }
+  const parents = rows.map(r => r?.parent_name).filter((p): p is string => !!p);
+  if (parents.length === 0 || parents.length > MAX_DECLARING_TYPES) return null;
+  const paths = parents.flatMap(parent =>
+    resolveXrefContainers(db, parent).map(c => `/${c}/${parent}/Methods/${methodName}`));
+  return paths.length > 0 ? paths : null;
 }
 
 /**
@@ -134,7 +216,9 @@ function describeUnsearchableType(
   //
   // It is authoritative for these five types specifically BECAUSE of the container
   // fix in this change: a bare name now expands to /Edts/, /Forms/, /Queries/,
-  // /Views/ and /Reports/, so the query reaches the rows that exist instead of
+  // /Views/ and /Reports/ — and to the metadata shape of each (EdtString/, Form/,
+  // QuerySimple/, View/, Report/ …, where table fields, data sources and control
+  // bindings are recorded) — so the query reaches the rows that exist instead of
   // matching nothing by construction. Calling that "inconclusive" would put back
   // the defect this function was written to remove, one layer down — and the text
   // did worse than hedge, telling the reader to "re-run once the xref bridge is
@@ -172,7 +256,7 @@ function describeUnsearchableType(
   out += `mostly from declarative metadata that is not in the text index at all. Running it would `;
   out += `have produced a number with no relationship to the real answer.\n\n`;
   out += `**What to do:**\n`;
-  out += `- Re-run once the xref bridge is available (full server mode with a UDE/local xref DB)\n`;
+  out += `- Re-run once the xref bridge is available (full server mode; on UDE the XPP config names the xref DB, on a traditional VM set \`bridge.xrefDbName\`, usually DYNAMICSXREFDB)\n`;
   if (suggestion) {
     out += `- Or pass the explicit AOT path as \`targetName\`: \`${suggestion}\`\n`;
   }
@@ -256,15 +340,37 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
     // is known, resolve its container type and build "/<Container>/<Owner>/<Methods|Fields>/<member>".
     let bridgeTargets: string[] = [cleanTargetName];
     let memberScoped = false;
+    const typeContainer = targetType ? TARGET_TYPE_TO_XREF_CONTAINER[targetType] : undefined;
     if (isAotPath) {
       memberScoped = cleanTargetName.includes('/Methods/') || cleanTargetName.includes('/Fields/');
     } else if (owner && memberSegments.length > 0) {
-      const containers = resolveXrefContainers(symbolIndex.getReadDb(), owner);
+      const db = symbolIndex.getReadDb();
+      const containers = resolveXrefContainers(db, owner);
       bridgeTargets = containers.length > 0
         ? containers.flatMap(c => memberSegments.map(seg => `/${c}/${owner}/${seg}/${memberName}`))
         // Owner not indexed — hand the qualified name to the bridge to resolve across container types.
         : [`${owner}.${memberName}`];
+      // A method an [ExtensionOf] class adds to the owner lives under that class.
+      if (wantsMethod) {
+        for (const ext of extensionClassesDeclaring(db, owner, memberName)) {
+          bridgeTargets.push(`/Classes/${ext}/Methods/${memberName}`);
+        }
+      }
       memberScoped = true;
+    } else if (typeContainer && !cleanTargetName.includes('/')) {
+      bridgeTargets = [`/${typeContainer}/${cleanTargetName}`];
+    } else if (wantsMethod && targetType !== 'all') {
+      // A bare method name, when it is not also a type name (then it stays a type
+      // lookup): query the types that declare it, extension classes included.
+      const db = symbolIndex.getReadDb();
+      // Any object type counts, not only the ones that own members: an EDT or enum
+      // named like some method must stay a type lookup.
+      const isTypeName = targetType !== 'method' && detectObjectTypeInDb(db, memberName).length > 0;
+      const paths = isTypeName ? null : declaringMethodPaths(db, memberName);
+      if (paths) {
+        bridgeTargets = paths;
+        memberScoped = true;
+      }
     }
 
     // Try C# bridge first (DYNAMICSXREFDB — live cross-references)
@@ -358,6 +464,16 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
           `so a same-named method on an unrelated type is counted as a hit. Only the xref bridge ` +
           `can scope a member to its declaring type.\n`
         : `> ℹ️ This counts every method named \`${ftsName}\` regardless of owner. For a type-scoped where-used, pass \`ownerName\` or qualify as \`Owner.${ftsName}\`.\n`;
+    }
+    // A table is referenced from metadata as much as from code, and this scan
+    // sees only code — the same reason an EDT gets "inconclusive" above. A table
+    // still has code references worth counting, so say what the number leaves out.
+    const tableTarget = targetType === 'table' ||
+      (!targetType && !isAotPath && resolveXrefContainers(symbolIndex.getReadDb(), ftsName).includes('Tables'));
+    if (tableTarget) {
+      output += `> ⚠️ For a table this counts X++ code only. Its declarative references — form data sources, ` +
+        `relations, data entity mappings, fields bound on forms — are recorded only in the cross-reference ` +
+        `database, and ${bridgeFallbackReason(bridgeOutcome.status)}.\n`;
     }
     output += `\n`;
 
@@ -595,7 +711,9 @@ function findMethodReferences(symbolIndex: any, methodName: string, _scope: stri
     // method whose FIRST TEN LINES mention the name, but once it has, the call
     // being reported is often further down — and extracting context from the
     // preview then returned nothing, dropping a row FTS had correctly matched.
-    const context = extractMethodCallContext(bodyOf(row), methodName);
+    // In the method's own body the first "name(" is its declaration, not a call.
+    const isDeclaringMethod = typeof row.name === 'string' && row.name.toLowerCase() === methodName.toLowerCase();
+    const context = extractMethodCallContext(bodyOf(row), methodName, isDeclaringMethod);
     if (context) {
       references.push({
         file: row.file_path,
@@ -762,12 +880,31 @@ function findEnumReferences(symbolIndex: any, enumName: string, _scope: string, 
   return references;
 }
 
-function extractMethodCallContext(source: string, methodName: string): string | null {
+/** Leading words that make a "name(" line a statement, not a declaration. */
+const STATEMENT_START = /^\s*(?:return|if|while|for|switch|case|throw|else|print|info|warning|error|next|super)\b/i;
+
+/**
+ * Whether a line declares `methodName` — "public static void name(", "display Name name(" —
+ * rather than calling it. Only the declaring method's own body is checked, so a
+ * same-named call elsewhere is never dropped by this.
+ */
+function isMethodDeclarationLine(line: string, methodName: string): boolean {
+  const escaped = methodName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const declaration = new RegExp(`^\\s*(?:[A-Za-z_][\\w.<>\\[\\]]*\\s+)+${escaped}\\s*\\(`, 'i');
+  // No "=" test: an assignment ("real t = calcTotal(") cannot match the anchored
+  // type-and-modifier prefix anyway, while a default parameter value
+  // ("void foo(int _x = 5)") is still a declaration.
+  return declaration.test(line) && !STATEMENT_START.test(line);
+}
+
+function extractMethodCallContext(source: string, methodName: string, skipDeclaration = false): string | null {
   if (!source) return null;
 
   const lines = source.split('\n');
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].includes(methodName + '(')) {
+      // The declaration counted as a call of the method to itself.
+      if (skipDeclaration && isMethodDeclarationLine(lines[i], methodName)) continue;
       // Return 2 lines before and after
       const start = Math.max(0, i - 2);
       const end = Math.min(lines.length, i + 3);

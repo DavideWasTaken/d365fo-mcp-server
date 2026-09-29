@@ -37,8 +37,13 @@ beforeEach(async () => {
   a = (await scaffoldProject({ projectName: 'T-001', modelName: 'ContosoCore', projectsRoot: root, solutionMode: 'shared' })).projectPath;
   b = (await scaffoldProject({ projectName: 'T-002', modelName: 'ContosoCore', projectsRoot: root, solutionMode: 'shared' })).projectPath;
   found.set('class:CtsoHelper', path.join(root, 'CtsoHelper.xml'));
+  // The temp folder stands in for a configured solution root (project-path containment).
+  getConfigManager().setRuntimeContext({ solutionPath: root });
 });
-afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => {
+  getConfigManager().setRuntimeContext({ solutionPath: undefined });
+  await fs.rm(root, { recursive: true, force: true });
+});
 
 const call = (operation: string, params: Record<string, unknown>) =>
   d365foFileTool({
@@ -117,13 +122,15 @@ describe('d365fo_file(action="project") operations', () => {
   });
 
   it('refuses an explicit project that no solution lists', async () => {
-    const stray = await fs.mkdtemp(path.join(os.tmpdir(), 'stray-'));
+    // Inside the configured root, so the refusal is the solution-listing check's.
+    const stray = path.join(root, 'stray');
+    await fs.mkdir(stray);
     try {
       const file = path.join(stray, 'Z.rnrproj');
       await fs.writeFile(file, '<Project/>');
       const r = await call('add-object', { projectPath: file, objectType: 'class', objectName: 'CtsoHelper' });
       expect(r.isError).toBe(true);
-      expect(r.content[0].text).toContain('refusing');
+      expect(r.content[0].text).toContain('not listed in a solution beside it');
     } finally { await fs.rm(stray, { recursive: true, force: true }); }
   });
 

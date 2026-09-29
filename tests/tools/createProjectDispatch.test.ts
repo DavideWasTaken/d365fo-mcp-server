@@ -15,8 +15,13 @@ beforeEach(async () => {
   await fs.writeFile(path.join(root, 'T-001', 'T-001.rnrproj'), '<Project/>');
   await fs.writeFile(path.join(root, 'ContosoCore.sln'),
     'Microsoft Visual Studio Solution File, Format Version 12.00\r\nGlobal\r\nEndGlobal\r\n');
+  // The temp folder stands in for a configured solution root (project-path containment).
+  getConfigManager().setRuntimeContext({ solutionPath: root });
 });
-afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => {
+  getConfigManager().setRuntimeContext({ solutionPath: undefined });
+  await fs.rm(root, { recursive: true, force: true });
+});
 
 const call = (args: Record<string, unknown>) =>
   d365foFileTool({ method: 'tools/call', params: { name: 'd365fo_file', arguments: args } } as any, {} as any);
@@ -49,6 +54,8 @@ describe('d365fo_file(action="project", operation="create")', () => {
 
   it('refuses a folder that is not a projects folder', async () => {
     const empty = await fs.mkdtemp(path.join(os.tmpdir(), 'not-projects-'));
+    // Inside a configured root, so the refusal below is the projects-folder check's.
+    getConfigManager().setRuntimeContext({ solutionPath: empty });
     try {
       const r: any = await call({
         action: 'project',

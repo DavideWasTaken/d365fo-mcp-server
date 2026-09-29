@@ -555,7 +555,8 @@ Options:
                                     Microsoft-shipped metadata in UDE environments.
   --bin-path <path>                 Explicit DLL directory (UDE: microsoftPackagesPath\bin). If omitted, uses {packages-path}\bin.
   --xref-server <server>            SQL Server for cross-reference DB (default: localhost)
-  --xref-database <db>              Cross-reference database name (default: DYNAMICSXREFDB)
+  --xref-database <db>              Cross-reference database name, e.g. DYNAMICSXREFDB
+                                    (no default: without it cross-references are off)
   --axdb-server <server>            Enable separate, lazy AxDB SQL debug access (Windows integrated authentication)
   --axdb-database <db>              SQL debug database (default: AxDB)
   --axdb-allow-writes               Enable transactional INSERT/UPDATE/DELETE debug operations

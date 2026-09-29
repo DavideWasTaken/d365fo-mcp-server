@@ -125,6 +125,69 @@ those are called out explicitly below.
   `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
+- **The name-based `find_references` fallback no longer counts a method's declaration as
+  a call to it, and says what a table count leaves out.** In the declaring method's own
+  body the first `name(` is `public void name(`, which was reported as a caller; it is
+  skipped now (a recursive call still counts). A table target used to get a bare number,
+  although its declarative references — form data sources, relations, entity mappings —
+  are only in the cross-reference database; it now says so, as an EDT target already did.
+- **`find_references` finds methods added by `[ExtensionOf]` classes.** The
+  cross-reference database records such a method under the extension class only
+  (`/Classes/<Ext>/Methods/<m>`); `Owner.method` queried `/Tables/<Owner>/Methods/<m>`,
+  which does not exist, and reported 0 for a method with callers. It now also queries
+  every class extension of the owner that declares the method, from the index's
+  extension records. A bare method name (no owner) is resolved to the types that
+  declare it and queried by their full paths, instead of reaching the bridge as a bare
+  name that matches nothing and falling back to the name-based search; past 25
+  declaring types it stays a bare-name lookup.
+- **`find_references` includes declarative metadata references.** The bridge looked
+  a target up only in its X++ shape (`/Tables/X`, `/Edts/X`), on the belief that
+  targets are always plural with a leading slash. Metadata references are stored
+  singular and without it, and for an EDT under its concrete subtype (`Table/X`,
+  `Form/X`, `EdtString/X`, members `Table/X/TableFieldString/F`, `Table/X/Method/M`):
+  on a live DYNAMICSXREFDB 2.3M of 19.5M references. A custom table's where-used
+  returned 334 of its 785 references, missing every form data source and entity
+  mapping; a custom EDT's, 12 of 108, missing every table field typed with it. Both
+  shapes are queried now — including for `Owner.member` and explicit AOT paths, whose
+  metadata twins are derived for methods of tables, classes, forms, views, data entities
+  and maps, and for fields of tables, maps, views and data entities, each field under
+  its exact type segment (a wildcard also matched a field group of the same name) —
+  and metadata rows read as "object › member › property".
+  The bridge returns exact totals split into code and metadata (references whose source
+  no longer exists in the database are left out of both, as they are of the rows), and up to 500 rows per
+  shape instead of 500 in all: sorted by source path, code rows used to fill the cap, so
+  a large table (CustTable) showed no metadata reference at all. The list gives each
+  shape its share of `limit`. A `targetType` that names a type now scopes a bare name to
+  it (`CustTable` with `table` no longer counts the form, menu item and query named
+  CustTable). The bridge's `--xref-database` help no longer claims a default it does
+  not have.
+- **The cross-reference database can be configured on a traditional VM.** The bridge got
+  its DYNAMICSXREFDB server and name only from the XPP config, which exists only on UDE,
+  so on a traditional VM it always started without cross-references and `find_references`
+  quietly answered from its name-based search, missing every metadata reference. New
+  settings `bridge.xrefDbName` / `D365FO_XREF_DB_NAME` (usually `DYNAMICSXREFDB`) and
+  `bridge.xrefDbServer` / `D365FO_XREF_DB_SERVER` (defaults to localhost) take
+  precedence over the XPP config, and `doctor` says when a traditional VM has none set.
+- **A button added with `add-control` shows its caption** (#1047). The label was always
+  written as `<Label>`, but buttons keep their caption in `<Text>` and groups in
+  `<Caption>`. D365FO dropped the unknown element without an error, so the button
+  rendered blank while the tool reported success. The caption element now follows the
+  control type, in the order shipped forms use, on both the form-extension writer and
+  the bridge. A data binding that the control type cannot carry (for example
+  `dataField` on a Button) is no longer written; the reply says it was skipped.
+  `controlType: "CommandButton"` and `"MenuFunctionButton"` in a form extension were
+  written as String controls; they now produce the requested button.
+- **`d365fo_file(action="project")` only touches projects under the configured solution
+  roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
+  like a projects folder", which every Visual Studio repo on the machine passes, and so
+  does `%TEMP%`. One call could take a project out of another repo's solution and
+  delete its files, or add a project there. `create`, `delete`, `add-object` and
+  `remove-object` now refuse a path outside `D365FO_SOLUTIONS_PATH`, `workspacePath` or
+  `solutionPath`. The error names these settings. The active project does not
+  count as a root, because `create` activates what it makes and a project created in a
+  foreign folder would otherwise vouch for the next call there. `delete` checks the
+  projects folder rather than the project, since the shared `.sln` it rewrites sits one
+  level above the project folder.
 - **`generate_object` names an extension class what `create` will write** (#1041).
   The pattern generator assembled `{Base}{Infix}…_Extension` by hand, while
   `d365fo_file(action="create")` normalises every `_Extension` name with the token

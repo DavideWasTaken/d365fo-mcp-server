@@ -1909,6 +1909,50 @@ describe('modify_d365fo_file', () => {
     expect(written[1]).toContain('<Type>Integer</Type>');
   });
 
+  it.each([
+    ['Button', 'AxFormButtonControl'],
+    ['CommandButton', 'AxFormCommandButtonControl'],
+    ['MenuFunctionButton', 'AxFormMenuFunctionButtonControl'],
+  ])('add-control writes a %s with its caption in <Text> (#1047)', async (controlType, iType) => {
+    // #1047: a button added to PurchTable rendered blank. The caption went to
+    // <Label>, which no button type has, and CommandButton/MenuFunctionButton
+    // were not mapped at all — they were written as String controls.
+    const fsMod = await import('fs/promises');
+    const extXml =
+      `<?xml version="1.0" encoding="utf-8"?>\n` +
+      `<AxFormExtension xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="Microsoft.Dynamics.AX.Metadata.V6">\n` +
+      `\t<Name>PurchTable.MyExt</Name>\n` +
+      `\t<Controls />\n` +
+      `</AxFormExtension>`;
+    (fsMod.readFile as any).mockResolvedValue(extXml);
+    (ctx as any).bridge = { isReady: true, metadataAvailable: true, addControl: vi.fn(), refreshProvider: vi.fn() };
+
+    const result = await modifyD365FileTool(
+      req('modify_d365fo_file', {
+        objectType: 'form-extension',
+        objectName: 'PurchTable.MyExt',
+        operation: 'add-control',
+        controlName: 'HelloWorldButton',
+        parentControl: 'ButtonHeaderPurchaseOrder',
+        controlType,
+        controlLabel: '@MyModel:HelloWorld',
+        filePath: 'K:\\PackagesLocalDirectory\\MyPackage\\MyModel\\AxFormExtension\\PurchTable.MyExt.xml',
+      }),
+      ctx,
+    );
+
+    expect(result.isError).toBeFalsy();
+    // Last matching write: the it.each cases share the writeFile mock's history.
+    const written = (fsMod.writeFile as any).mock.calls.filter((c: any[]) =>
+      String(c[0]).includes('PurchTable.MyExt.xml'),
+    ).at(-1);
+    expect(written).toBeDefined();
+    expect(written[1]).toContain(`<FormControl xmlns="" i:type="${iType}">`);
+    expect(written[1]).toContain(`<Type>${controlType}</Type>`);
+    expect(written[1]).toContain('<Text>@MyModel:HelloWorld</Text>');
+    expect(written[1]).not.toContain('<Label>');
+  });
+
   it('add-control infers a non-String controlType from controlDataField when the caller omits controlType', async () => {
     // Regression (eval scenario 1 — Equipment Rental): the tool never exposes a
     // `controlType` input at all (not in the Zod schema), so every real caller omits

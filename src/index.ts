@@ -537,7 +537,7 @@ async function initializeBridge(targetContext: import('./types/context.js').XppS
       }
     }
 
-    // Pass xref connection details for UDE environments
+    // Pass xref connection details: configured (traditional VM) or the XPP config (UDE)
     const xrefServer = await configMgr.getXrefDbServer() ?? undefined;
     const xrefDatabase = await configMgr.getXrefDbName() ?? undefined;
 
