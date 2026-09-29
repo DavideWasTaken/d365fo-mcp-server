@@ -530,7 +530,8 @@ Options:
                                     Microsoft-shipped metadata in UDE environments.
   --bin-path <path>                 Explicit DLL directory (UDE: microsoftPackagesPath\bin). If omitted, uses {packages-path}\bin.
   --xref-server <server>            SQL Server for cross-reference DB (default: localhost)
-  --xref-database <db>              Cross-reference database name (default: DYNAMICSXREFDB)
+  --xref-database <db>              Cross-reference database name, e.g. DYNAMICSXREFDB
+                                    (no default: without it cross-references are off)
   --log-file <path>                 Write all diagnostic logs to this file (append mode)
   --help                            Show this help
 
