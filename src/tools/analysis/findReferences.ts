@@ -997,8 +997,8 @@ function extractEnumReferenceContext(source: string, enumName: string, value?: s
   if (!source) return null;
 
   // With a value, only "Enum::Value" itself — not "Enum::ValueOther" or another value.
-  const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const valueRef = value ? new RegExp(`\\b${escape(enumName)}::${escape(value)}\\b`, 'i') : null;
+  const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const valueRef = value ? new RegExp(`\\b${escapeRe(enumName)}::${escapeRe(value)}\\b`, 'i') : null;
   const lines = source.split('\n');
   for (let i = 0; i < lines.length; i++) {
     if (valueRef ? valueRef.test(lines[i]) : lines[i].includes(enumName + '::')) {
