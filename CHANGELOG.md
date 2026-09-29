@@ -125,6 +125,13 @@ those are called out explicitly below.
   `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
+- **The cross-reference database can be configured on a traditional VM.** The bridge got
+  its DYNAMICSXREFDB server and name only from the XPP config, which exists only on UDE,
+  so on a traditional VM it always started without cross-references and `find_references`
+  quietly answered from its name-based search, missing every metadata reference. New
+  settings `bridge.xrefDbName` / `D365FO_XREF_DB_NAME` (usually `DYNAMICSXREFDB`) and
+  `bridge.xrefDbServer` / `D365FO_XREF_DB_SERVER` (defaults to localhost) take
+  precedence over the XPP config, and `doctor` says when a traditional VM has none set.
 - **`d365fo_file(action="project")` only touches projects under the configured solution
   roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
   like a projects folder", which every Visual Studio repo on the machine passes, and so

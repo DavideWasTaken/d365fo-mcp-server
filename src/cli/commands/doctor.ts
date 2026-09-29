@@ -517,6 +517,22 @@ async function probeHealth(port: number, label: string): Promise<CheckResult> {
   }
 }
 
+/**
+ * A traditional VM with no cross-reference database configured. Its XPP config
+ * does not exist, so nothing else names DYNAMICSXREFDB, and find_references
+ * silently answers from a name-based search that misses metadata references
+ * (relations, form data sources, fields using an EDT). Null when configured.
+ */
+export function checkXrefConfigured(store: SettingsStore): CheckResult | null {
+  const name = String(readSetting(store, settingByPath('bridge.xrefDbName')!) ?? '').trim();
+  if (name) return null;
+  return {
+    severity: 'info',
+    message: 'Cross-reference database not configured — find_references uses a name-based search instead of DYNAMICSXREFDB',
+    fix: 'set bridge.xrefDbName to DYNAMICSXREFDB (and bridge.xrefDbServer if it is not localhost), then restart the server',
+  };
+}
+
 export async function doctorCommand(): Promise<void> {
   p.intro('d365fo-mcp doctor');
   let failures = 0;
@@ -601,6 +617,10 @@ export async function doctorCommand(): Promise<void> {
       emit({ severity: 'ok', message: `UDE: ${configs.length} XPP config(s) in ${dir}` });
     } else {
       emit({ severity: 'info', message: 'No UDE XPPConfig directory — traditional VM or UDE tools not installed' });
+      // Only UDE's XPP config names the cross-reference database; a traditional
+      // VM has to configure it, or find_references never uses it.
+      const xref = checkXrefConfigured(root.store);
+      if (xref) emit(xref);
     }
   } else {
     emit({ severity: 'info', message: `C# bridge skipped (Windows-only) — platform is ${process.platform}` });
