@@ -524,7 +524,12 @@ async function probeHealth(port: number, label: string): Promise<CheckResult> {
  * (relations, form data sources, fields using an EDT). Null when configured.
  */
 export function checkXrefConfigured(store: SettingsStore): CheckResult | null {
-  const name = String(readSetting(store, settingByPath('bridge.xrefDbName')!) ?? '').trim();
+  // Same precedence the server applies: the real environment (an .mcp.json
+  // `env` block) outranks the config file.
+  const name = (
+    process.env.D365FO_XREF_DB_NAME?.trim()
+    || String(readSetting(store, settingByPath('bridge.xrefDbName')!) ?? '').trim()
+  );
   if (name) return null;
   return {
     severity: 'info',
