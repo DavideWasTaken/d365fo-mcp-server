@@ -89,3 +89,23 @@ describe('find_references fallback — a table target says what it leaves out', 
     expect(text).not.toContain('For a table this counts');
   });
 });
+
+describe('find_references fallback — an enum value', () => {
+  // Without the bridge, "Enum::Value" used to search for "Value::" (the member name
+  // alone) and so found nothing: a false 0 for every enum value.
+  const methods: MethodRow[] = [
+    { name: 'post', parent_name: 'MyPosting', source: 'public void post()\n{\n    if (salesTable.SalesStatus == SalesStatus::Invoiced) { return; }\n}' },
+    { name: 'ship', parent_name: 'MyShipping', source: 'public void ship()\n{\n    salesTable.SalesStatus = SalesStatus::Delivered;\n}' },
+    { name: 'other', parent_name: 'MyOther', source: 'public void other()\n{\n    x = SalesStatus::InvoicedPartly;\n}' },
+  ];
+
+  it('finds "Enum::Value" and only that value', async () => {
+    for (const targetName of ['SalesStatus::Invoiced', 'SalesStatus.Invoiced']) {
+      const text = await run({ targetName, targetType: 'enum' }, fakeDb(methods, { SalesStatus: 'enum' }));
+      expect(text).toContain('**Total References Found:** 1');
+      expect(text).toContain('MyPosting.post');
+      expect(text).not.toContain('MyShipping.ship');
+      expect(text).not.toContain('MyOther.other');
+    }
+  });
+});

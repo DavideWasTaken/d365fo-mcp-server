@@ -16,7 +16,7 @@ const FindReferencesArgsSchema = z.object({
   // "name" is accepted as an alias for "targetName"
   targetName: z.string().optional().describe('Name of the target. For a precise, type-scoped method where-used, qualify it as "Owner.method" (e.g. "SalesTable.initFromSalesQuotationTable") or pass an AOT path ("/Tables/SalesTable/Methods/initFromSalesQuotationTable"). A bare method name matches that name on every type. For a label, pass the label id ("@WAX2194" or "@LabelFile:LabelId").'),
   name: z.string().optional().describe('Alias for targetName.'),
-  targetType: z.enum(['method', 'class', 'table', 'field', 'enum', 'edt', 'form', 'query', 'view', 'report', 'label', 'all']).optional().describe('Type of the target to search for'),
+  targetType: z.enum(['method', 'class', 'table', 'field', 'enum', 'edt', 'form', 'query', 'view', 'data-entity', 'map', 'report', 'menu-item', 'label', 'all']).optional().describe('Type of the target to search for. For an enum value pass "Enum::Value" (or "Enum.Value") with targetType "enum".'),
   ownerName: z.string().optional().describe('Declaring table/class/form that owns the method, when targetName is just the bare method name. Used to scope the where-used to a single type (matches Visual Studio xref).'),
   scope: z.enum(['all', 'workspace', 'standard', 'custom']).optional().default('all').describe('Search scope'),
   limit: z.number().optional().default(50).describe('Maximum results to return'),
@@ -48,15 +48,21 @@ const TYPE_TO_XREF_CONTAINER: Record<string, string> = {
  * a type scopes the lookup to it: "/Tables/CustTable", whose metadata twin the
  * bridge adds itself.
  */
-const TARGET_TYPE_TO_XREF_CONTAINER: Record<string, string> = {
-  table: 'Tables',
-  class: 'Classes',
-  enum: 'Enums',
-  edt: 'Edts',
-  form: 'Forms',
-  query: 'Queries',
-  view: 'Views',
-  report: 'Reports',
+const TARGET_TYPE_TO_XREF_CONTAINER: Record<string, string[]> = {
+  table: ['Tables'],
+  class: ['Classes'],
+  enum: ['Enums'],
+  edt: ['Edts'],
+  form: ['Forms'],
+  query: ['Queries'],
+  view: ['Views'],
+  // An entity is not a view to the xref DB: "/Views/<entity>" matches nothing.
+  'data-entity': ['DataEntityViews'],
+  map: ['Maps'],
+  report: ['Reports'],
+  // A menu item very often shares its name with the controller class or the report
+  // it runs; without this there is no way to leave those out.
+  'menu-item': ['MenuItemDisplays', 'MenuItemActions', 'MenuItemOutputs'],
 };
 
 /**
@@ -75,16 +81,25 @@ export function resolveLabelTarget(targetName: string, targetType?: string): str
   return null;
 }
 
+function isEnumName(db: any, name: string): boolean {
+  return detectObjectTypeInDb(db, name).some(t => t.type === 'enum');
+}
+
 /**
  * Resolve which xref containers an owner name exists as (Tables/Classes/…).
  * Usually one; returns several only when a name collides across object types.
  */
+
 function resolveXrefContainers(db: any, ownerName: string): string[] {
   const types = detectObjectTypeInDb(db, ownerName);
   const containers = new Set<string>();
   for (const { type } of types) {
     const container = TYPE_TO_XREF_CONTAINER[type];
     if (container) containers.add(container);
+    // The index records a data entity as a 'view' (the kind is in its signature),
+    // but the xref DB keeps entities under DataEntityViews. Only the path that
+    // exists matches, so query both.
+    if (type === 'view') containers.add('DataEntityViews');
   }
   return [...containers];
 }
@@ -244,6 +259,7 @@ function describeUnsearchableType(
   const suggestion = targetName.startsWith('/') ? null : ({
     edt: `/Edts/${targetName}`, report: `/Reports/${targetName}`,
     form: `/Forms/${targetName}`, query: `/Queries/${targetName}`, view: `/Views/${targetName}`,
+    'data-entity': `/DataEntityViews/${targetName}`, map: `/Maps/${targetName}`,
   } as Record<string, string>)[targetType];
 
   let out = `# References to \`${targetName}\`\n\n`;
@@ -313,7 +329,8 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
 
     // Target shape: AOT path ("/Tables/SalesTable/Methods/initFromSalesQuotationTable"),
     // owner-qualified ("SalesTable.initFromSalesQuotationTable"), or bare name.
-    const cleanTargetName = targetName.replace(/\(.*$/, '').trim(); // strip trailing parens
+    // Strip trailing parens; "Enum::Value" is the X++ spelling of an enum value's Owner.member.
+    const cleanTargetName = targetName.replace(/\(.*$/, '').trim().replace('::', '.');
     const isAotPath = cleanTargetName.startsWith('/');
 
     let owner: string | null = ownerName?.trim() || null;
@@ -340,16 +357,27 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
     // is known, resolve its container type and build "/<Container>/<Owner>/<Methods|Fields>/<member>".
     let bridgeTargets: string[] = [cleanTargetName];
     let memberScoped = false;
-    const typeContainer = targetType ? TARGET_TYPE_TO_XREF_CONTAINER[targetType] : undefined;
+    // The enum of an "Enum::Value" target, for the name-based fallback below.
+    let enumValueOwner: string | null = null;
+    const typeContainers = targetType ? TARGET_TYPE_TO_XREF_CONTAINER[targetType] : undefined;
     if (isAotPath) {
-      memberScoped = cleanTargetName.includes('/Methods/') || cleanTargetName.includes('/Fields/');
+      memberScoped = /\/(Methods|Fields|EnumValues)\//.test(cleanTargetName);
+    } else if (owner && targetType === 'enum') {
+      // "Enum.Value": an enum's members are its values, "/Enums/<E>/EnumValues/<v>".
+      bridgeTargets = [`/Enums/${owner}/EnumValues/${memberName}`];
+      memberScoped = true;
+      enumValueOwner = owner;
     } else if (owner && memberSegments.length > 0) {
       const db = symbolIndex.getReadDb();
-      const containers = resolveXrefContainers(db, owner);
-      bridgeTargets = containers.length > 0
-        ? containers.flatMap(c => memberSegments.map(seg => `/${c}/${owner}/${seg}/${memberName}`))
-        // Owner not indexed — hand the qualified name to the bridge to resolve across container types.
-        : [`${owner}.${memberName}`];
+      const paths = resolveXrefContainers(db, owner)
+        .flatMap(c => memberSegments.map(seg => `/${c}/${owner}/${seg}/${memberName}`));
+      // Untyped "Owner.member" on an enum can only be one of its values.
+      if (targetType !== 'method' && targetType !== 'field' && isEnumName(db, owner)) {
+        paths.push(`/Enums/${owner}/EnumValues/${memberName}`);
+        enumValueOwner = owner;
+      }
+      // Owner not indexed — hand the qualified name to the bridge to resolve across container types.
+      bridgeTargets = paths.length > 0 ? paths : [`${owner}.${memberName}`];
       // A method an [ExtensionOf] class adds to the owner lives under that class.
       if (wantsMethod) {
         for (const ext of extensionClassesDeclaring(db, owner, memberName)) {
@@ -357,8 +385,8 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
         }
       }
       memberScoped = true;
-    } else if (typeContainer && !cleanTargetName.includes('/')) {
-      bridgeTargets = [`/${typeContainer}/${cleanTargetName}`];
+    } else if (typeContainers && !cleanTargetName.includes('/')) {
+      bridgeTargets = typeContainers.map(c => `/${c}/${cleanTargetName}`);
     } else if (wantsMethod && targetType !== 'all') {
       // A bare method name, when it is not also a type name (then it stays a type
       // lookup): query the types that declare it, extension classes included.
@@ -425,7 +453,10 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
 
     // 5. Search for enum references
     if (!targetType || targetType === 'enum' || targetType === 'all') {
-      const enumRefs = findEnumReferences(symbolIndex, ftsName, scope, limit);
+      // An enum value is written "Enum::Value" in code: search the enum, keep that value.
+      const enumRefs = enumValueOwner
+        ? findEnumReferences(symbolIndex, enumValueOwner, scope, limit, memberName)
+        : findEnumReferences(symbolIndex, ftsName, scope, limit);
       references.push(...enumRefs);
     }
 
@@ -858,14 +889,14 @@ function findFieldReferences(symbolIndex: any, fieldName: string, _scope: string
   return references;
 }
 
-function findEnumReferences(symbolIndex: any, enumName: string, _scope: string, limit: number): Reference[] {
+function findEnumReferences(symbolIndex: any, enumName: string, _scope: string, limit: number, value?: string): Reference[] {
   const references: Reference[] = [];
   const rdb = symbolIndex.getReadDb();
 
   const rows = ftsMethodSearch(rdb, enumName, limit);
 
   for (const row of rows) {
-    const context = extractEnumReferenceContext(bodyOf(row), enumName);
+    const context = extractEnumReferenceContext(bodyOf(row), enumName, value);
     if (context) {
       references.push({
         file: row.file_path,
@@ -962,12 +993,15 @@ function extractFieldAccessContext(source: string, fieldName: string): string | 
   return null;
 }
 
-function extractEnumReferenceContext(source: string, enumName: string): string | null {
+function extractEnumReferenceContext(source: string, enumName: string, value?: string): string | null {
   if (!source) return null;
 
+  // With a value, only "Enum::Value" itself — not "Enum::ValueOther" or another value.
+  const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const valueRef = value ? new RegExp(`\\b${escapeRe(enumName)}::${escapeRe(value)}\\b`, 'i') : null;
   const lines = source.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes(enumName + '::')) {
+    if (valueRef ? valueRef.test(lines[i]) : lines[i].includes(enumName + '::')) {
       const start = Math.max(0, i - 1);
       const end = Math.min(lines.length, i + 2);
       return lines.slice(start, end).join('\n').trim();
