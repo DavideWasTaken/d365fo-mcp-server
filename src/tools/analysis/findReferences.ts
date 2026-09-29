@@ -465,6 +465,16 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
           `can scope a member to its declaring type.\n`
         : `> ℹ️ This counts every method named \`${ftsName}\` regardless of owner. For a type-scoped where-used, pass \`ownerName\` or qualify as \`Owner.${ftsName}\`.\n`;
     }
+    // A table is referenced from metadata as much as from code, and this scan
+    // sees only code — the same reason an EDT gets "inconclusive" above. A table
+    // still has code references worth counting, so say what the number leaves out.
+    const tableTarget = targetType === 'table' ||
+      (!targetType && !isAotPath && resolveXrefContainers(symbolIndex.getReadDb(), ftsName).includes('Tables'));
+    if (tableTarget) {
+      output += `> ⚠️ For a table this counts X++ code only. Its declarative references — form data sources, ` +
+        `relations, data entity mappings, fields bound on forms — are recorded only in the cross-reference ` +
+        `database, and ${bridgeFallbackReason(bridgeOutcome.status)}.\n`;
+    }
     output += `\n`;
 
     // Detect when the caller used a form/table/view name as if it were a class
@@ -701,7 +711,9 @@ function findMethodReferences(symbolIndex: any, methodName: string, _scope: stri
     // method whose FIRST TEN LINES mention the name, but once it has, the call
     // being reported is often further down — and extracting context from the
     // preview then returned nothing, dropping a row FTS had correctly matched.
-    const context = extractMethodCallContext(bodyOf(row), methodName);
+    // In the method's own body the first "name(" is its declaration, not a call.
+    const isDeclaringMethod = typeof row.name === 'string' && row.name.toLowerCase() === methodName.toLowerCase();
+    const context = extractMethodCallContext(bodyOf(row), methodName, isDeclaringMethod);
     if (context) {
       references.push({
         file: row.file_path,
@@ -868,12 +880,31 @@ function findEnumReferences(symbolIndex: any, enumName: string, _scope: string, 
   return references;
 }
 
-function extractMethodCallContext(source: string, methodName: string): string | null {
+/** Leading words that make a "name(" line a statement, not a declaration. */
+const STATEMENT_START = /^\s*(?:return|if|while|for|switch|case|throw|else|print|info|warning|error|next|super)\b/i;
+
+/**
+ * Whether a line declares `methodName` — "public static void name(", "display Name name(" —
+ * rather than calling it. Only the declaring method's own body is checked, so a
+ * same-named call elsewhere is never dropped by this.
+ */
+function isMethodDeclarationLine(line: string, methodName: string): boolean {
+  const escaped = methodName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const declaration = new RegExp(`^\\s*(?:[A-Za-z_][\\w.<>\\[\\]]*\\s+)+${escaped}\\s*\\(`, 'i');
+  // No "=" test: an assignment ("real t = calcTotal(") cannot match the anchored
+  // type-and-modifier prefix anyway, while a default parameter value
+  // ("void foo(int _x = 5)") is still a declaration.
+  return declaration.test(line) && !STATEMENT_START.test(line);
+}
+
+function extractMethodCallContext(source: string, methodName: string, skipDeclaration = false): string | null {
   if (!source) return null;
 
   const lines = source.split('\n');
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].includes(methodName + '(')) {
+      // The declaration counted as a call of the method to itself.
+      if (skipDeclaration && isMethodDeclarationLine(lines[i], methodName)) continue;
       // Return 2 lines before and after
       const start = Math.max(0, i - 2);
       const end = Math.min(lines.length, i + 3);

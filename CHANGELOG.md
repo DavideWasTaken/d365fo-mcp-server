@@ -125,6 +125,12 @@ those are called out explicitly below.
   `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
+- **The name-based `find_references` fallback no longer counts a method's declaration as
+  a call to it, and says what a table count leaves out.** In the declaring method's own
+  body the first `name(` is `public void name(`, which was reported as a caller; it is
+  skipped now (a recursive call still counts). A table target used to get a bare number,
+  although its declarative references — form data sources, relations, entity mappings —
+  are only in the cross-reference database; it now says so, as an EDT target already did.
 - **`find_references` finds methods added by `[ExtensionOf]` classes.** The
   cross-reference database records such a method under the extension class only
   (`/Classes/<Ext>/Methods/<m>`); `Owner.method` queried `/Tables/<Owner>/Methods/<m>`,
