@@ -785,7 +785,10 @@ const STATEMENT_START = /^\s*(?:return|if|while|for|switch|case|throw|else|print
 function isMethodDeclarationLine(line: string, methodName: string): boolean {
   const escaped = methodName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const declaration = new RegExp(`^\\s*(?:[A-Za-z_][\\w.<>\\[\\]]*\\s+)+${escaped}\\s*\\(`, 'i');
-  return declaration.test(line) && !STATEMENT_START.test(line) && !line.includes('=');
+  // No "=" test: an assignment ("real t = calcTotal(") cannot match the anchored
+  // type-and-modifier prefix anyway, while a default parameter value
+  // ("void foo(int _x = 5)") is still a declaration.
+  return declaration.test(line) && !STATEMENT_START.test(line);
 }
 
 function extractMethodCallContext(source: string, methodName: string, skipDeclaration = false): string | null {

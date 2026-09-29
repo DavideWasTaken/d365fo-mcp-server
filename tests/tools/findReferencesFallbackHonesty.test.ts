@@ -50,6 +50,18 @@ describe('find_references fallback — a method is not its own caller', () => {
     expect(text).not.toContain('MyCalc.calcTotal');
   });
 
+  it('skips a declaration with a default parameter value, and still counts an assignment', async () => {
+    const withDefault: MethodRow[] = [
+      { name: 'calcTotal', parent_name: 'MyCalc', source: 'public real calcTotal(real _qty = 1)\n{\n    return _qty * 2;\n}' },
+      // Recursive call written as an assignment inside the declaring method.
+      { name: 'calcTotal', parent_name: 'MyCalc2', source: 'public real calcTotal()\n{\n    real t = this.calcTotal();\n    return t;\n}' },
+    ];
+    const text = await run({ targetName: 'calcTotal', targetType: 'method' }, fakeDb(withDefault, {}));
+    expect(text).toContain('**Total References Found:** 1');
+    expect(text).toContain('MyCalc2.calcTotal');
+    expect(text).not.toContain('MyCalc.calcTotal');
+  });
+
   it('still counts a recursive call inside the declaring method', async () => {
     const recursive: MethodRow[] = [
       { name: 'walk', parent_name: 'Tree', source: 'public void walk(Node _n)\n{\n    if (_n) this.walk(_n.next());\n}' },
