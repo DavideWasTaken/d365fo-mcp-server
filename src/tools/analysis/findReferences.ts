@@ -81,13 +81,14 @@ export function resolveLabelTarget(targetName: string, targetType?: string): str
   return null;
 }
 
+function isEnumName(db: any, name: string): boolean {
+  return detectObjectTypeInDb(db, name).some(t => t.type === 'enum');
+}
+
 /**
  * Resolve which xref containers an owner name exists as (Tables/Classes/…).
  * Usually one; returns several only when a name collides across object types.
  */
-function isEnumName(db: any, name: string): boolean {
-  return detectObjectTypeInDb(db, name).some(t => t.type === 'enum');
-}
 
 function resolveXrefContainers(db: any, ownerName: string): string[] {
   const types = detectObjectTypeInDb(db, ownerName);
@@ -356,6 +357,8 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
     // is known, resolve its container type and build "/<Container>/<Owner>/<Methods|Fields>/<member>".
     let bridgeTargets: string[] = [cleanTargetName];
     let memberScoped = false;
+    // The enum of an "Enum::Value" target, for the name-based fallback below.
+    let enumValueOwner: string | null = null;
     const typeContainers = targetType ? TARGET_TYPE_TO_XREF_CONTAINER[targetType] : undefined;
     if (isAotPath) {
       memberScoped = /\/(Methods|Fields|EnumValues)\//.test(cleanTargetName);
@@ -363,6 +366,7 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
       // "Enum.Value": an enum's members are its values, "/Enums/<E>/EnumValues/<v>".
       bridgeTargets = [`/Enums/${owner}/EnumValues/${memberName}`];
       memberScoped = true;
+      enumValueOwner = owner;
     } else if (owner && memberSegments.length > 0) {
       const db = symbolIndex.getReadDb();
       const paths = resolveXrefContainers(db, owner)
@@ -370,6 +374,7 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
       // Untyped "Owner.member" on an enum can only be one of its values.
       if (targetType !== 'method' && targetType !== 'field' && isEnumName(db, owner)) {
         paths.push(`/Enums/${owner}/EnumValues/${memberName}`);
+        enumValueOwner = owner;
       }
       // Owner not indexed — hand the qualified name to the bridge to resolve across container types.
       bridgeTargets = paths.length > 0 ? paths : [`${owner}.${memberName}`];
@@ -448,7 +453,10 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
 
     // 5. Search for enum references
     if (!targetType || targetType === 'enum' || targetType === 'all') {
-      const enumRefs = findEnumReferences(symbolIndex, ftsName, scope, limit);
+      // An enum value is written "Enum::Value" in code: search the enum, keep that value.
+      const enumRefs = enumValueOwner
+        ? findEnumReferences(symbolIndex, enumValueOwner, scope, limit, memberName)
+        : findEnumReferences(symbolIndex, ftsName, scope, limit);
       references.push(...enumRefs);
     }
 
@@ -881,14 +889,14 @@ function findFieldReferences(symbolIndex: any, fieldName: string, _scope: string
   return references;
 }
 
-function findEnumReferences(symbolIndex: any, enumName: string, _scope: string, limit: number): Reference[] {
+function findEnumReferences(symbolIndex: any, enumName: string, _scope: string, limit: number, value?: string): Reference[] {
   const references: Reference[] = [];
   const rdb = symbolIndex.getReadDb();
 
   const rows = ftsMethodSearch(rdb, enumName, limit);
 
   for (const row of rows) {
-    const context = extractEnumReferenceContext(bodyOf(row), enumName);
+    const context = extractEnumReferenceContext(bodyOf(row), enumName, value);
     if (context) {
       references.push({
         file: row.file_path,
@@ -985,12 +993,15 @@ function extractFieldAccessContext(source: string, fieldName: string): string | 
   return null;
 }
 
-function extractEnumReferenceContext(source: string, enumName: string): string | null {
+function extractEnumReferenceContext(source: string, enumName: string, value?: string): string | null {
   if (!source) return null;
 
+  // With a value, only "Enum::Value" itself — not "Enum::ValueOther" or another value.
+  const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const valueRef = value ? new RegExp(`\\b${escape(enumName)}::${escape(value)}\\b`, 'i') : null;
   const lines = source.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes(enumName + '::')) {
+    if (valueRef ? valueRef.test(lines[i]) : lines[i].includes(enumName + '::')) {
       const start = Math.max(0, i - 1);
       const end = Math.min(lines.length, i + 2);
       return lines.slice(start, end).join('\n').trim();
