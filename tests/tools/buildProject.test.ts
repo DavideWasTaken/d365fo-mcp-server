@@ -709,6 +709,8 @@ describe('build_d365fo_project', () => {
 
     await buildProjectTool({ modelName: MODEL_NAME, wait: false }, {});
     readFileMock.mockImplementation(async (p: string) => {
+      // The close handler finishes only a build it still owns: serve the state it wrote.
+      if (p.includes('d365build_state')) return writeFileMock.mock.calls.filter((c: any[]) => c[0].includes('d365build_state')).at(-1)?.[1];
       if (p.endsWith('.xppc.err')) return log;
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
