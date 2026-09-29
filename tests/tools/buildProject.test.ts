@@ -183,6 +183,18 @@ function makeFakeChild(pid = 12345) {
   return child;
 }
 
+/** The last content the tool wrote to this state file; ENOENT before the first write or after an unlink. */
+function latestWrittenState(p: string): string {
+  const writes = writeFileMock.mock.calls.map((c: any[], i: number) => ({ i, c })).filter(({ c }) => c[0] === p);
+  const lastWrite = writes.at(-1);
+  const lastUnlink = unlinkMock.mock.calls.map((c: any[], i: number) => ({ i, c })).filter(({ c }) => c[0] === p).at(-1);
+  // Order writes and unlinks by their global invocation order.
+  const wOrder = lastWrite ? writeFileMock.mock.invocationCallOrder[lastWrite.i] : -1;
+  const uOrder = lastUnlink ? unlinkMock.mock.invocationCallOrder[lastUnlink.i] : -1;
+  if (!lastWrite || uOrder > wOrder) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  return lastWrite.c[1];
+}
+
 /** accessMock passes only listed paths */
 function allowPaths(paths: string[]) {
   accessMock.mockImplementation(async (p: string) => {
@@ -220,8 +232,11 @@ describe('build_d365fo_project', () => {
     execFileMock.mockImplementation((_file: string, _args: string[], _opts: any, cb: Function) => {
       cb(null, { stdout: '', stderr: '' });
     });
-    // By default no state file exists
+    // No state file exists until the tool writes one; then reads return the
+    // latest write, as the real temp file would. The build re-reads its own
+    // state to confirm it still owns the job (a force may have replaced it).
     readFileMock.mockImplementation(async (p: string) => {
+      if (p.includes('d365build_state') || p.includes('d365build_aos_restart')) return latestWrittenState(p);
       if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
@@ -625,7 +640,8 @@ describe('build_d365fo_project', () => {
       status: 'running',
     });
     readFileMock.mockImplementation(async (p: string) => {
-      if (p.includes('d365build_state')) return stateJson;
+      // The old state until force replaces it; the new job then reads its own.
+      if (p.includes('d365build_state')) { try { return latestWrittenState(p); } catch { return stateJson; } }
       if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
@@ -658,6 +674,7 @@ describe('build_d365fo_project', () => {
     expect(closeCallback).toBeDefined();
 
     readFileMock.mockImplementation(async (p: string) => {
+      if (p.includes('d365build_state')) return writeFileMock.mock.calls.filter((c: any[]) => c[0].includes('d365build_state')).at(-1)?.[1];
       if (p.endsWith('.xppc.err')) return "Compile Error: Class Method dynamics://MyModel/MyClass/myMethod: [(28,27),(28,28)]: ';' expected.";
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
@@ -690,6 +707,7 @@ describe('build_d365fo_project', () => {
     expect(closeCallback).toBeDefined();
 
     readFileMock.mockImplementation(async (p: string) => {
+      if (p.includes('d365build_state')) return writeFileMock.mock.calls.filter((c: any[]) => c[0].includes('d365build_state')).at(-1)?.[1];
       if (p.endsWith('.xppc.err')) return 'Compile Warning: MyClass: potential issue.';
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
@@ -703,6 +721,46 @@ describe('build_d365fo_project', () => {
     const state = JSON.parse(lastStateWrite![1]);
     expect(state.status).toBe('succeeded');
     expect(state.exitCode).toBe(0);
+  });
+
+  // Issue #1048 asked whether a build could pass while its log reports errors
+  // other than "Compile Error:" — the verdict regex knows only that prefix.
+  // Probed on the VM (2026-09-29, fm-mcp sandbox): every other error kind came
+  // with a NON-ZERO exit code, so the exit code fails the build and the regex
+  // gap never decides. The rows below are the real log lines and exit codes.
+  // (Incremental builds reported neither the pattern nor the relation error at
+  // all — exit 0, empty log — which is what incrementalScopeCaveat warns about.)
+  it.each([
+    [1, "Compile Fatal Error: Class dynamics://Class/Probe1048ClassB: The element must be named 'Probe1048ClassA' instead of 'Probe1048ClassB' to be consistent with its file name.\nErrors: 1"],
+    [1, "Metadata Error: AxTable/Probe1048RelTable/Relations/NoSuchTable/RelatedTable: Table 'NoSuchTableProbe1048' does not exist.\nErrors: 1"],
+    [2, "FormPatternValidation Error: AxForm/Probe1048Form/Design: Control 'AxForm/Probe1048Form/Design' is missing child 'Dialog Content Group' required by pattern 'Drop Dialog'.\nErrors: 2"],
+  ])('fails a build whose xppc exits %i with a non-"Compile Error:" error line, as xppc really does', async (exitCode, log) => {
+    let closeCallback: ((code: number | null) => void) | undefined;
+    const child = {
+      pid: 42,
+      unref: vi.fn(),
+      on: vi.fn().mockImplementation((event: string, cb: any) => {
+        if (event === 'close') closeCallback = cb;
+      }),
+    };
+    spawnMock.mockReturnValue(child);
+    allowPaths([XPPC, PKG]);
+    cfgGetModelName.mockReturnValue(MODEL_NAME);
+
+    await buildProjectTool({ modelName: MODEL_NAME, wait: false }, {});
+    readFileMock.mockImplementation(async (p: string) => {
+      // The close handler finishes only a build it still owns: serve the state it wrote.
+      if (p.includes('d365build_state')) return writeFileMock.mock.calls.filter((c: any[]) => c[0].includes('d365build_state')).at(-1)?.[1];
+      if (p.endsWith('.xppc.err')) return log;
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+    await closeCallback!(exitCode);
+
+    const state = JSON.parse(writeFileMock.mock.calls
+      .filter((c: any[]) => c[0].includes('d365build_state'))
+      .at(-1)![1]);
+    expect(state.status).toBe('failed');
+    expect(state.exitCode).toBe(exitCode);
   });
 
   it('buildJobKey is case-insensitive: MYMODEL and mymodel resolve same state file path', async () => {
@@ -781,9 +839,19 @@ describe('build_d365fo_project', () => {
     });
   }
 
-  function serveState(stateJson: string) {
+  function serveState(stateJson: string, reservationJson?: string) {
+    // The served state until the tool writes a newer one for the same file.
+    const servedAt = writeFileMock.mock.calls.length;
     readFileMock.mockImplementation(async (p: string) => {
-      if (p.includes('d365build_state')) return stateJson;
+      if (p.includes('d365build_state')) {
+        const newer = writeFileMock.mock.calls.slice(servedAt).filter((c: any[]) => c[0] === p).at(-1);
+        return newer ? newer[1] : stateJson;
+      }
+      if (p.includes('d365build_aos_restart')) {
+        if (unlinkMock.mock.calls.some((c: any[]) => c[0] === p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        if (reservationJson) return reservationJson;
+        return latestWrittenState(p);
+      }
       if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
       if (p.includes('d365build_log')) return 'Build complete.';
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
@@ -796,7 +864,7 @@ describe('build_d365fo_project', () => {
     const result = await buildProjectTool({ projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['MyTable'] }, {});
     expect(result.content[0].text).toContain('build started');
     const state = JSON.parse(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
-    expect(state.postBuildRequest).toMatchObject({ projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['MyTable'] });
+    expect(state.postBuild.request).toMatchObject({ projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['MyTable'] });
     expect(result.content[0].text).toContain(state.logFile);
     expect(result.content[0].text).toContain('modelName');
     expect(result.content[0].text).toContain('fullBuild');
@@ -839,8 +907,8 @@ describe('build_d365fo_project', () => {
   ])('requires a user-facing warning for runtime %s (queued=%s)', async (status, queued) => {
     const logFile = 'C:\\Temp\\d365build_log_prev.log';
     serveState(finishedState({
-      postBuildResult: { bpSection: '', syncSection: '', syncFailed: false,
-        runtimeRestart: { status, message: 'Specific runtime failure reason' } },
+      restartWorkflow: { request: { aosUrl: 'https://dev.test/' }, stage: 'complete',
+        result: { status, message: 'Specific runtime failure reason' } },
       ...(queued ? { buildQueue: ['Dep', MODEL_NAME], queueResults: [
         { modelName: 'Dep', status: 'succeeded', duration: 1, logFile },
         { modelName: MODEL_NAME, status: 'succeeded', duration: 2, logFile },
@@ -919,25 +987,29 @@ describe('build_d365fo_project', () => {
   });
 
   it('reports interrupted finalization after server restart without replaying sync', async () => {
-    serveState(finishedState({ status: 'running', phase: 'finalizing', ownerSessionId: 'old-server',
-      postBuildRequest: { dbSync: ['MyTable'], bpCheck: true } }));
+    // The server that owned the build (ownerPid) is gone: nothing will finish it.
+    serveState(finishedState({ status: 'running', phase: 'finalizing', ownerPid: 2147483646,
+      postBuild: { request: { dbSync: ['MyTable'], bpCheck: true } } }));
     const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('server session');
+    expect(result.content[0].text).toContain('exited unexpectedly');
     expect(result.content[0].text).toContain('unknown');
     expect(result.content[0].text).toContain('MyTable');
+    expect(result.content[0].text).toContain('not repeated');
     expect(result.content[0].text).toContain('d365build_log_prev.log');
     expect(syncMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
-  }, 1000);
+  }, 5000);
 
   it('preserves saved post-build results when a dead-PID snapshot settles into completion', async () => {
     let reads = 0;
     readFileMock.mockImplementation(async (p: string) => {
       if (p.includes('d365build_state')) return ++reads === 1
         ? finishedState({ pid: 2147483646, status: 'running' })
-        : finishedState({ postBuildResult: { bpSection: 'Saved BP', syncSection: 'Saved failed sync', syncFailed: true } });
+        : finishedState({ postBuild: { request: { bpCheck: true, dbSync: true }, bpSection: 'Saved BP',
+          sync: { section: 'Saved failed sync', failed: true } } });
       if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
+      if (p.includes('d365build_aos_restart')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       return 'Build complete';
     });
     readdirMock.mockResolvedValue([]);
@@ -977,6 +1049,7 @@ describe('build_d365fo_project', () => {
     readFileMock.mockImplementation(async (p: string) => {
       if (p.includes('d365build_state')) return JSON.stringify({ ...launched, phase: ++reads === 1 ? 'compiling' : 'finalizing' });
       if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
+      if (p.includes('d365build_aos_restart')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       return 'Preparing sync';
     });
     unlinkMock.mockClear();
@@ -1038,14 +1111,14 @@ describe('build_d365fo_project', () => {
 
   it('captures restartAos and runs actual restart once after metadata and sync, never on collection', async () => {
     const child = makeFakeChild(42);
-    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]); readdirMock.mockResolvedValue([]);
     await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: true, restartAos: true, aosUrl: 'https://dev.test/' }, {});
     await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
     expect(restartMock).toHaveBeenCalledExactlyOnceWith('https://dev.test/');
     expect(metadataMock.mock.invocationCallOrder[0]).toBeLessThan(syncMock.mock.invocationCallOrder[0]);
     expect(syncMock.mock.invocationCallOrder[0]).toBeLessThan(restartMock.mock.invocationCallOrder[0]);
     const stateJson = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
-    expect(JSON.parse(stateJson).postBuildRequest.restartAos).toBe(true);
+    expect(JSON.parse(stateJson).restartWorkflow.request.aosUrl).toBe('https://dev.test/');
     serveState(stateJson); readdirMock.mockResolvedValue([]);
     for (let i = 0; i < 2; i++) {
       const result = await buildProjectTool({ projectPath: PROJECT_PATH, restartAos: true }, {});
@@ -1063,6 +1136,7 @@ describe('build_d365fo_project', () => {
     function withWebConfig(present: boolean) {
       readFileMock.mockImplementation(async (p: string) => {
         if (present && p === WEB_CONFIG) return HOST_URL_XML;
+        if (p.includes('d365build_state') || p.includes('d365build_aos_restart')) return latestWrittenState(p);
         if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
@@ -1070,7 +1144,7 @@ describe('build_d365fo_project', () => {
 
     async function buildAndCollect(params: Record<string, unknown>) {
       const child = makeFakeChild(42);
-      spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+      spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]); readdirMock.mockResolvedValue([]);
       await buildProjectTool({ projectPath: PROJECT_PATH, ...params }, {});
       await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
       serveState(writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1]);
@@ -1087,7 +1161,7 @@ describe('build_d365fo_project', () => {
       // The caller cannot see the server's log: the result says what was restarted, and why that root.
       expect(text).toContain(`Environment root: https://vlt-dev-example-devaos.axcloud.dynamics.com/ (from ${WEB_CONFIG})`);
       expect(text).toContain('Host: iis-express AOSService/Dynamics365 PID 33604 -> PID 31520');
-      expect(text).toContain('AOS runtime ready');
+      expect(text).toContain('Status: ready');
     });
 
     it('keeps D365FO_UI_TEST_URL ahead of the web.config, so UI tests and the restart target one environment', async () => {
@@ -1106,13 +1180,16 @@ describe('build_d365fo_project', () => {
       expect(text).toContain('Environment root: https://dev.test/ (from aosUrl)');
     });
 
-    it('reports the restart blocked, naming every source, when no root is found (UDE)', async () => {
+    it('refuses before compiling, naming every source, when no root is found (UDE)', async () => {
       vi.stubEnv('D365FO_UI_TEST_URL', '');
       withWebConfig(false);
-      const text = await buildAndCollect({ restartAos: true });
+      allowPaths([PROJECT_PATH, XPPC, PKG]);
+      const result = await buildProjectTool({ projectPath: PROJECT_PATH, restartAos: true }, {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('D365FO_UI_TEST_URL');
+      expect(result.content[0].text).toContain('web.config');
+      expect(spawnMock).not.toHaveBeenCalled();
       expect(restartMock).not.toHaveBeenCalled();
-      expect(text).toContain('no environment root');
-      expect(text).toContain('web.config');
     });
   });
 
@@ -1121,7 +1198,7 @@ describe('build_d365fo_project', () => {
     if (condition === 'skipped') metadataMock.mockResolvedValue({ success: true, skipped: true, message: 'No metadata writer' });
     if (condition === 'sync-failed') syncMock.mockResolvedValue({ isError: true, content: [{ type: 'text', text: 'Sync failed' }] });
     const child = makeFakeChild(42);
-    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]); readdirMock.mockResolvedValue([]);
     await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: true, restartAos: true, aosUrl: 'https://dev.test/' }, {});
     await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
     expect(restartMock).not.toHaveBeenCalled();
@@ -1136,23 +1213,28 @@ describe('build_d365fo_project', () => {
     let finishRestart!: (result: any) => void;
     restartMock.mockImplementation(() => new Promise(resolve => { finishRestart = resolve; }));
     const child = makeFakeChild(42);
-    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]); readdirMock.mockResolvedValue([]);
     await buildProjectTool({ projectPath: PROJECT_PATH, restartAos: true, aosUrl: 'https://dev.test/' }, {});
     const closing = child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
     await vi.waitFor(() => expect(restartMock).toHaveBeenCalledTimes(1));
     const force = await buildProjectTool({ projectPath: PROJECT_PATH, force: true }, {});
     expect(force.isError).toBe(true);
-    expect(force.content[0].text).toContain('restart is in progress');
+    expect(force.content[0].text).toContain('active or uncertain');
     expect(spawnMock).toHaveBeenCalledTimes(1);
     finishRestart({ status: 'ready', message: 'Actual runtime restarted and verified' });
     await closing;
   });
 
   it('blocks force after a server restart interrupted an AOS mutation', async () => {
-    serveState(finishedState({ status: 'running', phase: 'restarting', restartAttempted: true, ownerSessionId: 'previous-session' }));
+    // The owning server (ownerPid) died during the restart stage: the mutation may have happened.
+    serveState(
+      finishedState({ jobId: 'job-1', status: 'running', phase: 'finalizing', ownerPid: 2147483646,
+        restartWorkflow: { request: { aosUrl: 'https://dev.test/' }, stage: 'restarting' } }),
+      JSON.stringify({ jobId: 'job-1', targetModel: MODEL_NAME, customPackagesPath: PKG, owner: 'previous-server', ownerPid: 2147483646 }),
+    );
     const result = await buildProjectTool({ projectPath: PROJECT_PATH, force: true }, {});
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('restart outcome is unknown');
+    expect(result.content[0].text).toContain('active or uncertain');
     expect(spawnMock).not.toHaveBeenCalled();
     expect(restartMock).not.toHaveBeenCalled();
   });
@@ -1160,7 +1242,7 @@ describe('build_d365fo_project', () => {
   it('does not restart when database sync returns an error without text', async () => {
     syncMock.mockResolvedValue({ isError: true, content: [] });
     const child = makeFakeChild(42);
-    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]); readdirMock.mockResolvedValue([]);
     await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: true, restartAos: true, aosUrl: 'https://dev.test/' }, {});
     await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
     expect(restartMock).not.toHaveBeenCalled();
@@ -1168,7 +1250,7 @@ describe('build_d365fo_project', () => {
 
   it('does not restart when the requested database sync scope is empty', async () => {
     const child = makeFakeChild(42);
-    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]); readdirMock.mockResolvedValue([]);
     await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: [], restartAos: true, aosUrl: 'https://dev.test/' }, {});
     await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
     expect(restartMock).not.toHaveBeenCalled();
@@ -1176,7 +1258,7 @@ describe('build_d365fo_project', () => {
 
   it('rechecks restart ownership when force was waiting on configuration before restart began', async () => {
     const child = makeFakeChild(42);
-    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]);
+    spawnMock.mockReturnValue(child); allowPaths([PROJECT_PATH, XPPC, PKG]); readdirMock.mockResolvedValue([]);
     await buildProjectTool({ projectPath: PROJECT_PATH, restartAos: true, aosUrl: 'https://dev.test/' }, {});
     const originalState = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
     serveState(originalState);
@@ -1192,7 +1274,7 @@ describe('build_d365fo_project', () => {
     finishRestart({ status: 'ready', message: 'Host restarted' });
     await closing;
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('restart is in progress');
+    expect(result.content[0].text).toContain('active or uncertain');
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 

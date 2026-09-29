@@ -169,6 +169,8 @@ Two things shared by `create` and `modify`:
 
 ## 🏗️ SDLC & Build (5)
 
+`build_d365fo_project` also accepts `restartAos: true`, with the local environment root in `aosUrl` — optional: it defaults to `D365FO_UI_TEST_URL`, then on a classic AOSService VM to `Infrastructure.HostUrl` from `AosService\WebRoot\web.config`. After successful compilation, runtime metadata generation and requested database synchronization, it restarts the matching IIS/IIS Express AOS and checks host readiness. This is opt-in; builds still start in the background by default (`wait: true` blocks). Collecting a completed result does not repeat the restart, and a blocked or unsuccessful restart is reported explicitly. See [Optional AOS restart](AOS_RUNTIME_RESTART.md) for requirements and limitations.
+
 > Local-only — excluded from the Azure `read-only` mode. Build/SysTest operations require a Windows D365FO VM; browser verification requires a local Playwright installation and access to the deployed test environment.
 
 | Tool | What it does | Example prompt |

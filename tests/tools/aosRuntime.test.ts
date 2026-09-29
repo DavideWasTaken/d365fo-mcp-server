@@ -94,7 +94,7 @@ describe('restart and readiness orchestration', () => {
     expect(result.status).toBe('ready');
     expect(d.command.mock.calls.map(c => c[0].action)).toEqual(['discover', 'restart', 'verify']);
     expect(d.command.mock.calls[1][0].host).toEqual(express);
-    expect(result.message).toContain('UI');
+    expect(result.message).toContain('check them in the browser');
   });
   it('never mutates if discovery is ambiguous', async () => {
     const d = deps();

@@ -13,10 +13,13 @@
 import { readFile } from 'fs/promises';
 import path from 'path';
 
-/** One `<add key="…" value="…"/>` out of a .config document. */
+/** One `<add key="…" value="…"/>` out of a .config document, whatever the attribute order. */
 function readAppSetting(xml: string, key: string): string | undefined {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`<add\\s+key="${escaped}"\\s+value="([^"]*)"`, 'i').exec(xml)?.[1];
+  for (const [tag] of xml.matchAll(/<add\s[^>]*>/gi)) {
+    const attr = (name: string) => new RegExp(`\\s${name}\\s*=\\s*"([^"]*)"`, 'i').exec(tag)?.[1];
+    if (attr('key')?.toLowerCase() === key.toLowerCase()) return attr('value');
+  }
+  return undefined;
 }
 
 export interface LocalAosUrl {

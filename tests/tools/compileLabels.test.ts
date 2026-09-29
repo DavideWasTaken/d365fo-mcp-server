@@ -186,11 +186,17 @@ describe('build ordering', () => {
       execFile: vi.fn((_f: string, _a: string[], _o: any, cb: Function) => cb(null, { stdout: '', stderr: '' })),
     }));
     vi.doMock('fs', () => ({ openSync: vi.fn().mockReturnValue(3), closeSync: vi.fn() }));
+    // Written files read back, as on disk: the build re-reads its own state to
+    // confirm it still owns the job before spawning xppc.
+    const files = new Map<string, string>();
     vi.doMock('fs/promises', () => ({
       access: vi.fn().mockResolvedValue(undefined),
-      writeFile: vi.fn().mockResolvedValue(undefined),
-      unlink: vi.fn().mockResolvedValue(undefined),
-      readFile: vi.fn().mockRejectedValue(new Error('ENOENT')),
+      writeFile: vi.fn(async (p: string, text: string) => { files.set(p, text); }),
+      unlink: vi.fn(async (p: string) => { files.delete(p); }),
+      readFile: vi.fn(async (p: string) => {
+        if (files.has(p)) return files.get(p);
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      }),
       appendFile: vi.fn().mockResolvedValue(undefined),
       readdir: vi.fn().mockRejectedValue(new Error('ENOENT')),
       stat: vi.fn().mockResolvedValue({ mtimeMs: 0 }),

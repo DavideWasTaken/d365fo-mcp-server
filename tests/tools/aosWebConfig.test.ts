@@ -36,6 +36,14 @@ describe('localAosUrl', () => {
     });
   });
 
+  it('reads the setting whatever the attribute order, and not a look-alike key', async () => {
+    const packages = aosService(`<appSettings>
+    <add key="Infrastructure.HostUrlSoap" value="https://soap.example.test/" />
+    <add value="https://env.example.test" key="Infrastructure.HostUrl" />
+</appSettings>`);
+    expect((await localAosUrl([packages]))?.url).toBe('https://env.example.test/');
+  });
+
   it('reduces a URL with a path to its environment root', async () => {
     const packages = aosService('<add key="Infrastructure.HostUrl" value="https://env.example.test/namespaces/AXSF/" />');
     expect((await localAosUrl([packages]))?.url).toBe('https://env.example.test/');
