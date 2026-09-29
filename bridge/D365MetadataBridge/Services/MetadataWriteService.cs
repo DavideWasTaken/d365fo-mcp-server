@@ -4328,8 +4328,14 @@ namespace D365MetadataBridge.Services
             }
             if (!string.IsNullOrEmpty(label))
             {
-                try { ctrl.Label = label; }
-                catch { unsupportedProperties.Add("label"); }
+                // The caption is not always "Label": field controls carry Label, buttons
+                // and menu buttons carry Text, groups and tab pages carry Caption. Always
+                // assigning Label left every Button without a caption (#1047).
+                var captionProperty = new[] { "Label", "Text", "Caption" }
+                    .Select(n => ctrlType.GetProperty(n))
+                    .FirstOrDefault(p => p != null && p.CanWrite && p.PropertyType == typeof(string));
+                if (captionProperty != null) captionProperty.SetValue(ctrl, label);
+                else unsupportedProperties.Add("label");
             }
             return ctrl;
         }
