@@ -168,6 +168,9 @@ namespace D365MetadataBridge.Services
             string[] memberContainers = { "Tables", "Classes", "Forms", "Views", "DataEntityViews", "Queries", "Maps" };
 
             var pathVariants = new List<string>();
+            // LIKE patterns with a wildcard INSIDE the path (a field whose metadata
+            // segment names its type). Built from escaped literals; never "/%"-extended.
+            var memberPatterns = new List<string>();
             bool memberQualified = false;
             if (objectPath.StartsWith("/"))
             {
@@ -190,16 +193,35 @@ namespace D365MetadataBridge.Services
                     pathVariants.Add($"/{c}/{owner}/Methods/{member}");
                     pathVariants.Add($"/{c}/{owner}/Fields/{member}");
                 }
+                // Declarative metadata names a table member in its own shape (see the
+                // bare-name comment below): "Table/<T>/Method/<m>" — singular — for a
+                // display/edit method a form control binds, and
+                // "Table/<T>/TableField<Type>/<f>" for a field, the segment naming the
+                // field's type (TableFieldString, TableFieldEnum, TableFieldReal, …).
+                pathVariants.Add($"Table/{owner}/Method/{member}");
+                memberPatterns.Add($"Table/{EscapeLike(owner)}/TableField%/{EscapeLike(member)}");
             }
             else
             {
                 // Bare name — we do not know which AOT type it is, so try every container
-                // that can be the TARGET of a reference. All of these were verified against a
-                // live DYNAMICSXREFDB: the target convention is plural + leading slash, even
-                // though SOURCE paths for declarative metadata use the singular, slash-free
-                // form ("EdtString/Foo?HelpText") that parseLabelSource() on the TS side
-                // handles. In particular an EDT is "/Edts/<name>" — NOT "/EdtString/<name>":
-                // the concrete subtype appears only in source paths.
+                // that can be the TARGET of a reference. A target is stored in one of TWO
+                // shapes, depending on which provider wrote the reference:
+                //
+                //   X++ code (provider Xppc.exe): plural + leading slash — "/Tables/<name>",
+                //     "/Edts/<name>", children "/Tables/<name>/Fields/<f>", ".../Methods/<m>".
+                //   Declarative metadata (provider Metadata): singular, NO leading slash, and
+                //     for an EDT its concrete subtype — "Table/<name>", "Form/<name>",
+                //     "EdtString/<name>", children "Table/<name>/TableFieldString/<f>",
+                //     "Table/<name>/Method/<m>". Source paths of these rows carry the referencing
+                //     property ("Form/F/FormDataSourceRoot/<name>?Table").
+                //
+                // Only the first shape used to be queried, on the belief — stated here — that
+                // targets were always plural + slash. On a live DYNAMICSXREFDB (platform
+                // 7.0.7858, 19.5M references) the second shape holds 2.3M of them, every one
+                // Kind 2: a table's form data sources, relations, entity mappings and field
+                // bindings, and the table fields typed with an EDT. A where-used on a custom
+                // table returned 334 of its 785 references; on a custom EDT, 12 of 108, and
+                // none of the fields using it.
                 //
                 // Edts/Maps/Reports/MenuItem* were missing here, so a where-used on any of
                 // them returned zero rows and the TS caller silently degraded to its
@@ -214,6 +236,18 @@ namespace D365MetadataBridge.Services
                 })
                 {
                     pathVariants.Add($"/{c}/{objectPath}");
+                }
+                // The metadata shape, with the singular type names and every EDT subtype
+                // found as a target in that live database.
+                foreach (var t in new[]
+                {
+                    "Table", "Class", "Enum", "View", "DataEntityView", "QuerySimple", "QueryComposite", "Form",
+                    "Map", "Report", "MenuItemDisplay", "MenuItemAction", "MenuItemOutput",
+                    "EdtString", "EdtReal", "EdtEnum", "EdtInt64", "EdtDate", "EdtInt", "EdtUtcDateTime",
+                    "EdtContainer", "EdtGuid", "EdtTime",
+                })
+                {
+                    pathVariants.Add($"{t}/{objectPath}");
                 }
             }
 
@@ -241,11 +275,12 @@ namespace D365MetadataBridge.Services
                 allParams.Add(($"@P{i}", pathVariants[i]));
             }
             var likeConditions = new List<string>();
-            for (int i = 0; i < extraPaths.Count; i++)
+            var likePatterns = extraPaths.Concat(memberPatterns).ToList();
+            for (int i = 0; i < likePatterns.Count; i++)
             {
                 var pname = $"@L{i}";
                 likeConditions.Add($"tgt.Path LIKE {pname}");
-                allParams.Add((pname, extraPaths[i]));
+                allParams.Add((pname, likePatterns[i]));
             }
 
             var whereClause = $"tgt.Path IN ({string.Join(",", paramNames)})";

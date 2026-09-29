@@ -134,7 +134,9 @@ function describeUnsearchableType(
   //
   // It is authoritative for these five types specifically BECAUSE of the container
   // fix in this change: a bare name now expands to /Edts/, /Forms/, /Queries/,
-  // /Views/ and /Reports/, so the query reaches the rows that exist instead of
+  // /Views/ and /Reports/ — and to the metadata shape of each (EdtString/, Form/,
+  // QuerySimple/, View/, Report/ …, where table fields, data sources and control
+  // bindings are recorded) — so the query reaches the rows that exist instead of
   // matching nothing by construction. Calling that "inconclusive" would put back
   // the defect this function was written to remove, one layer down — and the text
   // did worse than hedge, telling the reader to "re-run once the xref bridge is
@@ -172,7 +174,7 @@ function describeUnsearchableType(
   out += `mostly from declarative metadata that is not in the text index at all. Running it would `;
   out += `have produced a number with no relationship to the real answer.\n\n`;
   out += `**What to do:**\n`;
-  out += `- Re-run once the xref bridge is available (full server mode with a UDE/local xref DB)\n`;
+  out += `- Re-run once the xref bridge is available (full server mode; on UDE the XPP config names the xref DB, on a traditional VM set \`bridge.xrefDbName\`, usually DYNAMICSXREFDB)\n`;
   if (suggestion) {
     out += `- Or pass the explicit AOT path as \`targetName\`: \`${suggestion}\`\n`;
   }

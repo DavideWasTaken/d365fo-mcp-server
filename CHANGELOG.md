@@ -125,6 +125,18 @@ those are called out explicitly below.
   `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
+- **`find_references` includes declarative metadata references.** The bridge looked
+  a target up only in its X++ shape (`/Tables/X`, `/Edts/X`), on the belief that
+  targets are always plural with a leading slash. Metadata references are stored
+  singular and without it, and for an EDT under its concrete subtype (`Table/X`,
+  `Form/X`, `EdtString/X`, members `Table/X/TableFieldString/F`, `Table/X/Method/M`):
+  on a live DYNAMICSXREFDB 2.3M of 19.5M references. A custom table's where-used
+  returned 334 of its 785 references, missing every form data source and entity
+  mapping; a custom EDT's, 12 of 108, missing every table field typed with it. Both
+  shapes are queried now, metadata rows read as "object › member › property", the
+  summary splits code from metadata, and a lookup that reaches the bridge's 500-row
+  limit says the total is a floor. The bridge's `--xref-database` help no longer
+  claims a default it does not have.
 - **`d365fo_file(action="project")` only touches projects under the configured solution
   roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
   like a projects folder", which every Visual Studio repo on the machine passes, and so

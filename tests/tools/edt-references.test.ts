@@ -207,6 +207,58 @@ describe('find_references — unsearchable targetType, bridge answered with no r
   });
 });
 
+// ─── declarative metadata references ───────────────────────────────────────────
+// Metadata references are stored with a singular, slash-free source path that
+// carries the referencing property. The C# bridge now queries their targets too
+// (Table/X, EdtString/X, …); what it hands back must read as "who uses it", not
+// as a raw path, and the summary must say how much came from metadata.
+
+describe('find_references — metadata references from the bridge', () => {
+  function bridgeWithMetadataRows(): BridgeClient {
+    return {
+      isReady: true,
+      metadataAvailable: true,
+      xrefAvailable: true,
+      findReferences: vi.fn(async () => ({
+        count: 3,
+        references: [
+          { sourcePath: '/Tables/MyFormatTable/Methods/exist', sourceModule: 'MyModel', line: 11, column: 5, referenceType: 'type-reference', callerClass: 'MyFormatTable', callerMethod: 'exist' },
+          { sourcePath: 'Table/MyOutboundStaging/TableFieldString/Format1?ExtendedDataType', sourceModule: 'MyModel', line: 0, column: 0, referenceType: 'type-reference', callerClass: 'MyOutboundStaging' },
+          { sourcePath: 'Form/MyJournalForm/FormDataSourceRoot/MyCountingTrans?Table', sourceModule: 'MyModel', line: 0, column: 0, referenceType: 'type-reference', callerClass: 'MyJournalForm' },
+        ],
+      })),
+    } as unknown as BridgeClient;
+  }
+
+  it('names the referencing object, member and property of a metadata reference', async () => {
+    const text = await runTool({ targetName: 'MyFormatCode', targetType: 'edt' }, bridgeWithMetadataRows());
+    expect(text).toContain('Table MyOutboundStaging › Format1 › ExtendedDataType');
+    expect(text).toContain('Form MyJournalForm › MyCountingTrans › Table');
+    // Code references keep their Class.method reading.
+    expect(text).toContain('MyFormatTable.exist');
+    expect(text).not.toContain('**Table/MyOutboundStaging/TableFieldString');
+  });
+
+  it('splits the summary into X++ code and declarative metadata', async () => {
+    const text = await runTool({ targetName: 'MyFormatCode', targetType: 'edt' }, bridgeWithMetadataRows());
+    expect(text).toContain('From X++ code: 1 · from declarative metadata: 2');
+    expect(text).toContain('X++ code and declarative metadata references');
+  });
+
+  it('says when a lookup hit the bridge row limit, so the total is a floor', async () => {
+    const rows = Array.from({ length: 500 }, (_, i) => ({
+      sourcePath: `/Classes/C${i}/Methods/m`, sourceModule: 'M', line: 1, column: 1, referenceType: 'call', callerClass: `C${i}`, callerMethod: 'm',
+    }));
+    const bridge = {
+      isReady: true, metadataAvailable: true, xrefAvailable: true,
+      findReferences: vi.fn(async () => ({ count: 500, references: rows })),
+    } as unknown as BridgeClient;
+    const text = await runTool({ targetName: '/Tables/Busy' }, bridge);
+    expect(text).toContain('500+ reference(s)');
+    expect(text).toContain('limit of 500 rows');
+  });
+});
+
 // ─── defect 3 (TS half): explicit AOT paths reach the bridge untouched ─────────
 
 describe('find_references — explicit "/Edts/" path routing', () => {

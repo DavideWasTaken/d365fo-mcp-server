@@ -664,11 +664,14 @@ export async function tryBridgeReferences(
   // transient failure as an authoritative "0 references".
   const merged: BridgeReferenceInfo[] = [];
   let errored = false;
+  // The bridge returns at most XREF_ROW_CAP rows per candidate (SELECT TOP 500).
+  let capped = false;
   for (const t of targets) {
     try {
       const r = await bridge.findReferences(t);
       if (r?.error) errored = true;
       if (r?.references?.length) merged.push(...r.references);
+      if ((r?.references?.length ?? 0) >= XREF_ROW_CAP) capped = true;
     } catch (e) {
       errored = true;
       recordBridgeFailure(`findReferences(${t})`, e);
@@ -691,18 +694,22 @@ export async function tryBridgeReferences(
     const refs = { count: merged.length, references: merged };
 
     let out = `# References to \`${label}\`\n\n`;
-    out += `**Total:** ${refs.count} reference(s) found\n`;
-    out += `_Source: C# bridge (DYNAMICSXREFDB)_\n\n`;
+    out += `**Total:** ${refs.count}${capped ? '+' : ''} reference(s) found\n`;
+    out += `_Source: C# bridge (DYNAMICSXREFDB) — X++ code and declarative metadata references_\n\n`;
+    if (capped) {
+      out += `> ⚠️ At least one lookup reached the bridge's limit of ${XREF_ROW_CAP} rows, so the real total is higher. ` +
+        `Narrow the target (e.g. \`Owner.member\`) for a complete list.\n\n`;
+    }
 
     // Group by reference type for summary
     const byType = new Map<string, number>();
     const topCallers = new Map<string, number>();
+    let metadataCount = 0;
     for (const r of refs.references) {
       const rt = r.referenceType || 'reference';
       byType.set(rt, (byType.get(rt) || 0) + 1);
-      const caller = r.callerClass
-        ? (r.callerMethod ? `${r.callerClass}.${r.callerMethod}` : r.callerClass)
-        : r.sourcePath;
+      if (isMetadataSource(r.sourcePath)) metadataCount++;
+      const caller = referenceCaller(r);
       topCallers.set(caller, (topCallers.get(caller) || 0) + 1);
     }
 
@@ -711,6 +718,7 @@ export async function tryBridgeReferences(
     for (const [type, count] of byType) {
       out += `- **${type}**: ${count} reference(s)\n`;
     }
+    out += `- From X++ code: ${refs.count - metadataCount} · from declarative metadata: ${metadataCount}\n`;
     out += `\n`;
 
     // Top callers
@@ -730,14 +738,7 @@ export async function tryBridgeReferences(
       const module = r.sourceModule ? ` [${r.sourceModule}]` : '';
       const loc = r.line > 0 ? `:${r.line}` : '';
       const refType = r.referenceType ? ` (${r.referenceType})` : '';
-      const caller = r.callerClass
-        ? (r.callerMethod ? `${r.callerClass}.${r.callerMethod}` : r.callerClass)
-        : null;
-      if (caller) {
-        out += `- **${caller}**${loc}${module}${refType}\n`;
-      } else {
-        out += `- **${r.sourcePath}**${loc}${module}${refType}\n`;
-      }
+      out += `- **${referenceCaller(r)}**${loc}${module}${refType}\n`;
     }
 
     if (refs.count > limit) {
@@ -746,6 +747,32 @@ export async function tryBridgeReferences(
 
     return { status: 'ok', result: { content: [{ type: 'text', text: out }] } };
   }
+}
+
+/** Rows the C# bridge returns per candidate path at most (its SELECT TOP 500). */
+const XREF_ROW_CAP = 500;
+
+/**
+ * Declarative metadata references are stored with a singular, slash-free source
+ * path carrying the referencing property ("Form/F/FormDataSourceRoot/T?Table");
+ * X++ code references with a plural, slash-prefixed one ("/Classes/C/Methods/m").
+ */
+function isMetadataSource(sourcePath: string): boolean {
+  return !!sourcePath && !sourcePath.startsWith('/');
+}
+
+/**
+ * Who references the target, for a reader: "Class.method" for code, and for
+ * metadata the object type, object and "member › property" (the same reading
+ * label where-used gives) — "Form MyJournalForm › MyCountingTrans › Table".
+ */
+function referenceCaller(r: BridgeReferenceInfo): string {
+  if (isMetadataSource(r.sourcePath)) {
+    const { type, objectName, detail } = parseLabelSource(r.sourcePath);
+    return `${type} ${objectName}${detail ? ` › ${detail}` : ''}`;
+  }
+  if (r.callerClass) return r.callerMethod ? `${r.callerClass}.${r.callerMethod}` : r.callerClass;
+  return r.sourcePath;
 }
 
 // LABEL REFERENCES (formatting)
