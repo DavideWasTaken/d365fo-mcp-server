@@ -12,7 +12,7 @@ import { tryBridgeReferences } from '../../bridge/bridgeAdapter.js';
 import * as fs from 'fs';
 import { readIndexedMethodSources } from '../../utils/indexedMethodSource.js';
 
-const FindReferencesArgsSchema = z.object({
+export const FindReferencesArgsSchema = z.object({
   // "name" is accepted as an alias for "targetName"
   targetName: z.string().optional().describe('Name of the target. For a precise, type-scoped method where-used, qualify it as "Owner.method" (e.g. "SalesTable.initFromSalesQuotationTable") or pass an AOT path ("/Tables/SalesTable/Methods/initFromSalesQuotationTable"). A bare method name matches that name on every type. For a label, pass the label id ("@WAX2194" or "@LabelFile:LabelId").'),
   name: z.string().optional().describe('Alias for targetName.'),
@@ -339,6 +339,19 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
       const dot = cleanTargetName.lastIndexOf('.');
       owner = owner ?? (cleanTargetName.slice(0, dot).trim() || null);
       memberName = cleanTargetName.slice(dot + 1).trim();
+    }
+
+    // An index or field group is a member of its table. Sent as a bare name, the bridge
+    // expands it to "/Tables/<name>", "/Classes/<name>", … and matches nothing, which the
+    // unsearchable-type answer then reported as an authoritative zero.
+    if ((targetType === 'index' || targetType === 'field-group') && !owner && !isAotPath) {
+      const what = targetType === 'index' ? 'a table index' : 'a field group';
+      return { content: [{ type: 'text', text:
+        `# References to \`${cleanTargetName}\`\n\n` +
+        `**Target Type:** ${targetType}\n` +
+        `**Result:** not searched — this is NOT a count of zero\n\n` +
+        `${what[0].toUpperCase()}${what.slice(1)} is looked up under its table. Pass \`Table.${cleanTargetName}\` ` +
+        `as targetName (e.g. \`CustTable.AccountIdx\`) or set \`ownerName\`.\n` }] };
     }
 
     // parentObjectName powers the cross-type ("you used a form name as a class") hint
