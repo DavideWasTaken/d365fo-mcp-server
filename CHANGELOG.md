@@ -29,6 +29,28 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Added
+- **Edit an existing data entity in place, and set two table-field properties the bridge
+  could not.** `d365fo_file(action="modify", objectType="data-entity")` now supports
+  `modify-property` for `ConfigurationKey`, `PrimaryCompanyContext`, `CountryRegionCodes`,
+  `SingularLabel` and the Yes/No entity properties (`IsObsolete`, `AllowArchival`,
+  `AutoCreateDataverse`, `EnableSetBasedSqlOperations`, `ValidTimeStateEnabled`, alongside the
+  ones the bridge already handled). It writes one top-level property per call, in the
+  serialised element order measured over shipped entities. A nested path is refused, and
+  `Modules`, `OperationalDomain` and `SubscriberAccessLevel` are refused because their values
+  are not validated here. `add-data-source` adds an embedded, joined query datasource
+  (`joinField`, `relatedField`, `linkType`, `dataSourceReadOnly`) and `add-field` a mapped
+  field (`dataField` + `dataSource`). These used to fail with "Unknown AxDataEntityView
+  property" / "add-data-source not supported for objectType 'data-entity'" and ended in a
+  hand-edited file. Entity `create` now also honours `isReadOnly`, `tags`, `configurationKey`,
+  `primaryCompanyContext` and `surrogateKey` (a `SourceKey` field mapped to `RecId`, as
+  shipped entities name it), lists any `properties` key it does not read instead of dropping
+  it silently, and says when `dataManagementEnabled` writes a staging-table reference that
+  nothing creates. `dataManagementEnabled` now accepts `"Yes"` / `"true"` as well as `true`,
+  like the other Yes/No properties. Table `create` accepts `fields[].allowEdit` and
+  `fields[].ignoreEdtRelation`, and `modify-field` accepts `fieldAllowEdit` and
+  `fieldIgnoreEdtRelation` (for `BPErrorTablePrimaryKeyEditable` and `BPErrorEDTNotMigrated`).
+  A table field given only `enumType` is now an enum field (it became a string field through
+  the bridge).
 - **`build_d365fo_project` can restart the local AOS after a successful build**
   (`restartAos: true`, off by default). A build can succeed while a new object,
   for example a menu item, is still missing in the browser until the AOS is
