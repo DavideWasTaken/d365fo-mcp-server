@@ -133,10 +133,13 @@ those are called out explicitly below.
   on a live DYNAMICSXREFDB 2.3M of 19.5M references. A custom table's where-used
   returned 334 of its 785 references, missing every form data source and entity
   mapping; a custom EDT's, 12 of 108, missing every table field typed with it. Both
-  shapes are queried now, metadata rows read as "object › member › property", the
-  summary splits code from metadata, and a lookup that reaches the bridge's 500-row
-  limit says the total is a floor. The bridge's `--xref-database` help no longer
-  claims a default it does not have.
+  shapes are queried now — including for `Owner.member` and explicit AOT paths, whose
+  metadata twins are derived — and metadata rows read as "object › member › property".
+  The bridge returns exact totals split into code and metadata, and up to 500 rows per
+  shape instead of 500 in all: sorted by source path, code rows used to fill the cap, so
+  a large table (CustTable) showed no metadata reference at all. The list gives each
+  shape its share of `limit`. The bridge's `--xref-database` help no longer claims a
+  default it does not have.
 - **`d365fo_file(action="project")` only touches projects under the configured solution
   roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
   like a projects folder", which every Visual Studio repo on the machine passes, and so

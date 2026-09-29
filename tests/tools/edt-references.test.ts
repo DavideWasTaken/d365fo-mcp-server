@@ -245,6 +245,29 @@ describe('find_references — metadata references from the bridge', () => {
     expect(text).toContain('X++ code and declarative metadata references');
   });
 
+  it('reports the exact totals and shows both code and metadata rows when the bridge sampled', async () => {
+    // The live case: 785 references to a table, 451 of them metadata; the bridge
+    // returns up to 500 rows per shape with the true totals alongside.
+    const code = Array.from({ length: 334 }, (_, i) => ({
+      sourcePath: `/Classes/C${i}/Methods/m`, sourceModule: 'M', line: 1, column: 1, referenceType: 'field-access', callerClass: `C${i}`, callerMethod: 'm',
+    }));
+    const metadata = Array.from({ length: 166 }, (_, i) => ({
+      sourcePath: `Form/F${i}/FormDataSourceRoot/MyCountingTrans?Table`, sourceModule: 'M', line: 0, column: 0, referenceType: 'type-reference', callerClass: `F${i}`,
+    }));
+    const bridge = {
+      isReady: true, metadataAvailable: true, xrefAvailable: true,
+      findReferences: vi.fn(async () => ({ count: 500, total: 785, metadataTotal: 451, references: [...code, ...metadata] })),
+    } as unknown as BridgeClient;
+    const text = await runTool({ targetName: 'MyCountingTrans', targetType: 'table', limit: 20 }, bridge);
+    expect(text).toContain('**Total:** 785 reference(s) found (showing 500)');
+    expect(text).toContain('From X++ code: 334 · from declarative metadata: 451');
+    expect(text).toContain('the totals are exact');
+    // Neither shape crowds the other out of the list.
+    expect(text).toContain('### From declarative metadata (10 of 451)');
+    expect(text).toContain('### From X++ code (10 of 334)');
+    expect(text).toContain('Form F0 › MyCountingTrans › Table');
+  });
+
   it('says when a lookup hit the bridge row limit, so the total is a floor', async () => {
     const rows = Array.from({ length: 500 }, (_, i) => ({
       sourcePath: `/Classes/C${i}/Methods/m`, sourceModule: 'M', line: 1, column: 1, referenceType: 'call', callerClass: `C${i}`, callerMethod: 'm',

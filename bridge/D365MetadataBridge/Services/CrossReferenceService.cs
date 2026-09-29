@@ -172,11 +172,13 @@ namespace D365MetadataBridge.Services
             // segment names its type). Built from escaped literals; never "/%"-extended.
             var memberPatterns = new List<string>();
             bool memberQualified = false;
-            if (objectPath.StartsWith("/"))
+            if (objectPath.Contains("/"))
             {
-                // Explicit AOT path — use exactly as given (e.g. /Tables/SalesTable/Methods/initFromX).
+                // Explicit path — as given: an AOT path ("/Tables/SalesTable/Methods/initFromX")
+                // or a metadata one ("Table/SalesTable"). An X++ one gets its metadata twin below.
                 pathVariants.Add(objectPath);
-                memberQualified = objectPath.Contains("/Methods/") || objectPath.Contains("/Fields/");
+                memberQualified = objectPath.Contains("/Methods/") || objectPath.Contains("/Fields/") ||
+                    objectPath.Contains("/Method/") || objectPath.Contains("/TableField");
             }
             else if (objectPath.Contains("."))
             {
@@ -193,13 +195,6 @@ namespace D365MetadataBridge.Services
                     pathVariants.Add($"/{c}/{owner}/Methods/{member}");
                     pathVariants.Add($"/{c}/{owner}/Fields/{member}");
                 }
-                // Declarative metadata names a table member in its own shape (see the
-                // bare-name comment below): "Table/<T>/Method/<m>" — singular — for a
-                // display/edit method a form control binds, and
-                // "Table/<T>/TableField<Type>/<f>" for a field, the segment naming the
-                // field's type (TableFieldString, TableFieldEnum, TableFieldReal, …).
-                pathVariants.Add($"Table/{owner}/Method/{member}");
-                memberPatterns.Add($"Table/{EscapeLike(owner)}/TableField%/{EscapeLike(member)}");
             }
             else
             {
@@ -237,19 +232,13 @@ namespace D365MetadataBridge.Services
                 {
                     pathVariants.Add($"/{c}/{objectPath}");
                 }
-                // The metadata shape, with the singular type names and every EDT subtype
-                // found as a target in that live database.
-                foreach (var t in new[]
-                {
-                    "Table", "Class", "Enum", "View", "DataEntityView", "QuerySimple", "QueryComposite", "Form",
-                    "Map", "Report", "MenuItemDisplay", "MenuItemAction", "MenuItemOutput",
-                    "EdtString", "EdtReal", "EdtEnum", "EdtInt64", "EdtDate", "EdtInt", "EdtUtcDateTime",
-                    "EdtContainer", "EdtGuid", "EdtTime",
-                })
-                {
-                    pathVariants.Add($"{t}/{objectPath}");
-                }
             }
+
+            // Every X++-shaped target also exists in the metadata shape; query both,
+            // whichever way the target was given.
+            foreach (var p in pathVariants.ToList())
+                AddMetadataTwins(p, pathVariants, memberPatterns);
+            pathVariants = pathVariants.Distinct(StringComparer.Ordinal).ToList();
 
             // Also add sub-paths (methods, fields) so we catch method-level references.
             // A member-qualified target already points at an exact leaf path, so adding
@@ -287,20 +276,35 @@ namespace D365MetadataBridge.Services
             if (likeConditions.Count > 0)
                 whereClause += $" OR {string.Join(" OR ", likeConditions)}";
 
+            // Rows are capped PER SHAPE and the totals counted separately. With one cap for
+            // both, rows sorted by source path put every "/Classes/…" code row before any
+            // "Form/…" metadata row, so a table with 500 code references (CustTable)
+            // returned no metadata at all — the very rows this lookup exists to add. The
+            // candidate names are resolved once: the LIKEs against Names are the costly
+            // part, the joins on [References].TargetId are indexed.
+            string ShapeRows(string shape) => $@"
+                SELECT * FROM (
+                    SELECT TOP ({RowsPerShape})
+                        src.Path AS SourcePath, t.Path AS TargetPath, sm.Module AS SourceModule,
+                        r.Kind, r.Line, r.[Column]
+                    FROM #xrefTargets t
+                    INNER JOIN [References] r ON r.TargetId = t.Id
+                    INNER JOIN dbo.Names src ON src.Id = r.SourceId
+                    LEFT  JOIN dbo.Modules sm ON sm.Id = src.ModuleId
+                    WHERE {shape}
+                    ORDER BY src.Path, r.Line) AS shapeRows";
             var query = $@"
-                SELECT TOP 500
-                    src.Path AS SourcePath,
-                    tgt.Path AS TargetPath,
-                    sm.Module AS SourceModule,
-                    r.Kind,
-                    r.Line,
-                    r.[Column]
-                FROM [References] r
-                INNER JOIN dbo.Names tgt ON tgt.Id = r.TargetId
-                INNER JOIN dbo.Names src ON src.Id = r.SourceId
-                LEFT  JOIN dbo.Modules sm ON sm.Id = src.ModuleId
-                WHERE ({whereClause})
-                ORDER BY src.Path, r.Line";
+                SELECT tgt.Id, tgt.Path INTO #xrefTargets FROM dbo.Names tgt WHERE ({whereClause});
+                SELECT SourcePath, TargetPath, SourceModule, Kind, Line, [Column] FROM (
+                    {ShapeRows("t.Path LIKE N'/%'")}
+                    UNION ALL
+                    {ShapeRows("t.Path NOT LIKE N'/%'")}
+                ) AS rows
+                ORDER BY CASE WHEN TargetPath LIKE N'/%' THEN 0 ELSE 1 END, SourcePath, Line;
+                SELECT COUNT(*), SUM(CASE WHEN t.Path LIKE N'/%' THEN 0 ELSE 1 END)
+                FROM #xrefTargets t INNER JOIN [References] r ON r.TargetId = t.Id;
+                DROP TABLE #xrefTargets;";
+            int total = 0, metadataTotal = 0;
 
             try
             {
@@ -335,6 +339,11 @@ namespace D365MetadataBridge.Services
                                     CallerMethod = srcSeg == "Methods" ? srcSegName : null,
                                 });
                             }
+                            if (reader.NextResult() && reader.Read())
+                            {
+                                total = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+                                metadataTotal = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                            }
                         }
                     }
                 }
@@ -344,7 +353,59 @@ namespace D365MetadataBridge.Services
                 throw QueryFailed("findReferences", objectPath, ex);
             }
 
-            return new { objectPath, count = references.Count, references };
+            // count: rows returned; total / metadataTotal: every matching reference.
+            return new { objectPath, count = references.Count, total, metadataTotal, references };
+        }
+
+        /// <summary>Rows returned per target shape (X++ code, declarative metadata).</summary>
+        private const int RowsPerShape = 500;
+
+        /// <summary>
+        /// The singular metadata type names a plural X++ container is stored under, with
+        /// every EDT subtype found as a target in a live DYNAMICSXREFDB.
+        /// </summary>
+        private static readonly Dictionary<string, string[]> MetadataTypes = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["Tables"] = new[] { "Table" },
+            ["Classes"] = new[] { "Class" },
+            ["Enums"] = new[] { "Enum" },
+            ["Views"] = new[] { "View" },
+            ["DataEntityViews"] = new[] { "DataEntityView" },
+            ["Queries"] = new[] { "QuerySimple", "QueryComposite" },
+            ["Forms"] = new[] { "Form" },
+            ["Maps"] = new[] { "Map" },
+            ["Reports"] = new[] { "Report" },
+            ["MenuItemDisplays"] = new[] { "MenuItemDisplay" },
+            ["MenuItemActions"] = new[] { "MenuItemAction" },
+            ["MenuItemOutputs"] = new[] { "MenuItemOutput" },
+            ["Edts"] = new[]
+            {
+                "EdtString", "EdtReal", "EdtEnum", "EdtInt64", "EdtDate", "EdtInt", "EdtUtcDateTime",
+                "EdtContainer", "EdtGuid", "EdtTime",
+            },
+        };
+
+        /// <summary>
+        /// Add the metadata twin of an X++-shaped target path: "/Tables/T" → "Table/T",
+        /// "/Edts/E" → "EdtString/E", … ; for a table member, "/Tables/T/Methods/m" →
+        /// "Table/T/Method/m" and "/Tables/T/Fields/f" → the pattern
+        /// "Table/T/TableField%/f" (the segment names the field's type: TableFieldString,
+        /// TableFieldEnum, …). Metadata-shaped and unknown paths add nothing.
+        /// </summary>
+        private static void AddMetadataTwins(string xppPath, List<string> exact, List<string> patterns)
+        {
+            if (!xppPath.StartsWith("/")) return;
+            var parts = xppPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2 || !MetadataTypes.TryGetValue(parts[0], out var types)) return;
+            if (parts.Length == 2)
+            {
+                foreach (var t in types) exact.Add($"{t}/{parts[1]}");
+            }
+            else if (parts.Length == 4 && parts[0] == "Tables")
+            {
+                if (parts[2] == "Methods") exact.Add($"Table/{parts[1]}/Method/{parts[3]}");
+                else if (parts[2] == "Fields") patterns.Add($"Table/{EscapeLike(parts[1])}/TableField%/{EscapeLike(parts[3])}");
+            }
         }
 
         // ============================================================
