@@ -168,7 +168,8 @@ those are called out explicitly below.
   settings `bridge.xrefDbName` / `D365FO_XREF_DB_NAME` (usually `DYNAMICSXREFDB`) and
   `bridge.xrefDbServer` / `D365FO_XREF_DB_SERVER` (defaults to localhost) take
   precedence over the XPP config, and `doctor` says when a traditional VM has none set.
-- **`find_references` finds enum values, members an extension adds, and entity members.**
+- **`find_references` finds enum values, members an extension adds, entity members,
+  table indexes, field groups and form data source methods.**
   An enum value is found as `Enum::Value` or `Enum.Value` (`/Enums/E/EnumValues/v`,
   `Enum/E/EnumValue/v`); there was no way to ask for one. A table field or enum value
   an extension adds is stored under the extension only (`/TableExtensions/T.Ext/Fields/f`,
@@ -177,7 +178,11 @@ those are called out explicitly below.
   so `Entity.field` was looked up under `/Views/` and matched nothing. New `targetType`
   values `data-entity`, `map` and `menu-item` scope a bare name like the other types do:
   an entity is not under `/Views/`, and a menu item often shares its name with the class
-  or report it runs.
+  or report it runs. `Table.Name` with `targetType` `index` or `field-group` finds a table
+  index (`/Tables/T/TableIndexs/i`, `Table/T/TableIndex/i`) or field group
+  (`/Tables/T/TableFieldGroups/g`, `Table/T/TableFieldGroup/g`); only when asked, because
+  they often share a name with a field. `Form.DataSource.method` finds a form data source's
+  method (`/Forms/F/DataSources/DS/Methods/m`, `Form/F/FormDataSourceRoot/DS/Method/m`).
 - **A button added with `add-control` shows its caption** (#1047). The label was always
   written as `<Label>`, but buttons keep their caption in `<Text>` and groups in
   `<Caption>`. D365FO dropped the unknown element without an error, so the button
