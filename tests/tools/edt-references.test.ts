@@ -259,6 +259,60 @@ describe('find_references — metadata references from the bridge', () => {
     expect(bridge.findReferences as ReturnType<typeof vi.fn>).toHaveBeenCalledWith('CustTable');
   });
 
+  it('scopes to entities, maps and menu items, which have no container of their own in "view"', async () => {
+    // "/Views/<entity>" matches nothing: an entity is stored under DataEntityViews.
+    for (const [targetType, paths] of [
+      ['data-entity', ['/DataEntityViews/CustCustomerV3Entity']],
+      ['map', ['/Maps/CustCustomerV3Entity']],
+      // A menu item often shares its name with the class or report it runs.
+      ['menu-item', ['/MenuItemDisplays/CustCustomerV3Entity', '/MenuItemActions/CustCustomerV3Entity', '/MenuItemOutputs/CustCustomerV3Entity']],
+    ] as const) {
+      const bridge = bridgeWithMetadataRows();
+      await runTool({ targetName: 'CustCustomerV3Entity', targetType }, bridge);
+      const fn = bridge.findReferences as ReturnType<typeof vi.fn>;
+      expect(fn.mock.calls.map(c => c[0])).toEqual(paths);
+    }
+  });
+
+  it('looks an enum value up as a member of its enum, written "Enum::Value" or "Enum.Value"', async () => {
+    for (const targetName of ['SalesStatus::Invoiced', 'SalesStatus.Invoiced']) {
+      const bridge = bridgeWithMetadataRows();
+      await runTool({ targetName, targetType: 'enum' }, bridge);
+      expect(bridge.findReferences as ReturnType<typeof vi.fn>).toHaveBeenCalledWith('/Enums/SalesStatus/EnumValues/Invoiced');
+      expect(bridge.findReferences as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    }
+    // Untyped, an owner the index knows as an enum is queried for the value too.
+    const enumIndex = {
+      getReadDb: () => ({
+        prepare: (sql: string) => ({
+          all: (name: string) => (/FROM symbols/.test(sql) && /NOT IN/.test(sql) && name === 'SalesStatus'
+            ? [{ type: 'enum', model: 'ApplicationSuite' }] : []),
+        }),
+      }),
+    };
+    const bridge = bridgeWithMetadataRows();
+    await findReferencesTool(req({ targetName: 'SalesStatus::Invoiced' }), { symbolIndex: enumIndex, bridge } as any);
+    expect(bridge.findReferences as ReturnType<typeof vi.fn>).toHaveBeenCalledWith('/Enums/SalesStatus/EnumValues/Invoiced');
+  });
+
+  it('queries an entity member under DataEntityViews, although the index calls the entity a view', async () => {
+    const viewIndex = {
+      getReadDb: () => ({
+        prepare: (sql: string) => ({
+          all: (name: string) => (/FROM symbols/.test(sql) && /NOT IN/.test(sql) && name === 'LogisticsPostalAddressBaseEntity'
+            ? [{ type: 'view', model: 'ApplicationSuite' }] : []),
+        }),
+      }),
+    };
+    const bridge = bridgeWithMetadataRows();
+    await findReferencesTool(req({ targetName: 'LogisticsPostalAddressBaseEntity.CountryRegionId', targetType: 'field' }), { symbolIndex: viewIndex, bridge } as any);
+    const fn = bridge.findReferences as ReturnType<typeof vi.fn>;
+    expect(fn.mock.calls.map(c => c[0])).toEqual([
+      '/Views/LogisticsPostalAddressBaseEntity/Fields/CountryRegionId',
+      '/DataEntityViews/LogisticsPostalAddressBaseEntity/Fields/CountryRegionId',
+    ]);
+  });
+
   it('reports the exact totals and shows both code and metadata rows when the bridge sampled', async () => {
     // The live case: 785 references to a table, 451 of them metadata; the bridge
     // returns up to 500 rows per shape with the true totals alongside.

@@ -175,7 +175,8 @@ namespace D365MetadataBridge.Services
                 // or a metadata one ("Table/SalesTable"). An X++ one gets its metadata twin below.
                 pathVariants.Add(objectPath);
                 memberQualified = objectPath.Contains("/Methods/") || objectPath.Contains("/Fields/") ||
-                    objectPath.Contains("/Method/") || objectPath.Contains("/TableField");
+                    objectPath.Contains("/Method/") || objectPath.Contains("/TableField") ||
+                    objectPath.Contains("/EnumValues/") || objectPath.Contains("/EnumValue/");
             }
             else if (objectPath.Contains("."))
             {
@@ -192,6 +193,7 @@ namespace D365MetadataBridge.Services
                     pathVariants.Add($"/{c}/{owner}/Methods/{member}");
                     pathVariants.Add($"/{c}/{owner}/Fields/{member}");
                 }
+                pathVariants.Add($"/Enums/{owner}/EnumValues/{member}");
             }
             else
             {
@@ -232,9 +234,14 @@ namespace D365MetadataBridge.Services
             }
 
             // Every X++-shaped target also exists in the metadata shape; query both,
-            // whichever way the target was given.
+            // whichever way the target was given. A table field or enum value may also come
+            // from an extension, which is matched by pattern (see AddExtensionMembers).
+            var extensionPatterns = new List<string>();
             foreach (var p in pathVariants.ToList())
+            {
                 AddMetadataTwins(p, pathVariants);
+                AddExtensionMembers(p, extensionPatterns);
+            }
             pathVariants = pathVariants.Distinct(StringComparer.Ordinal).ToList();
 
             // Also add sub-paths (methods, fields) so we catch method-level references.
@@ -261,11 +268,12 @@ namespace D365MetadataBridge.Services
                 allParams.Add(($"@P{i}", pathVariants[i]));
             }
             var likeConditions = new List<string>();
-            for (int i = 0; i < extraPaths.Count; i++)
+            var likePatterns = extraPaths.Concat(extensionPatterns).ToList();
+            for (int i = 0; i < likePatterns.Count; i++)
             {
                 var pname = $"@L{i}";
                 likeConditions.Add($"tgt.Path LIKE {pname}");
-                allParams.Add((pname, extraPaths[i]));
+                allParams.Add((pname, likePatterns[i]));
             }
 
             var whereClause = $"tgt.Path IN ({string.Join(",", paramNames)})";
@@ -448,6 +456,39 @@ namespace D365MetadataBridge.Services
                     foreach (var t in types)
                         foreach (var s in segments) exact.Add($"{t}/{parts[1]}/{s}/{parts[3]}");
                 }
+                else if (parts[2] == "EnumValues" && parts[0] == "Enums")
+                {
+                    exact.Add($"Enum/{parts[1]}/EnumValue/{parts[3]}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// A field a table extension adds, and a value an enum extension adds, are stored
+        /// under the extension only, in both shapes: "/TableExtensions/T.Ext/Fields/f" and
+        /// "TableExtension/T.Ext/TableFieldString/f", "/EnumExtensions/E.Ext/EnumValues/v"
+        /// and "EnumExtension/E.Ext/EnumValue/v". On a live DYNAMICSXREFDB that is 17,788 and
+        /// 8,769 references, and a where-used on "PurchLine.&lt;added field&gt;" found none of them:
+        /// "/Tables/PurchLine/Fields/&lt;f&gt;" has no references at all. An extension is always
+        /// named "&lt;base&gt;.&lt;suffix&gt;" (every one of the 1,104 on that database), so the
+        /// suffix is the only wildcard; the member segment after it is exact.
+        /// </summary>
+        private static void AddExtensionMembers(string xppPath, List<string> patterns)
+        {
+            var parts = xppPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (!xppPath.StartsWith("/") || parts.Length != 4) return;
+            var baseName = EscapeLike(parts[1]);
+            var member = EscapeLike(parts[3]);
+            if (parts[0] == "Tables" && parts[2] == "Fields")
+            {
+                patterns.Add($"/TableExtensions/{baseName}.%/Fields/{member}");
+                foreach (var s in MetadataFieldSegments["Tables"])
+                    patterns.Add($"TableExtension/{baseName}.%/{s}/{member}");
+            }
+            else if (parts[0] == "Enums" && parts[2] == "EnumValues")
+            {
+                patterns.Add($"/EnumExtensions/{baseName}.%/EnumValues/{member}");
+                patterns.Add($"EnumExtension/{baseName}.%/EnumValue/{member}");
             }
         }
 
