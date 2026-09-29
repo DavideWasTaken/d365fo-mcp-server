@@ -176,7 +176,9 @@ namespace D365MetadataBridge.Services
                 pathVariants.Add(objectPath);
                 memberQualified = objectPath.Contains("/Methods/") || objectPath.Contains("/Fields/") ||
                     objectPath.Contains("/Method/") || objectPath.Contains("/TableField") ||
-                    objectPath.Contains("/EnumValues/") || objectPath.Contains("/EnumValue/");
+                    objectPath.Contains("/EnumValues/") || objectPath.Contains("/EnumValue/") ||
+                    objectPath.Contains("/TableIndexs/") || objectPath.Contains("/TableIndex/") ||
+                    objectPath.Contains("/TableFieldGroups/") || objectPath.Contains("/TableFieldGroup/");
             }
             else if (objectPath.Contains("."))
             {
@@ -194,6 +196,10 @@ namespace D365MetadataBridge.Services
                     pathVariants.Add($"/{c}/{owner}/Fields/{member}");
                 }
                 pathVariants.Add($"/Enums/{owner}/EnumValues/{member}");
+                // "Form.DataSource.method": a form data source's method.
+                var ownerDot = owner.IndexOf('.');
+                if (ownerDot > 0 && owner.IndexOf('.', ownerDot + 1) < 0)
+                    pathVariants.Add($"/Forms/{owner.Substring(0, ownerDot)}/DataSources/{owner.Substring(ownerDot + 1)}/Methods/{member}");
             }
             else
             {
@@ -434,7 +440,10 @@ namespace D365MetadataBridge.Services
         /// "/Edts/E" → "EdtString/E", … ; for a member, "/Views/V/Methods/m" →
         /// "View/V/Method/m" (tables, classes, forms, views, data entities, maps) and
         /// "/Tables/T/Fields/f" → "Table/T/TableFieldString/f", "Table/T/TableFieldEnum/f", …
-        /// (tables, maps, views, data entities). Metadata-shaped and unknown paths add nothing.
+        /// (tables, maps, views, data entities); "/Tables/T/TableIndexs/i" → "Table/T/TableIndex/i",
+        /// "/Tables/T/TableFieldGroups/g" → "Table/T/TableFieldGroup/g"; a form data source's
+        /// method "/Forms/F/DataSources/DS/Methods/m" → "Form/F/FormDataSourceRoot/DS/Method/m".
+        /// Metadata-shaped and unknown paths add nothing.
         /// </summary>
         private static void AddMetadataTwins(string xppPath, List<string> exact)
         {
@@ -460,6 +469,22 @@ namespace D365MetadataBridge.Services
                 {
                     exact.Add($"Enum/{parts[1]}/EnumValue/{parts[3]}");
                 }
+                // X++ spells these "TableIndexs" / "TableFieldGroups"; metadata singular.
+                else if (parts[2] == "TableIndexs")
+                {
+                    foreach (var t in types) exact.Add($"{t}/{parts[1]}/TableIndex/{parts[3]}");
+                }
+                else if (parts[2] == "TableFieldGroups")
+                {
+                    foreach (var t in types) exact.Add($"{t}/{parts[1]}/TableFieldGroup/{parts[3]}");
+                }
+            }
+            else if (parts.Length == 6 && parts[0] == "Forms" && parts[2] == "DataSources" && parts[4] == "Methods")
+            {
+                // A form data source's method: "/Forms/F/DataSources/DS/Methods/m" and
+                // "Form/F/FormDataSourceRoot/DS/Method/m". Every data source is stored at the
+                // root, joined ones included, under its own name (not its table's).
+                exact.Add($"Form/{parts[1]}/FormDataSourceRoot/{parts[3]}/Method/{parts[5]}");
             }
         }
 

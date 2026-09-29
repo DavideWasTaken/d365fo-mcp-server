@@ -313,6 +313,29 @@ describe('find_references — metadata references from the bridge', () => {
     ]);
   });
 
+  it('looks up a table index or field group only when targetType asks for it', async () => {
+    for (const [targetType, path] of [
+      ['index', '/Tables/CustTable/TableIndexs/AccountIdx'],
+      ['field-group', '/Tables/CustTable/TableFieldGroups/AccountIdx'],
+    ] as const) {
+      const bridge = bridgeWithMetadataRows();
+      await runTool({ targetName: 'CustTable.AccountIdx', targetType }, bridge);
+      expect((bridge.findReferences as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])).toEqual([path]);
+    }
+    // Untyped, a same-named field must not pick up the index or the field group.
+    const bridge = bridgeWithMetadataRows();
+    await runTool({ targetName: 'CustTable.AccountIdx' }, bridge);
+    const sent = (bridge.findReferences as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0]).join(' ');
+    expect(sent).not.toMatch(/TableIndexs|TableFieldGroups/);
+  });
+
+  it('looks up a form data source method as Form.DataSource.method', async () => {
+    const bridge = bridgeWithMetadataRows();
+    await runTool({ targetName: 'VendOpenTrans.VendTransOpen.editMarkTrans', targetType: 'method' }, bridge);
+    expect((bridge.findReferences as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0]))
+      .toEqual(['/Forms/VendOpenTrans/DataSources/VendTransOpen/Methods/editMarkTrans']);
+  });
+
   it('reports the exact totals and shows both code and metadata rows when the bridge sampled', async () => {
     // The live case: 785 references to a table, 451 of them metadata; the bridge
     // returns up to 500 rows per shape with the true totals alongside.
