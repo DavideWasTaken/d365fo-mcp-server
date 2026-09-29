@@ -28,6 +28,8 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+## [1.19.0] — 2026-09-29
+
 ### Added
 - **`build_d365fo_project` can restart the local AOS after a successful build**
   (`restartAos: true`, off by default). A build can succeed while a new object,
@@ -62,69 +64,14 @@ those are called out explicitly below.
 
   Nothing is overwritten, and the folder must already look like a projects folder.
   Contract: `get_knowledge(kind="op-spec", topic="project")`.
-- **Extension classes can follow their own naming style.** `EXTENSION_NAMING_STYLE`
-  drove two independent decisions — the token of an element extension
-  (`CustTable.ContosoRobotics`) and that of a CoC class
-  (`CustTable_ContosoRobotics_Extension`) — so a convention spelling them
-  differently had to pick one and have the other rewritten on every `create`.
-  New setting `naming.extensionClassStyle` / `EXTENSION_CLASS_NAMING_STYLE`
-  (`inherit` | `prefix` | `model-name`) applies to extension classes only; the
-  default `inherit` keeps today's behaviour. `applyObjectPrefix`,
-  `normalizeObjectName`, the naming check, `validate_object_naming` and
-  `get_workspace_info` each ask the style that belongs to the name in hand.
-- **Method bodies are served from the symbol index when the bridge and the
-  metadata files are both unreachable.** A read-only deployment has neither a
-  C# bridge (.NET Framework) nor a PackagesLocalDirectory, which were the only
-  two sources the body readers consulted, so every request for X++ source there
-  answered "not found" or "signatures only" — for bodies the server had already
-  indexed. `symbols.source` is populated at index time for every method-owning
-  type: measured on a production index, 639,397 method rows, 100% with a
-  non-empty body, averaging 763 characters against the 331-character
-  `source_snippet` preview. `get_object_info` (both `options:{method,
-  include:"source"}` and the `compact:false` listing) and `find_references` now
-  fall back to it, always LAST, and label the output as coming from a snapshot
-  that can lag the live model. No schema change, no re-index. What it does not
-  change: `symbols_fts` still indexes `source_snippet`, so which methods
-  `find_references` can FIND is the same — a caller that never mentions the name
-  in its first ten lines stays invisible.
-- The fallback is skipped when the object's own metadata file WAS read and does
-  not declare the method. That is a live fact about the model, and the index is
-  a snapshot that can still hold a method renamed or deleted since — serving it
-  would beat a correct "not found" with a stale body, under a line claiming the
-  metadata files were unavailable when one had just been parsed.
-- **A model descriptor's `<ModuleReferences>` can be edited through the tool**
-  (#1030, #1031). New `objectType="model-descriptor"` on
-  `d365fo_file(action="modify")` with `add-module-reference` /
-  `remove-module-reference` (parameter `moduleReference`) — the last file under
-  `Metadata/` with no write path, so adding a reference before writing code that
-  names another model's type no longer means hand-editing XML. XML-only; nothing
-  is created implicitly (a missing descriptor or `<ModuleReferences>` element is
-  reported, not invented); a duplicate is refused case-insensitively; the module
-  is probed as a package folder and a miss warns rather than refuses; the entry
-  lands in sorted position when the file is sorted, indentation and BOM are kept,
-  and an `i:nil="true"` element is materialised the way Visual Studio does it. A
-  standard Microsoft model's descriptor is refused, and only
-  `objectType="model-descriptor"` may target a descriptor path at all.
-  `get_workspace_info(diagnostics=true)` lists the current references, and a
-  write refreshes the model's visibility cache so `resolve_references` sees it
-  without a restart. Before release, an audit found that the FIRST reference
-  added to a descriptor with none was followed by the write's preservation guard
-  "restoring" duplicate `Publisher`/`SolutionId`/`Version*` elements out of
-  order — its XML scan did not recognise the end tag `</d2p1:string>`.
-  Namespace-prefixed element names are now part of that grammar.
-
-### Changed
-- **The model-visibility oracle is stricter** (#1030). The descriptor parser
-  scanned the whole document for `<d2p1:string>`, so `<InternalsVisibleTo>` and
-  `<AppliedUpdates>` entries counted as module references: 112 of 176 real
-  descriptors over-reported, 606 phantom references in all. Both the build-queue
-  ordering of `build_d365fo_project` and the visibility check behind
-  `resolve_references` read that list, and every phantom made the check more
-  permissive. Only `<ModuleReferences>` is read now — so "type not visible"
-  findings that were silently waved through can appear, and under
-  `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
+- **`d365fo_file(action="project")` checks an explicit label-file `languages` list
+  against the files on disk.** `add-object` with `objectType: "label-file"` and a
+  `languages` list wrote an entry for every listed language without looking for its
+  `<name>_<lang>.xml`, so a language with no file (or a mistyped tag) was registered and
+  the Visual Studio build failed later. Without the list the languages already came from
+  disk; with it, a language that has no file is now refused, naming the ones that exist.
 - **The name-based `find_references` fallback no longer counts a method's declaration as
   a call to it, and says what a table count leaves out.** In the declaring method's own
   body the first `name(` is `public void name(`, which was reported as a caller; it is
@@ -198,6 +145,114 @@ those are called out explicitly below.
   foreign folder would otherwise vouch for the next call there. `delete` checks the
   projects folder rather than the project, since the shared `.sln` it rewrites sits one
   level above the project folder.
+- **A table field's length is available without the bridge.** The full index
+  build stored a field's bare base type as its signature and dropped the EDT the
+  extracted metadata carried, so `DirPartyTable.Name` indexed as `String`
+  rather than `DirPartyName`. `update_symbol_index` already stored the EDT, so
+  the same column meant different things depending on which path last wrote the
+  table. On a deployment with no bridge, `get_object_info(table)` therefore could
+  not give a field's length at all, and an agent asked for it had to guess. The full
+  build now stores the EDT (or enum type, or the base type when a field has
+  neither), the same as the incremental path. The index-only table reader
+  resolves each field's size through the EDT chain in `edt_metadata`:
+  `Name: DirPartyName (String Size 160)`, and for a derived EDT that declares
+  no size of its own, `(String Size 160, inherited from DirPartyName)`.
+  The EDT is found whatever casing the field spells it in, and the output says
+  the size leaves EDT extensions out — the index stores none, and an extension
+  can change `StringSize`. Consumers that read the signature as an EDT —
+  relation generation, table patterns, find-method parameter types, "fields
+  typed as X" — now get one on a full index too. **Takes effect only after a
+  full index rebuild.**
+- **`search` ranking is unchanged by the above.** `search` full-text-matches
+  the signature, and a table field is very often named after its EDT, so such a
+  field would have matched the EDT's name twice and outscored everything that
+  matches it once: on an ApplicationPlatform + Directory + Foundation index,
+  `CustName` returned 20 fields called CustName out of 20 and lost every EDT and
+  method. Table fields are now scored without their signature, which is exactly
+  how they scored when it held a base type; view and data-entity fields, whose
+  signature was never an EDT, keep theirs. Across 12 common EDT-name queries the
+  top 20 is identical to the previous index's. The query still sorts by FTS5's own
+  `rank` and re-scores the streamed rows, stopping as soon as no later row can enter
+  the window: sorting on the score expression in SQL gave the same answer but made a
+  broad query 2–3× slower on a full index (`Trans` 172 → 499 ms). Streamed, it costs
+  0–45 ms (`Trans` 189 ms, `Name` 64 → 107 ms, warm cache).
+
+### Dependencies
+- **Major:** `vitest` and `@vitest/coverage-v8` 4.1.11 → 5.0.2 (dev only; no test or
+  config change was needed, the coverage thresholds hold) and `dotenv` 17.4.2 → 18.0.4.
+  dotenv 18 keeps the `config`/`parse` API the server uses; its log line moved from
+  stdout to stderr, and the server passes `quiet: true` anyway, so the MCP stdio stream
+  stays clean (checked with an `initialize` + `tools/list` round trip).
+- Within the existing ranges: `@modelcontextprotocol/sdk` 1.30.0 → 1.31.0,
+  `@azure/storage-blob` 12.33.0 → 12.34.0, `@types/node` 26.6.1 → 26.6.3, `tsx`
+  4.23.13 → 4.23.15, plus transitive updates. Supersedes Dependabot #1058–#1063.
+
+## [1.18.0] — 2026-09-24
+
+### Added
+- **Extension classes can follow their own naming style.** `EXTENSION_NAMING_STYLE`
+  drove two independent decisions — the token of an element extension
+  (`CustTable.ContosoRobotics`) and that of a CoC class
+  (`CustTable_ContosoRobotics_Extension`) — so a convention spelling them
+  differently had to pick one and have the other rewritten on every `create`.
+  New setting `naming.extensionClassStyle` / `EXTENSION_CLASS_NAMING_STYLE`
+  (`inherit` | `prefix` | `model-name`) applies to extension classes only; the
+  default `inherit` keeps today's behaviour. `applyObjectPrefix`,
+  `normalizeObjectName`, the naming check, `validate_object_naming` and
+  `get_workspace_info` each ask the style that belongs to the name in hand.
+- **Method bodies are served from the symbol index when the bridge and the
+  metadata files are both unreachable.** A read-only deployment has neither a
+  C# bridge (.NET Framework) nor a PackagesLocalDirectory, which were the only
+  two sources the body readers consulted, so every request for X++ source there
+  answered "not found" or "signatures only" — for bodies the server had already
+  indexed. `symbols.source` is populated at index time for every method-owning
+  type: measured on a production index, 639,397 method rows, 100% with a
+  non-empty body, averaging 763 characters against the 331-character
+  `source_snippet` preview. `get_object_info` (both `options:{method,
+  include:"source"}` and the `compact:false` listing) and `find_references` now
+  fall back to it, always LAST, and label the output as coming from a snapshot
+  that can lag the live model. No schema change, no re-index. What it does not
+  change: `symbols_fts` still indexes `source_snippet`, so which methods
+  `find_references` can FIND is the same — a caller that never mentions the name
+  in its first ten lines stays invisible.
+- The fallback is skipped when the object's own metadata file WAS read and does
+  not declare the method. That is a live fact about the model, and the index is
+  a snapshot that can still hold a method renamed or deleted since — serving it
+  would beat a correct "not found" with a stale body, under a line claiming the
+  metadata files were unavailable when one had just been parsed.
+- **A model descriptor's `<ModuleReferences>` can be edited through the tool**
+  (#1030, #1031). New `objectType="model-descriptor"` on
+  `d365fo_file(action="modify")` with `add-module-reference` /
+  `remove-module-reference` (parameter `moduleReference`) — the last file under
+  `Metadata/` with no write path, so adding a reference before writing code that
+  names another model's type no longer means hand-editing XML. XML-only; nothing
+  is created implicitly (a missing descriptor or `<ModuleReferences>` element is
+  reported, not invented); a duplicate is refused case-insensitively; the module
+  is probed as a package folder and a miss warns rather than refuses; the entry
+  lands in sorted position when the file is sorted, indentation and BOM are kept,
+  and an `i:nil="true"` element is materialised the way Visual Studio does it. A
+  standard Microsoft model's descriptor is refused, and only
+  `objectType="model-descriptor"` may target a descriptor path at all.
+  `get_workspace_info(diagnostics=true)` lists the current references, and a
+  write refreshes the model's visibility cache so `resolve_references` sees it
+  without a restart. Before release, an audit found that the FIRST reference
+  added to a descriptor with none was followed by the write's preservation guard
+  "restoring" duplicate `Publisher`/`SolutionId`/`Version*` elements out of
+  order — its XML scan did not recognise the end tag `</d2p1:string>`.
+  Namespace-prefixed element names are now part of that grammar.
+
+### Changed
+- **The model-visibility oracle is stricter** (#1030). The descriptor parser
+  scanned the whole document for `<d2p1:string>`, so `<InternalsVisibleTo>` and
+  `<AppliedUpdates>` entries counted as module references: 112 of 176 real
+  descriptors over-reported, 606 phantom references in all. Both the build-queue
+  ordering of `build_d365fo_project` and the visibility check behind
+  `resolve_references` read that list, and every phantom made the check more
+  permissive. Only `<ModuleReferences>` is read now — so "type not visible"
+  findings that were silently waved through can appear, and under
+  `GROUNDING_ENFORCE=true` they can block a write.
+
+### Fixed
 - **`generate_object` names an extension class what `create` will write** (#1041).
   The pattern generator assembled `{Base}{Infix}…_Extension` by hand, while
   `d365fo_file(action="create")` normalises every `_Extension` name with the token
@@ -245,37 +300,6 @@ those are called out explicitly below.
   is written and the reply names the existing bindings, so an accidental
   duplicate of a template stub is visible without being refused. **Requires a rebuilt bridge binary**; the reporting fix
   above is TypeScript and takes effect without one.
-- **A table field's length is available without the bridge.** The full index
-  build stored a field's bare base type as its signature and dropped the EDT the
-  extracted metadata carried, so `DirPartyTable.Name` indexed as `String`
-  rather than `DirPartyName`. `update_symbol_index` already stored the EDT, so
-  the same column meant different things depending on which path last wrote the
-  table. On a deployment with no bridge, `get_object_info(table)` therefore could
-  not give a field's length at all, and an agent asked for it had to guess. The full
-  build now stores the EDT (or enum type, or the base type when a field has
-  neither), the same as the incremental path. The index-only table reader
-  resolves each field's size through the EDT chain in `edt_metadata`:
-  `Name: DirPartyName (String Size 160)`, and for a derived EDT that declares
-  no size of its own, `(String Size 160, inherited from DirPartyName)`.
-  The EDT is found whatever casing the field spells it in, and the output says
-  the size leaves EDT extensions out — the index stores none, and an extension
-  can change `StringSize`. Consumers that read the signature as an EDT —
-  relation generation, table patterns, find-method parameter types, "fields
-  typed as X" — now get one on a full index too. **Takes effect only after a
-  full index rebuild.**
-- **`search` ranking is unchanged by the above.** `search` full-text-matches
-  the signature, and a table field is very often named after its EDT, so such a
-  field would have matched the EDT's name twice and outscored everything that
-  matches it once: on an ApplicationPlatform + Directory + Foundation index,
-  `CustName` returned 20 fields called CustName out of 20 and lost every EDT and
-  method. Table fields are now scored without their signature, which is exactly
-  how they scored when it held a base type; view and data-entity fields, whose
-  signature was never an EDT, keep theirs. Across 12 common EDT-name queries the
-  top 20 is identical to the previous index's. The query still sorts by FTS5's own
-  `rank` and re-scores the streamed rows, stopping as soon as no later row can enter
-  the window: sorting on the score expression in SQL gave the same answer but made a
-  broad query 2–3× slower on a full index (`Trans` 172 → 499 ms). Streamed, it costs
-  0–45 ms (`Trans` 189 ms, `Name` 64 → 107 ms, warm cache).
 - **The naming check no longer warns about the canonical extension-class name.**
   `CustTableBku_Extension` is exactly what the prefix style produces and what the
   write path returns untouched, yet the check answered "Extension name does not
@@ -302,17 +326,15 @@ those are called out explicitly below.
   sat behind was kept, so the infix landed one character late. It is now
   `CustTableCtso_Extension`, the spelling every name of this shape in
   PackagesLocalDirectory uses.
-
-### Dependencies
-- Routine lockfile refresh within the existing semver ranges: `@clack/prompts`
-  1.8.0 → 1.8.1, `@biomejs/biome` 2.5.12 → 2.5.14, `@types/node` 26.5.1 →
-  26.6.1, `zod` 4.6.1 → 4.6.5, `hono` 4.13.7 → 4.13.8, plus transitive updates
-  (`package-lock.json` only). `@clack/prompts` 1.8.1 now types a cancelled
-  prompt as `typeof CANCEL_SYMBOL` instead of `symbol`, which broke the
-  type-check of every CLI prompt; the CLI's `ensure()` helper now strips any
-  symbol from the result type. No runtime change.
-
-### Fixed
+- **A full build shipped runtime metadata for code that no longer existed**
+  (#1026). xppc's metadata write-back does not reliably refresh an existing
+  `XppMetadata` tree: a class whose field was removed compiled to IL without it,
+  while its `XppMetadata` — and so the binary `.md` manifest serialized from it —
+  still declared it, under a green build. `build_d365fo_project(fullBuild: true)`
+  now clears the model's compiler-metadata tree before compiling, so the
+  write-back is unconditional; a failed delete warns (the `.md` may then not
+  match the code) rather than failing the build. The incremental counterpart is
+  the next entry.
 - **An incremental build still shipped runtime metadata for code that no longer
   existed.** xppc's metadata write-back rewrites an element's
   `XppMetadata` file when the element gains something, but never when it loses
@@ -328,6 +350,22 @@ those are called out explicitly below.
   xppc on a UDE box: removed fields and deleted classes disappear from the
   metadata and the `.md`, unchanged elements are untouched, and the scan takes
   ~0.3 s for a 4,400-element package.
+- **Writing a descriptor no longer invents a class or a missing project entry**
+  (#1030). A file in no `Ax*` folder was classified as a class by the symbol
+  indexer — every descriptor write added a phantom CLASS named after the model,
+  which `search` returned as an exact match — and the inline write verification
+  reported a missing `.rnrproj` entry for an invented `AxClass\<Model>`. Such
+  files are no longer indexed (a re-index cleans up earlier phantoms), and the
+  membership check is skipped for any type with no `Ax*` folder.
+
+### Dependencies
+- Routine lockfile refresh within the existing semver ranges: `@clack/prompts`
+  1.8.0 → 1.8.1, `@biomejs/biome` 2.5.12 → 2.5.14, `@types/node` 26.5.1 →
+  26.6.1, `zod` 4.6.1 → 4.6.5, `hono` 4.13.7 → 4.13.8, plus transitive updates
+  (`package-lock.json` only). `@clack/prompts` 1.8.1 now types a cancelled
+  prompt as `typeof CANCEL_SYMBOL` instead of `symbol`, which broke the
+  type-check of every CLI prompt; the CLI's `ensure()` helper now strips any
+  symbol from the result type. No runtime change.
 
 ## [1.17.4] — 2026-09-10
 
