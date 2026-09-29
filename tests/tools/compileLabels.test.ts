@@ -190,7 +190,7 @@ describe('build ordering', () => {
       access: vi.fn().mockResolvedValue(undefined),
       writeFile: vi.fn().mockResolvedValue(undefined),
       unlink: vi.fn().mockResolvedValue(undefined),
-      readFile: vi.fn().mockRejectedValue(new Error('ENOENT')),
+      readFile: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       appendFile: vi.fn().mockResolvedValue(undefined),
       readdir: vi.fn().mockRejectedValue(new Error('ENOENT')),
       stat: vi.fn().mockResolvedValue({ mtimeMs: 0 }),
