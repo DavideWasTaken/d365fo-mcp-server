@@ -245,6 +245,13 @@ interface QueueResult {
 
 interface BuildJobState {
   jobId?: string;
+  // The MCP server process whose close handler finishes this build. Once it is
+  // gone nothing will ever write the final state, whatever the phase says.
+  ownerPid?: number;
+  // A restart build's result has been handed to a caller once. Kept only so a
+  // re-issued restartAos request collects it instead of restarting again; any
+  // other call treats the state as consumed, like a cleared plain build.
+  resultDelivered?: boolean;
   restartWorkflow?: {
     // aosUrlSource: 'aosUrl' when passed, else the web.config the root was read from.
     request: { aosUrl: string; aosUrlSource?: string; bpCheck?: boolean; dbSync?: boolean | string[]; projectPath?: string; packagePath?: string };
@@ -276,10 +283,13 @@ interface BuildJobState {
   queueResults?: QueueResult[]; // Results for already-completed models in the queue
 }
 
-// A restart may affect every model hosted by this local AOS. Keep a durable,
+// A restart may affect every model hosted by this local AOS. Keep a durable
 // reservation shared by MCP processes using this temp directory until the
-// outcome has been saved. Never reap it by
-// age or PID: a server interruption cannot prove whether the mutation happened.
+// outcome has been saved. Never reap it by age. It is released without a human
+// only when the server that owned it is gone AND it died before the restart
+// stage: up to then nothing irreversible happened to the AOS (a repeated sync is
+// idempotent). A reservation whose owner died while restarting stays put — that
+// interruption cannot prove whether the mutation happened.
 const restartReservationPath = path.join(os.tmpdir(), 'd365build_aos_restart.json');
 const restartOwner = crypto.randomUUID();
 interface RestartReservation {
@@ -287,6 +297,8 @@ interface RestartReservation {
   targetModel: string;
   customPackagesPath: string;
   owner: string;
+  /** Absent in reservations written before it existed: those are never reaped. */
+  ownerPid?: number;
 }
 
 async function readRestartReservation(): Promise<RestartReservation | null> {
@@ -298,6 +310,69 @@ async function readRestartReservation(): Promise<RestartReservation | null> {
   }
 }
 
+/**
+ * Release a reservation whose owning server died before the restart stage.
+ *
+ * Without this, one server restart mid-build (a client that restarts its MCP
+ * server on a request timeout is enough) left a reservation no live process
+ * would ever remove, and every later build of every model was refused until
+ * someone deleted the file by hand. Returns a note for the caller, or '' when
+ * nothing was released. Call it only while holding build admission.
+ */
+async function releaseAbandonedRestartReservation(): Promise<string> {
+  let reservation: RestartReservation | null;
+  try {
+    reservation = await readRestartReservation();
+  } catch {
+    return ''; // unreadable: genuinely uncertain, the admission check reports it
+  }
+  if (!reservation || reservation.owner === restartOwner || !reservation.ownerPid || isProcessAlive(reservation.ownerPid)) {
+    return '';
+  }
+  const state = await readBuildState(reservation.targetModel, reservation.customPackagesPath);
+  const ours = !!state && state.jobId === reservation.jobId;
+  // The owner is gone but its xppc may not be: that build still changes the
+  // model, so a restart must keep waiting for it.
+  if (ours && state!.status === 'running' && state!.pid && isProcessAlive(state!.pid)) return '';
+  const stage = ours ? state!.restartWorkflow?.stage : undefined;
+  if (stage === 'restarting' || stage === 'uncertain') {
+    if (ours && state!.status === 'running' && state!.restartWorkflow) {
+      state!.restartWorkflow.stage = 'uncertain';
+      state!.restartWorkflow.result = {
+        status: 'blocked',
+        message: `AOS restart outcome uncertain: the MCP server that ran it (PID ${reservation.ownerPid}) exited during the restart.`,
+      };
+      state!.status = 'failed';
+      state!.endTime = new Date().toISOString();
+      await writeBuildState(state!, reservation.customPackagesPath).catch(() => {});
+    }
+    return '';
+  }
+  if (ours) await clearBuildState(reservation.targetModel, reservation.customPackagesPath);
+  await unlink(restartReservationPath).catch(() => {});
+  const note =
+    `Released the AOS restart reservation of ${reservation.targetModel}: the MCP server that ran that build ` +
+    `(PID ${reservation.ownerPid}) exited ` +
+    (stage === 'complete'
+      ? 'after its restart workflow had completed, before releasing it.'
+      : `during the '${stage ?? 'unknown'}' stage, before any AOS restart was attempted.`);
+  await buildLog('WARN', note);
+  return `ℹ️ ${note}\n\n`;
+}
+
+/**
+ * Whether anything is still going to finish a 'running' state. The xppc PID
+ * answers while it compiles; afterwards (finalizing, and the post-build steps of
+ * a restart workflow) only the owning server can, so a state whose owner exited
+ * is dead even though its phase says otherwise.
+ */
+function buildIsLive(state: BuildJobState): boolean {
+  const ownerAlive = state.ownerPid === undefined || isProcessAlive(state.ownerPid);
+  if (state.restartWorkflow || state.phase === 'finalizing') return ownerAlive;
+  if (!state.pid) return ownerAlive; // queue advance in flight
+  return isProcessAlive(state.pid);
+}
+
 async function ownsBuild(state: BuildJobState, packagesPath: string): Promise<boolean> {
   const current = await readBuildState(state.targetModel, packagesPath);
   return !!current && current.jobId === state.jobId;
@@ -306,6 +381,21 @@ async function ownsBuild(state: BuildJobState, packagesPath: string): Promise<bo
 async function clearOwnedBuildState(state: BuildJobState, packagesPath: string): Promise<void> {
   await withOperationLock('build-aos-admission', async () => {
     if (await ownsBuild(state, packagesPath)) await clearBuildState(state.targetModel, packagesPath);
+  });
+}
+
+/**
+ * A finished result has just been handed to a caller. A plain build's state is
+ * cleared, as it always was; a restart build's is kept but marked delivered, so
+ * only a re-issued restartAos request collects it again (see resultDelivered).
+ */
+async function consumeFinishedState(state: BuildJobState, packagesPath: string): Promise<void> {
+  if (!state.restartWorkflow) {
+    await clearOwnedBuildState(state, packagesPath);
+    return;
+  }
+  await withOperationLock('build-aos-admission', async () => {
+    if (await ownsBuild(state, packagesPath)) await writeBuildState({ ...state, resultDelivered: true }, packagesPath);
   });
 }
 
@@ -428,6 +518,25 @@ async function readBuildState(targetModel: string, customPackagesPath: string): 
   } catch {
     return null;
   }
+}
+
+/**
+ * Another model's state record, for the pre-restart scan. writeBuildState is
+ * not atomic, so one failed parse may be a write in progress: read once more
+ * before calling the file unreadable. A record that stays unparseable is not
+ * being written by anyone, and null lets the scan move past it.
+ */
+async function readTrackedBuildState(file: string): Promise<BuildJobState | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return JSON.parse(await readFile(file, 'utf-8')) as BuildJobState;
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return null;
+      if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 200));
+    }
+  }
+  await buildLog('WARN', `ignoring unreadable build state ${file} in the pre-restart scan`);
+  return null;
 }
 
 async function writeBuildState(state: BuildJobState, customPackagesPath: string): Promise<void> {
@@ -1047,147 +1156,149 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
     closeSyncFs(logFd);
     if (!(await ownsBuild(liveState, customPackagesPath))) return;
     try {
-    const exitCode = code ?? -1;
+      const exitCode = code ?? -1;
 
-    // Publish "xppc is gone, I am finishing up" BEFORE the post-build work, so
-    // a waiter can tell this apart from an orphaned process and keeps waiting
-    // instead of returning a stub for an already-finished build.
-    const ownsFinalization = await withOperationLock('build-aos-admission', async () => {
-      if (!(await ownsBuild(liveState, customPackagesPath))) return false;
-      await writeBuildState({ ...liveState, phase: 'finalizing' }, customPackagesPath);
-      return true;
-    });
-    if (!ownsFinalization) return;
+      // Publish "xppc is gone, I am finishing up" BEFORE the post-build work, so
+      // a waiter can tell this apart from an orphaned process and keeps waiting
+      // instead of returning a stub for an already-finished build.
+      const ownsFinalization = await withOperationLock('build-aos-admission', async () => {
+        if (!(await ownsBuild(liveState, customPackagesPath))) return false;
+        await writeBuildState({ ...liveState, phase: 'finalizing' }, customPackagesPath);
+        return true;
+      });
+      if (!ownsFinalization) return;
 
-    // Read the -log file (authoritative source of X++ compiler errors)
-    let xppcErrContent = '';
-    try {
-      xppcErrContent = await readFile(xppcErrLog, 'utf-8');
-    } catch { /* no -log file = no diagnostics */ }
+      // Read the -log file (authoritative source of X++ compiler errors)
+      let xppcErrContent = '';
+      try {
+        xppcErrContent = await readFile(xppcErrLog, 'utf-8');
+      } catch { /* no -log file = no diagnostics */ }
 
-    const hasCompileErrors = XPPC_COMPILE_ERROR_RE.test(xppcErrContent) ||
-      (!!liveState.restartWorkflow && (parseXppcDiagnostics(xppcErrContent).some(d => d.severity === 'error') ||
-        (xppcReportedErrorCount(xppcErrContent) ?? 0) > 0));
-    const hasStaleSymbol   = XPPC_STALE_SYMBOL_RE.test(xppcErrContent);
-    // xppc can exit 0 while still emitting Compile Error lines, so success
-    // requires both exit 0 AND no Compile Error lines in the -log.
-    const succeeded = exitCode === 0 && !hasCompileErrors;
+      const hasCompileErrors = XPPC_COMPILE_ERROR_RE.test(xppcErrContent);
+      const hasStaleSymbol   = XPPC_STALE_SYMBOL_RE.test(xppcErrContent);
+      // xppc can exit 0 while still emitting Compile Error lines, so success
+      // requires both exit 0 AND no Compile Error lines in the -log.
+      const succeeded = exitCode === 0 && !hasCompileErrors;
 
-    // Append compiler diagnostics to the main log so a single tail read finds everything
-    if (xppcErrContent.trim()) {
-      let diagnostics = '\n--- xppc compiler diagnostics ---\n' + xppcErrContent + '\n';
-      if (hasStaleSymbol) {
-        diagnostics +=
-          '\n💡 STALE SYMBOL DETECTED: Call build_d365fo_project with fullBuild: true\n' +
-          '   to recompile all symbols from scratch.\n';
+      // Append compiler diagnostics to the main log so a single tail read finds everything
+      if (xppcErrContent.trim()) {
+        let diagnostics = '\n--- xppc compiler diagnostics ---\n' + xppcErrContent + '\n';
+        if (hasStaleSymbol) {
+          diagnostics +=
+            '\n💡 STALE SYMBOL DETECTED: Call build_d365fo_project with fullBuild: true\n' +
+            '   to recompile all symbols from scratch.\n';
+        }
+        await appendFile(state.logFile, diagnostics, 'utf-8').catch(() => {});
+      } else if (!succeeded) {
+        // No diagnostics at all — the failure happened before the compiler ran
+        await appendFile(
+          state.logFile,
+          '\n⚠️  No compiler diagnostics from xppc — build failed before compilation started.\n' +
+          '   Possible causes: missing metadata path, missing referenced model, or a\n' +
+          '   malformed XML file that slipped past pre-validation (e.g. in the Descriptor).\n',
+          'utf-8',
+        ).catch(() => {});
       }
-      await appendFile(state.logFile, diagnostics, 'utf-8').catch(() => {});
-    } else if (!succeeded) {
-      // No diagnostics at all — the failure happened before the compiler ran
-      await appendFile(
-        state.logFile,
-        '\n⚠️  No compiler diagnostics from xppc — build failed before compilation started.\n' +
-        '   Possible causes: missing metadata path, missing referenced model, or a\n' +
-        '   malformed XML file that slipped past pre-validation (e.g. in the Descriptor).\n',
-        'utf-8',
-      ).catch(() => {});
-    }
 
-    const duration = Math.round((Date.now() - new Date(liveState.startTime).getTime()) / 1000);
-    const newResult: QueueResult = {
-      modelName,
-      status: succeeded ? 'succeeded' : 'failed',
-      duration,
-      logFile: state.logFile,
-    };
-    const allResults: QueueResult[] = [...(liveState.queueResults ?? []), newResult];
+      const duration = Math.round((Date.now() - new Date(liveState.startTime).getTime()) / 1000);
+      const newResult: QueueResult = {
+        modelName,
+        status: succeeded ? 'succeeded' : 'failed',
+        duration,
+        logFile: state.logFile,
+      };
+      const allResults: QueueResult[] = [...(liveState.queueResults ?? []), newResult];
 
-    if (!succeeded) {
-      // Failure — stop the queue and finalise
+      if (!succeeded) {
+        // Failure — stop the queue and finalise
+        const final: BuildJobState = {
+          ...liveState,
+          status: 'failed',
+          exitCode,
+          endTime: new Date().toISOString(),
+          queueResults: allResults,
+        };
+        await saveFinishedState(final, customPackagesPath).catch(() => {});
+        await buildLog('ERROR', `xppc.exe FAILED — PID: ${pid} | model: ${modelName} | exit: ${exitCode} | compileErrors: ${hasCompileErrors}`);
+        return;
+      }
+
+      // Success — advance queue if there are more models
+      if (
+        liveState.buildQueue &&
+        liveState.queueIndex !== undefined &&
+        liveState.queueIndex + 1 < liveState.buildQueue.length
+      ) {
+        const nextIdx   = liveState.queueIndex + 1;
+        const nextModel = liveState.buildQueue[nextIdx];
+        const nextLog   = logFilePath(liveState.targetModel, nextIdx, customPackagesPath);
+
+        const nextState: BuildJobState = {
+          ...liveState,
+          pid: 0,           // will be updated by the recursive spawnXppcForState call
+          modelName: nextModel,
+          queueIndex: nextIdx,
+          queueResults: allResults,
+          logFile: nextLog,
+          status: 'running',
+          startTime: new Date().toISOString(),
+          exitCode: undefined,
+          endTime: undefined,
+        };
+        await writeBuildState(nextState, customPackagesPath);
+        await buildLog('INFO', `Queue advancing: ${nextIdx + 1}/${liveState.buildQueue.length} — ${nextModel}`);
+
+        spawnXppcForState(ctx, nextState).catch(async (err) => {
+          await buildLog('ERROR', `Failed to spawn next model ${nextModel}: ${err.message}`);
+          const errState: BuildJobState = {
+            ...nextState,
+            status: 'failed',
+            exitCode: -1,
+            endTime: new Date().toISOString(),
+            queueResults: [...allResults, { modelName: nextModel, status: 'failed', duration: 0, logFile: nextLog }],
+          };
+          await writeBuildState(errState, customPackagesPath).catch(() => {});
+        });
+        return;
+      }
+
+      // xppc produces the compiled .netmodule but does not update the binary .md
+      // manifests the AOS uses to resolve class names at runtime — regenerate them
+      // here, otherwise newly added classes stay invisible to D365 after deployment.
+      const metaResult = await generateRuntimeMetadata(
+        microsoftPackagesPath,
+        customPackagesPath,
+        liveState.targetModel,
+        compilerMetadataPath,
+      );
+      if (!(await ownsBuild(liveState, customPackagesPath))) return;
+      if (metaResult.skipped) {
+        await buildLog('WARN', `Runtime metadata regeneration skipped: ${metaResult.message}`);
+      } else if (metaResult.success) {
+        await buildLog('INFO', `Runtime metadata regenerated: ${metaResult.message}`);
+        await appendFile(state.logFile, `\n✅ Runtime metadata (.md) regenerated for ${liveState.targetModel}\n`, 'utf-8').catch(() => {});
+      } else {
+        await buildLog('WARN', `Runtime metadata regeneration failed (build still succeeded): ${metaResult.message}`);
+        await appendFile(state.logFile, `\n⚠️ Runtime metadata (.md) regeneration failed — VS build required for deployment of new classes:\n${metaResult.message}\n`, 'utf-8').catch(() => {});
+      }
+
+      // All models built — finalise as succeeded
       const final: BuildJobState = {
         ...liveState,
-        status: 'failed',
+        status: 'succeeded',
         exitCode,
         endTime: new Date().toISOString(),
         queueResults: allResults,
       };
-      await saveFinishedState(final, customPackagesPath).catch(() => {});
-      await buildLog('ERROR', `xppc.exe FAILED — PID: ${pid} | model: ${modelName} | exit: ${exitCode} | compileErrors: ${hasCompileErrors}`);
-      return;
-    }
-
-    // Success — advance queue if there are more models
-    if (
-      liveState.buildQueue &&
-      liveState.queueIndex !== undefined &&
-      liveState.queueIndex + 1 < liveState.buildQueue.length
-    ) {
-      const nextIdx   = liveState.queueIndex + 1;
-      const nextModel = liveState.buildQueue[nextIdx];
-      const nextLog   = logFilePath(liveState.targetModel, nextIdx, customPackagesPath);
-
-      const nextState: BuildJobState = {
-        ...liveState,
-        pid: 0,           // will be updated by the recursive spawnXppcForState call
-        modelName: nextModel,
-        queueIndex: nextIdx,
-        queueResults: allResults,
-        logFile: nextLog,
-        status: 'running',
-        startTime: new Date().toISOString(),
-        exitCode: undefined,
-        endTime: undefined,
-      };
-      await writeBuildState(nextState, customPackagesPath);
-      await buildLog('INFO', `Queue advancing: ${nextIdx + 1}/${liveState.buildQueue.length} — ${nextModel}`);
-
-      spawnXppcForState(ctx, nextState).catch(async (err) => {
-        await buildLog('ERROR', `Failed to spawn next model ${nextModel}: ${err.message}`);
-        const errState: BuildJobState = {
-          ...nextState,
-          status: 'failed',
-          exitCode: -1,
-          endTime: new Date().toISOString(),
-          queueResults: [...allResults, { modelName: nextModel, status: 'failed', duration: 0, logFile: nextLog }],
-        };
-        await writeBuildState(errState, customPackagesPath).catch(() => {});
-      });
-      return;
-    }
-
-    // xppc produces the compiled .netmodule but does not update the binary .md
-    // manifests the AOS uses to resolve class names at runtime — regenerate them
-    // here, otherwise newly added classes stay invisible to D365 after deployment.
-    const metaResult = await generateRuntimeMetadata(
-      microsoftPackagesPath,
-      customPackagesPath,
-      liveState.targetModel,
-      compilerMetadataPath,
-    );
-    if (!(await ownsBuild(liveState, customPackagesPath))) return;
-    if (metaResult.skipped) {
-      await buildLog('WARN', `Runtime metadata regeneration skipped: ${metaResult.message}`);
-    } else if (metaResult.success) {
-      await buildLog('INFO', `Runtime metadata regenerated: ${metaResult.message}`);
-      await appendFile(state.logFile, `\n✅ Runtime metadata (.md) regenerated for ${liveState.targetModel}\n`, 'utf-8').catch(() => {});
-    } else {
-      await buildLog('WARN', `Runtime metadata regeneration failed (build still succeeded): ${metaResult.message}`);
-      await appendFile(state.logFile, `\n⚠️ Runtime metadata (.md) regeneration failed — VS build required for deployment of new classes:\n${metaResult.message}\n`, 'utf-8').catch(() => {});
-    }
-
-    // All models built — finalise as succeeded
-    const final: BuildJobState = {
-      ...liveState,
-      status: 'succeeded',
-      exitCode,
-      endTime: new Date().toISOString(),
-      queueResults: allResults,
-    };
-    if (final.restartWorkflow) {
-      await finishRestartWorkflow(final, customPackagesPath, metaResult, ctx.toolContext);
-    }
-    await saveFinishedState(final, customPackagesPath);
-    await buildLog('INFO', `xppc.exe SUCCEEDED — PID: ${pid} | model: ${modelName} | ${duration}s`);
+      if (final.restartWorkflow) {
+        // The build verdict stays the one every build gets; a log that still
+        // reports errors only withholds the restart (see finishRestartWorkflow).
+        const reportedErrors = parseXppcDiagnostics(xppcErrContent).some(d => d.severity === 'error') ||
+          (xppcReportedErrorCount(xppcErrContent) ?? 0) > 0;
+        await finishRestartWorkflow(final, customPackagesPath, metaResult, ctx.toolContext, reportedErrors);
+      }
+      await saveFinishedState(final, customPackagesPath);
+      await buildLog('INFO', `xppc.exe SUCCEEDED — PID: ${pid} | model: ${modelName} | ${duration}s`);
     } catch (error: any) {
       if (liveState.restartWorkflow && await ownsBuild(liveState, customPackagesPath)) {
         const current = await readBuildState(targetModel, customPackagesPath);
@@ -1211,6 +1322,8 @@ async function finishRestartWorkflow(
   packagesPath: string,
   metadata: { success: boolean; skipped?: boolean; message: string },
   context: any,
+  /** The xppc log reports errors that the build verdict does not count. */
+  reportedErrors = false,
 ): Promise<void> {
   const workflow = state.restartWorkflow!;
   const persistIntent = async () => {
@@ -1220,7 +1333,11 @@ async function finishRestartWorkflow(
     // Do not publish succeeded until every requested stage has settled.
     await writeBuildState({ ...state, status: 'running', phase: 'finalizing' }, packagesPath);
   };
-  if (!metadata.success || metadata.skipped) {
+  if (reportedErrors) {
+    // Restarting the AOS onto a model whose log reports errors would load
+    // exactly what the compiler complained about.
+    workflow.result = { status: 'blocked', message: 'AOS restart blocked: the xppc log reports errors (see the diagnostics above).' };
+  } else if (!metadata.success || metadata.skipped) {
     workflow.result = { status: 'blocked', message: `AOS restart blocked: runtime metadata was not generated. ${metadata.message}` };
   } else {
     workflow.stage = 'prerequisites';
@@ -1558,7 +1675,11 @@ async function waitForBuildCompletion(
       // pid 0 means a queue advance is in flight (the next model has not been
       // spawned yet) — transient, never an orphan.
       const finalizing = state.phase === 'finalizing';
-      const settled = !!state.restartWorkflow || (!finalizing && (!state.pid || isProcessAlive(state.pid)));
+      // A restart workflow finalizes for as long as its server lives (sync,
+      // restart, readiness), so only the owner's death makes it an orphan.
+      const settled = state.restartWorkflow
+        ? buildIsLive(state)
+        : !finalizing && (!state.pid || isProcessAlive(state.pid));
       if (settled) {
         pidDeadSince = null;
       } else {
@@ -1621,13 +1742,17 @@ type BuildToolResult = { content: Array<{ type: string; text: string }>; isError
 
 export const buildProjectTool = async (params: any, context: any, onProgress?: ProgressReporter): Promise<BuildToolResult> => {
   let result!: ReturnType<typeof buildProjectInternal>;
+  let released = '';
   await withOperationLock('build-aos-admission', async () => {
+    released = await releaseAbandonedRestartReservation();
     let release!: () => void;
     const admitted = new Promise<void>(resolve => { release = resolve; });
     result = buildProjectInternal(params, context, onProgress, release).finally(release);
     await admitted;
   });
-  return result;
+  const response = await result;
+  if (!released || !response.content[0]) return response;
+  return { ...response, content: [{ ...response.content[0], text: released + response.content[0].text }, ...response.content.slice(1)] };
 };
 
 const buildProjectInternal = async (params: any, context: any, onProgress: ProgressReporter | undefined, releaseAdmission: () => void): Promise<BuildToolResult> => {
@@ -1760,10 +1885,14 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // finished full build. Discard it and compile for real. (#829: an explicit
       // {fullBuild:true} came back as "Collected the result of the build that
       // ended 19:27:58 … nothing was recompiled by this call".)
+      // A delivered restart result is kept only for a re-issued restartAos
+      // request; anything else gets what a plain build gives after its result
+      // was collected — a fresh compile.
       const fullBuildNeedsFreshRun = existingState.status !== 'running' &&
-        (fullBuild || (params.restartAos === true && !existingState.restartWorkflow));
+        (fullBuild || (params.restartAos === true && !existingState.restartWorkflow) ||
+          (!!existingState.resultDelivered && params.restartAos !== true));
       if (fullBuildNeedsFreshRun) {
-        await buildLog('INFO', `fullBuild:true — discarding finished state for ${targetModel} and recompiling`);
+        await buildLog('INFO', `discarding finished state for ${targetModel} and recompiling`);
         await clearBuildState(targetModel, customPackagesPath);
         // intentional fall-through to "start new build" below
       } else {
@@ -1771,7 +1900,9 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // A 'finalizing' state has no live PID by definition — xppc exited and the
       // close handler is still doing post-build work — but it is very much a
       // running build, not an orphan.
-      const alive   = !!existingState.restartWorkflow || existingState.phase === 'finalizing' || isProcessAlive(existingState.pid);
+      const alive   = existingState.restartWorkflow
+        ? buildIsLive(existingState)
+        : existingState.phase === 'finalizing' || isProcessAlive(existingState.pid);
       const logTail = await readLogTail(existingState.logFile);
 
       if (existingState.status === 'running' && alive) {
@@ -1824,12 +1955,12 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
             targetModel, customPackagesPath, timeoutMs, onProgress, startedAt,
           );
           if (wait.outcome === 'finished' && wait.state) {
-            if (!wait.state.restartWorkflow) await clearOwnedBuildState(wait.state, customPackagesPath);
+            await consumeFinishedState(wait.state, customPackagesPath);
             return await renderFinishedBuildResult(wait.state, targetModel, dataDir, params, context);
           }
           const tailLog = await readLogTail(existingState.logFile);
           if (wait.outcome === 'orphaned') {
-            if (wait.state) await clearOwnedBuildState(wait.state, customPackagesPath);
+            if (wait.state && !wait.state.restartWorkflow) await clearOwnedBuildState(wait.state, customPackagesPath);
             return {
               content: [{
                 type: 'text',
@@ -1867,18 +1998,23 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
         for (let i = 0; i < 4; i++) {
           await new Promise(resolve => setTimeout(resolve, 500));
           const refreshed = await readBuildState(targetModel, customPackagesPath);
-          if (refreshed && (refreshed.jobId !== existingState.jobId || refreshed.phase === 'finalizing' || refreshed.status !== 'running')) {
+          // A dead restart workflow stays 'finalizing' forever; re-entering on
+          // that phase would recurse without end.
+          if (refreshed && (refreshed.jobId !== existingState.jobId || refreshed.status !== 'running' ||
+            (refreshed.phase === 'finalizing' && !refreshed.restartWorkflow))) {
             return buildProjectTool(params, context, onProgress);
           }
         }
-          await clearOwnedBuildState(existingState, customPackagesPath);
-          return {
-            content: [{
-              type: 'text',
-              text: `❌ Build process (PID: ${existingState.pid}) exited unexpectedly without reporting a result.\n\nModel: ${targetModel}\n\n--- Log ---\n${logTail}`,
-            }],
-            isError: true,
-          };
+        // A restart state is left for releaseAbandonedRestartReservation: only
+        // its stage can say whether the AOS may already have been restarted.
+        if (!existingState.restartWorkflow) await clearOwnedBuildState(existingState, customPackagesPath);
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ Build process (PID: ${existingState.pid}) exited unexpectedly without reporting a result.\n\nModel: ${targetModel}\n\n--- Log ---\n${logTail}`,
+          }],
+          isError: true,
+        };
       }
 
       // Build finished. It may be this caller collecting the result they were
@@ -1892,6 +2028,11 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       );
       if (!existingState.restartWorkflow || !stillCurrent) await clearBuildState(targetModel, customPackagesPath);
       if (stillCurrent) {
+        // Admission is still held here, so write directly rather than through
+        // consumeFinishedState, which takes it.
+        if (existingState.restartWorkflow && !existingState.resultDelivered) {
+          await writeBuildState({ ...existingState, resultDelivered: true }, customPackagesPath);
+        }
         releaseAdmission();
         const result = await renderFinishedBuildResult(existingState, targetModel, dataDir, params, context);
         // Say plainly that nothing was compiled just now, so a reader can never
@@ -1990,6 +2131,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
     // ------------------------------------------------------------------
     const initState: BuildJobState = {
       jobId: crypto.randomUUID(),
+      ownerPid: process.pid,
       ...(params.restartAos === true ? { restartWorkflow: {
         request: {
           aosUrl: aosUrl!,
@@ -2020,13 +2162,15 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // opposite admission order, using the existing durable job records.
       for (const name of await readdir(os.tmpdir())) {
         if (!/^d365build_state_[a-f0-9]+\.json$/.test(name)) continue;
-        const tracked: BuildJobState = JSON.parse(await readFile(path.join(os.tmpdir(), name), 'utf-8'));
-        if (tracked.status === 'running') {
-          throw new Error(`AOS restart blocked: tracked build ${tracked.targetModel ?? tracked.modelName} is still running or finalizing. Collect or recover that build before retrying.`);
-        }
+        const tracked = await readTrackedBuildState(path.join(os.tmpdir(), name));
+        // Unreadable, or a 'running' record nothing will ever finish (its xppc
+        // and its server are gone): neither is changing this host any more, and
+        // blocking on them would block every restart until someone cleans up.
+        if (!tracked || tracked.status !== 'running' || !buildIsLive(tracked)) continue;
+        throw new Error(`AOS restart blocked: tracked build ${tracked.targetModel ?? tracked.modelName} is still running or finalizing. Collect or recover that build before retrying.`);
       }
       await writeFile(restartReservationPath, JSON.stringify({
-        jobId: initState.jobId!, targetModel, customPackagesPath, owner: restartOwner,
+        jobId: initState.jobId!, targetModel, customPackagesPath, owner: restartOwner, ownerPid: process.pid,
       } satisfies RestartReservation), { encoding: 'utf-8', flag: 'wx' });
     }
     await writeBuildState(initState, customPackagesPath);
@@ -2057,13 +2201,13 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
         targetModel, customPackagesPath, timeoutMs, onProgress, startedAt,
       );
       if (wait.outcome === 'finished' && wait.state) {
-        if (!wait.state.restartWorkflow) await clearOwnedBuildState(wait.state, customPackagesPath);
+        await consumeFinishedState(wait.state, customPackagesPath);
         return await renderFinishedBuildResult(wait.state, targetModel, dataDir, params, context);
       }
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
       const tailLog = await readLogTail(wait.state?.logFile ?? firstLogFile);
       if (wait.outcome === 'orphaned') {
-        if (wait.state) await clearOwnedBuildState(wait.state, customPackagesPath);
+        if (wait.state && !wait.state.restartWorkflow) await clearOwnedBuildState(wait.state, customPackagesPath);
         return {
           content: [{
             type: 'text',

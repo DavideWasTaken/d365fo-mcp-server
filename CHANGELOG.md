@@ -39,8 +39,9 @@ those are called out explicitly below.
   is `aosUrl`, or on a classic VM `Infrastructure.HostUrl` from
   `AosService\WebRoot\web.config` (UDE needs `aosUrl`). When the match is
   ambiguous or the restart can't be confirmed, it says so instead of guessing,
-  and collecting the result later never restarts again.
-  See `docs/AOS_RUNTIME_RESTART.md`.
+  and collecting the result later never restarts again. If the server exits
+  before the restart stage, the next build releases its reservation; only an
+  exit during the restart itself needs a manual check. See `docs/AOS_RUNTIME_RESTART.md`.
 - **Extension classes can follow their own naming style.** `EXTENSION_NAMING_STYLE`
   drove two independent decisions — the token of an element extension
   (`CustTable.ContosoRobotics`) and that of a CoC class

@@ -27,7 +27,7 @@ Omitting `restartAos` preserves the existing build workflow. This feature does n
 
 ## Prerequisites and host selection
 
-The restart requires successful compilation, runtime metadata generation and any requested database synchronization. A skipped or failed metadata step, or an unsuccessful requested sync, prevents the restart.
+The restart requires successful compilation, runtime metadata generation and any requested database synchronization. A skipped or failed metadata step, an xppc log that still reports errors, or an unsuccessful requested sync prevents the restart.
 
 The environment hostname must resolve exclusively to local addresses and match exactly one root application binding. Supported hosts are:
 
@@ -48,11 +48,13 @@ After restart, the tool checks for a replacement worker and polls the environmen
 
 Results distinguish `ready`, `blocked`, `failed` and `not-ready`. A restart problem is reported explicitly so the user knows a manual runtime refresh or investigation may be needed. HTTP readiness does not prove that a customization meets its requirement: inspect or test the new objects separately.
 
-The original restart request and its outcome are retained. Collecting a completed build result does not repeat the restart or its prerequisite database synchronization. Interrupted or uncertain restart work is not retried automatically. An overlapping build is blocked while that work is active or uncertain.
+The original restart request and its outcome are retained. Collecting a completed build result does not repeat the restart or its prerequisite database synchronization, and re-issuing the same `restartAos: true` request collects that result again. Once the result has been returned, a call without `restartAos` is treated like any build after its result was collected: it compiles again (and restarts nothing). Interrupted or uncertain restart work is not retried automatically. An overlapping build is blocked while that work is active or uncertain.
 
 This coordination covers MCP processes sharing the same temporary directory, normally those running under the same Windows user. It does not coordinate builds under other Windows accounts or external tools. Finish any Visual Studio builds or other external compilation/synchronization jobs before requesting a restart.
 
-If an interrupted workflow leaves an uncertain reservation, recovery is manual: stop the MCP server, confirm that no build, sync or restart is still active, and inspect the runtime and saved build result. Only after resolving the uncertainty, remove the reservation file identified in the warning (`d365build_aos_restart.json` in the process's temporary directory). Restart the MCP server and request a fresh build with `fullBuild: true` and the desired restart options. Do not remove the reservation merely because it is old.
+If the MCP server that ran the workflow exits before the restart stage (while compiling, or during the best-practice check or database sync), the next build releases its reservation and says so: nothing irreversible had happened to the AOS yet. It waits while that build's `xppc` is still running.
+
+If the server exits during the restart itself, the outcome is unknown and recovery is manual: stop the MCP server, confirm that no build, sync or restart is still active, and inspect the runtime and saved build result. Only after resolving the uncertainty, remove the reservation file identified in the warning (`d365build_aos_restart.json` in the process's temporary directory). Restart the MCP server and request a fresh build with `fullBuild: true` and the desired restart options. Do not remove the reservation merely because it is old.
 
 ## Verification
 

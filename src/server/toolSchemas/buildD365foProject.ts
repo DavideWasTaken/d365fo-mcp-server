@@ -36,24 +36,24 @@ export const buildD365foProjectTool = {
         },
         bpCheck: {
           type: 'boolean',
-          description: 'On a SUCCESSFUL build, append best-practice findings in this call.',
+          description: 'On a SUCCESSFUL build, also run the best-practice checker and append its findings. Prefer this to a follow-up run_bp_check call: one build call instead of two round trips.',
         },
         dbSync: {
           type: ['boolean', 'array'],
           items: { type: 'string' },
-          description: 'On a SUCCESSFUL build, sync; REQUIRED for table/view/entity changes. true = project objects (full model if none); an array names exact tables/views.',
+          description: 'On a SUCCESSFUL build, also run the database sync (SyncEngine.exe) — REQUIRED after any table/view/data-entity change. true = partial sync of the syncable objects in the project, full-model when it has none; an ARRAY syncs exactly those tables/views (much faster).',
         },
         restartAos: {
           type: 'boolean',
-          description: 'Opt in to one local IIS/IIS Express AOS restart after compile, runtime metadata and requested sync succeed. aosUrl defaults to the local AOS web.config.',
+          description: 'After a successful build (+dbSync), restart the local IIS/IIS Express AOS serving aosUrl.',
         },
         aosUrl: {
           type: 'string',
-          description: 'HTTP(S) environment root for restartAos; no credentials, query or fragment. Omit on a classic VM to use Infrastructure.HostUrl from AosService\\WebRoot\\web.config; required on UDE.',
+          description: 'restartAos root. Default: Infrastructure.HostUrl in AosService web.config; required on UDE.',
         },
         wait: {
           type: 'boolean',
-          description: 'Default true: wait for completion in one call. false: return now and collect the result later.',
+          description: 'When true (default) the tool blocks until the build finishes and returns the final result in a single call. The agent should make exactly one call per requested build. Set false for legacy fire-and-forget polling behaviour.',
         },
         waitTimeoutMs: {
           type: 'number',

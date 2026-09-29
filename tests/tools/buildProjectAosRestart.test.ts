@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeFile } from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { createHash } from 'crypto';
 const m = vi.hoisted(() => ({
   files: new Map<string, string>(), children: [] as any[],
   spawn: vi.fn(), restart: vi.fn(), metadata: vi.fn(), sync: vi.fn(), bp: vi.fn(), lockTail: Promise.resolve(),
@@ -37,6 +38,11 @@ vi.mock('../../src/tools/sdlc/runBpCheck.js', () => ({ runBpCheckTool: m.bp }));
 import { buildProjectTool } from '../../src/tools/sdlc/buildProject.js';
 const opts = { modelName: 'MyModel', restartAos: true, aosUrl: 'https://dev.example.test/', wait: false };
 const webConfig = path.join('C:\\Packages', '..', 'WebRoot', 'web.config');
+// Well above any real PID: process.kill(pid, 0) reports it gone.
+const DEAD_PID = 2_000_000_000;
+const reservationKey = path.join(os.tmpdir(), 'd365build_aos_restart.json');
+const stateKey = (model: string) => path.join(os.tmpdir(),
+  `d365build_state_${createHash('md5').update(`${model.toLowerCase()}|c:\\packages`).digest('hex').slice(0, 10)}.json`);
 const state = () => JSON.parse([...m.files.entries()].find(([p]) => p.includes('d365build_state'))![1]);
 async function finish(log = 'Errors: 0', code = 0) {
   m.files.set(state().logFile.replace('.log', '.xppc.err'), log);
@@ -59,15 +65,30 @@ describe('optional AOS restart build workflow', () => {
     expect(m.restart).toHaveBeenCalledWith(opts.aosUrl);
     expect(m.metadata.mock.invocationCallOrder[0]).toBeLessThan(m.sync.mock.invocationCallOrder[0]);
     expect(m.sync.mock.invocationCallOrder[0]).toBeLessThan(m.restart.mock.invocationCallOrder[0]);
-    for (let i = 0; i < 2; i++) {
-      const result = await buildProjectTool({ modelName: 'MyModel', wait: false, dbSync: ['WrongTable'] }, {});
-      expect(result.content[0].text).toContain('AOS ready');
-    }
-    expect(m.restart).toHaveBeenCalledTimes(1); expect(m.sync).toHaveBeenCalledTimes(1);
+    const collected = await buildProjectTool({ modelName: 'MyModel', wait: false, dbSync: ['WrongTable'] }, {});
+    expect(collected.content[0].text).toContain('AOS ready');
+    // A re-issued restart request collects the same result again: no second restart or sync.
+    const reissued = await buildProjectTool({ ...opts, dbSync: ['WrongTable'] }, {});
+    expect(reissued.content[0].text).toContain('AOS ready');
+    expect(m.restart).toHaveBeenCalledTimes(1); expect(m.sync).toHaveBeenCalledTimes(1); expect(m.spawn).toHaveBeenCalledTimes(1);
   });
-  it.each(['Metadata Error: broken', 'Errors: 2', 'Compile Error: bad source'])('does not restart after failed full compiler diagnostics: %s', async log => {
-    await buildProjectTool({ ...opts, fullBuild: true }, {}); await finish(log);
+  it('treats a delivered restart result as consumed by a call without restartAos, like a plain build', async () => {
+    await buildProjectTool(opts, {}); await finish();
+    expect((await buildProjectTool({ modelName: 'MyModel', wait: false }, {})).content[0].text).toContain('AOS ready');
+    const next = await buildProjectTool({ modelName: 'MyModel', wait: false }, {});
+    expect(next.content[0].text).not.toContain('AOS ready');
+    expect(m.spawn).toHaveBeenCalledTimes(2); expect(m.restart).toHaveBeenCalledTimes(1);
+  });
+  it('does not restart after failed compiler diagnostics', async () => {
+    await buildProjectTool({ ...opts, fullBuild: true }, {}); await finish('Compile Error: bad source');
     expect(m.restart).not.toHaveBeenCalled(); expect(state().status).toBe('failed');
+  });
+  it.each(['Metadata Error: broken', 'Errors: 2'])('withholds the restart, but keeps the ordinary build verdict, when the log reports: %s', async log => {
+    await buildProjectTool({ ...opts, fullBuild: true }, {}); await finish(log);
+    expect(m.restart).not.toHaveBeenCalled();
+    // The same log gives the same verdict with or without restartAos.
+    expect(state().status).toBe('succeeded');
+    expect(state().restartWorkflow.result.message).toContain('xppc log reports errors');
   });
   it.each([{ success: false, skipped: false }, { success: true, skipped: true }])('blocks restart when metadata is not generated: %j', async result => {
     m.metadata.mockResolvedValue({ ...result, message: 'No metadata' });
@@ -196,10 +217,73 @@ describe('optional AOS restart build workflow', () => {
   });
   it('rejects restart while an earlier ordinary build of another model is running', async () => {
     await buildProjectTool({ modelName: 'OtherModel', wait: false }, {});
+    // The mocked xppc PID is not a real process; make it a live one.
+    m.files.set(stateKey('OtherModel'), JSON.stringify({ ...JSON.parse(m.files.get(stateKey('OtherModel'))!), pid: process.pid }));
     const response = await buildProjectTool(opts, {});
     expect(response.isError).toBe(true); expect(response.content[0].text).toContain('OtherModel');
     expect(m.spawn).toHaveBeenCalledTimes(1); expect(m.restart).not.toHaveBeenCalled();
   });
+  it('does not let an abandoned or unreadable state of another model block a restart', async () => {
+    m.files.set(stateKey('Crashed'), JSON.stringify({
+      jobId: 'old', targetModel: 'Crashed', modelName: 'Crashed', status: 'running', pid: DEAD_PID, logFile: 'x.log', startTime: new Date().toISOString(),
+    }));
+    m.files.set(stateKey('Garbled'), '{"status":"runn');
+    await buildProjectTool(opts, {});
+    expect(m.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a reservation whose server died', () => {
+    /** The state and reservation a server leaves behind when it dies mid-workflow. */
+    function abandon(stage: string, xppcPid = DEAD_PID, reservationExtra: object = { ownerPid: DEAD_PID }) {
+      m.files.set(stateKey('MyModel'), JSON.stringify({
+        jobId: 'job-1', ownerPid: DEAD_PID, targetModel: 'MyModel', modelName: 'MyModel', status: 'running', phase: 'finalizing',
+        pid: xppcPid, logFile: 'x.log', startTime: new Date().toISOString(),
+        restartWorkflow: { request: { aosUrl: opts.aosUrl }, stage },
+      }));
+      m.files.set(reservationKey, JSON.stringify({ jobId: 'job-1', targetModel: 'MyModel', customPackagesPath: 'C:\\Packages', owner: 'dead-server', ...reservationExtra }));
+    }
+
+    it.each(['pending', 'prerequisites'])('is released when it died in the %s stage, so builds go on', async stage => {
+      abandon(stage);
+      const response = await buildProjectTool({ modelName: 'OtherModel', wait: false }, {});
+      expect(response.isError).toBeFalsy();
+      expect(response.content[0].text).toContain(`Released the AOS restart reservation of MyModel`);
+      expect(response.content[0].text).toContain(`'${stage}' stage`);
+      expect(m.files.has(reservationKey)).toBe(false); expect(m.files.has(stateKey('MyModel'))).toBe(false);
+      expect(m.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays when it died while restarting: the outcome is unknown', async () => {
+      abandon('restarting');
+      const response = await buildProjectTool({ ...opts, force: true }, {});
+      expect(response.isError).toBe(true); expect(response.content[0].text).toContain('exited during the restart');
+      expect(m.files.has(reservationKey)).toBe(true);
+      expect(JSON.parse(m.files.get(stateKey('MyModel'))!).restartWorkflow.stage).toBe('uncertain');
+      expect(m.spawn).not.toHaveBeenCalled();
+    });
+
+    it('stays while its xppc is still compiling', async () => {
+      abandon('pending', process.pid);
+      const response = await buildProjectTool({ modelName: 'OtherModel', wait: false }, {});
+      expect(response.isError).toBe(true); expect(m.files.has(reservationKey)).toBe(true); expect(m.spawn).not.toHaveBeenCalled();
+    });
+
+    it('stays when it predates ownerPid', async () => {
+      abandon('pending', DEAD_PID, {});
+      const response = await buildProjectTool({ modelName: 'OtherModel', wait: false }, {});
+      expect(response.isError).toBe(true); expect(m.files.has(reservationKey)).toBe(true); expect(m.spawn).not.toHaveBeenCalled();
+    });
+
+    it('does not recurse on a dead finalizing restart state that has no reservation', async () => {
+      abandon('prerequisites');
+      m.files.delete(reservationKey);
+      const response = await buildProjectTool({ modelName: 'MyModel', wait: false }, {});
+      expect(response.isError).toBe(true); expect(response.content[0].text).toContain('exited unexpectedly');
+      // Kept: only its stage can tell a later recovery whether the AOS may have been restarted.
+      expect(m.files.has(stateKey('MyModel'))).toBe(true);
+    });
+  });
+
   it('keeps a failed runtime mutation reserved even for force:true', async () => {
     m.restart.mockResolvedValue({ status: 'failed', message: 'Mutation outcome unknown' });
     await buildProjectTool(opts, {}); await finish();
