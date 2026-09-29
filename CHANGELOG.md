@@ -146,6 +146,13 @@ those are called out explicitly below.
   it (`CustTable` with `table` no longer counts the form, menu item and query named
   CustTable). The bridge's `--xref-database` help no longer claims a default it does
   not have.
+- **The cross-reference database can be configured on a traditional VM.** The bridge got
+  its DYNAMICSXREFDB server and name only from the XPP config, which exists only on UDE,
+  so on a traditional VM it always started without cross-references and `find_references`
+  quietly answered from its name-based search, missing every metadata reference. New
+  settings `bridge.xrefDbName` / `D365FO_XREF_DB_NAME` (usually `DYNAMICSXREFDB`) and
+  `bridge.xrefDbServer` / `D365FO_XREF_DB_SERVER` (defaults to localhost) take
+  precedence over the XPP config, and `doctor` says when a traditional VM has none set.
 - **A button added with `add-control` shows its caption** (#1047). The label was always
   written as `<Label>`, but buttons keep their caption in `<Text>` and groups in
   `<Caption>`. D365FO dropped the unknown element without an error, so the button
