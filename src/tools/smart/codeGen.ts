@@ -451,6 +451,14 @@ function formControlExtensionTemplate(formName: string, className: string, contr
 [ExtensionOf(formControlStr(${formName}, ${ctrlName}))]
 final class ${className}
 {
+    // Button / CommandButton control: wrap clicked() instead — modified, validate and lookup
+    // are for value-bearing controls and never run on a click:
+    //   public void clicked()
+    //   {
+    //       next clicked();
+    //       // TODO: Add logic that runs when the button is clicked
+    //   }
+
     /// <summary>
     /// Fires when the control value is changed by the user.
     /// </summary>
