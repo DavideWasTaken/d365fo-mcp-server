@@ -6,6 +6,7 @@
  *   • create   → write a NEW AOT object file into PackagesLocalDirectory (write)
  *   • modify   → edit an EXISTING object via IMetadataProvider (write)
  *   • delete   → remove an object's XML and its .rnrproj registration (write)
+ *   • project  → VS project + solution operations, by `operation` (write)
  *   • undo     → roll a file back to HEAD, or delete it when untracked (write)
  *
  * Like `labels`, this mixes a read-capable action (generate works on Azure
@@ -21,6 +22,7 @@ import type { XppServerContext } from '../types/context.js';
 import { handleGenerateD365Xml } from './xml/generateD365Xml.js';
 import { handleCreateD365File, type CreateOutcome } from './write/createD365File.js';
 import { handleDeleteD365File } from './write/deleteD365File.js';
+import { handleProject } from './write/projectAction.js';
 import { modifyD365FileTool, type ModifyOutcome } from './write/modifyD365File.js';
 import { undoLastModificationTool } from './sdlc/undoLastModification.js';
 import { upsertWrittenFileIntoIndex } from './write/inlineIndexUpsert.js';
@@ -33,7 +35,7 @@ import { testCoverageNote } from './prepare/testFirst.js';
 import * as debouncedRefresh from '../bridge/debouncedRefresh.js';
 import { truncateOnBlockBoundary } from '../utils/payloadBudget.js';
 
-export const D365_FILE_ACTIONS = ['generate', 'create', 'modify', 'delete', 'undo'] as const;
+export const D365_FILE_ACTIONS = ['generate', 'create', 'project', 'modify', 'delete', 'undo'] as const;
 export type D365FileAction = (typeof D365_FILE_ACTIONS)[number];
 
 const D365FileArgsSchema = z
@@ -41,6 +43,7 @@ const D365FileArgsSchema = z
     action: z.enum(D365_FILE_ACTIONS).describe(
       'generate → XML text only (no file written, Azure/Linux fallback); ' +
       'create → write a NEW object file (Windows); modify → edit an EXISTING object (Windows); ' +
+      'project → VS project ops via params.operation: create | delete | add-object | remove-object (Windows); ' +
       'delete → remove an object file and its project registration (Windows); ' +
       'undo → roll a file back to HEAD, or delete it when untracked (Windows).',
     ),
@@ -462,7 +465,7 @@ export async function d365foFileTool(request: CallToolRequest, context: XppServe
   // A write changes the AOT out from under anything prepare aggregated earlier, so
   // the remembered answers stop being answers. Cleared before the write rather than
   // after: a handler that throws half-way has still touched disk.
-  if (action === 'create' || action === 'modify' || action === 'delete' || action === 'undo') {
+  if (action === 'create' || action === 'project' || action === 'modify' || action === 'delete' || action === 'undo') {
     resetRecentPrepares();
   }
 
@@ -471,6 +474,11 @@ export async function d365foFileTool(request: CallToolRequest, context: XppServe
   // objectType/objectName plumbing below applies to it.
   if (action === 'undo') {
     return undoLastModificationTool(rest, context);
+  }
+
+  // Not an AOT object: bypasses the create pipeline (prefixing, grounding, write anchor).
+  if (action === 'project') {
+    return handleProject(rest);
   }
 
   if (action === 'create') {

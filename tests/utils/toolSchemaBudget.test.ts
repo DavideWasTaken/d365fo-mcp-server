@@ -232,6 +232,14 @@ describe('tool schema token budget', () => {
     const tools = await getTools();
     const byName = new Map(tools.map(t => [t.name, t]));
 
+    // Action "project" (create/delete/add-object/remove-object — the .rnrproj and
+    // .sln entry were the last hand-written files in the flow) cost ~117 serialized
+    // chars and was paid for inside d365fo_file's own schema, not with a cap raise:
+    // the opening line re-listed the actions its bullets list, create named its file
+    // encoding, delete and the Windows note restated what the bullets already say,
+    // objectType said [delete] takes the enum it is published with, and properties
+    // restated the op-spec paragraph. d365fo_file 5,715 -> 5,705; payload 45,093.
+    //
     // d365fo_file's cap moved 5,700 -> 5,780 when objectType "model-descriptor"
     // and operations add-/remove-module-reference were published (5,640 -> 5,707
     // serialized chars: 19 for the objectType, 48 for the two operations). That
