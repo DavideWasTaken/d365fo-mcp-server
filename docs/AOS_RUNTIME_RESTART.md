@@ -60,4 +60,7 @@ If the server exits during the restart itself, the outcome is unknown and recove
 
 Automated tests cover host selection, local-address restrictions, launch arguments, readiness, build prerequisites and result collection. The Windows PowerShell harness mocks process mutations; these tests do not restart a live AOS.
 
-Tested live on a cloud-hosted development VM running IIS Express with `/config` and `/apppool:Dynamics365`: `restartAos: true` without `aosUrl` read the root from `web.config`, restarted that instance and reported `ready` after the authentication challenge. The IIS `AOSService` application pool path has automated coverage only.
+Both host kinds have been tested live on cloud-hosted development VMs. In each run `restartAos: true` without `aosUrl` read the root from `web.config`, restarted the host and reported `ready` after the authentication challenge:
+
+- **IIS Express** with `/config` and `/apppool:Dynamics365`: the one matching instance was restarted.
+- **IIS `AOSService` application pool**, with five bindings on the site and a second pool (`RetailCloudPos`) on the machine: the one binding matching the root was selected, `AOSService` was recycled, the old worker process was replaced by a new one, and the other pool was left untouched. An incremental build of a small model took 22 s; the whole call, including the restart and the readiness check, took 94 s.
