@@ -28,6 +28,19 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Added
+- **`naming.extensionClassStyle` / `EXTENSION_CLASS_NAMING_STYLE` accepts a new
+  value, `prefix-leading`.** `prefix` and `model-name` both put the token right
+  before `_Extension` (`CustTableCr_Extension`); some conventions instead lead
+  the class name with it (`CRCustTable_Extension`) — the Avanade D365FO
+  Development Guidelines are one, and neither existing value can express it.
+  `validate_object_naming` and `get_workspace_info` recognise and render the
+  new style; `d365fo_file(action="create")` and `normalizeObjectName` write it,
+  including converting a name written under the trailing `prefix` style
+  instead of double-prefixing it. Element extensions are unaffected — the new
+  style only applies to CoC classes, since Microsoft's own dot-notation shape
+  (`Base.{Infix}Extension`) cannot lead with the infix.
+
 ## [1.19.1] — 2026-09-30
 
 ### Fixed

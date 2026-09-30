@@ -110,13 +110,23 @@ export function getExtensionNamingStyle(): 'prefix' | 'model-name' {
  * applyObjectPrefix now asks the question that belongs to it.
  *
  * Configured via EXTENSION_CLASS_NAMING_STYLE. Unset — or any value that is
- * neither 'prefix' nor 'model-name' — inherits getExtensionNamingStyle(), so a
- * setup that never sets it behaves exactly as before.
+ * neither 'prefix', 'model-name' nor 'prefix-leading' — inherits
+ * getExtensionNamingStyle(), so a setup that never sets it behaves exactly as
+ * before.
+ *
+ * 'prefix-leading' is the one shape 'prefix' cannot express: both put the
+ * extension infix on the class, but 'prefix' trails it (`CustTableCtso_Extension`,
+ * the shape shipped code and the element style use) while a convention such as
+ * the Avanade D365FO Development Guidelines leads with it instead
+ * (`CtsoCustTable_Extension`). Element extensions have no equivalent option —
+ * `Base.{Infix}Extension` is Microsoft's own dot-notation shape and leading the
+ * infix there would not parse as an AOT name.
  */
-export function getExtensionClassNamingStyle(): 'prefix' | 'model-name' {
+export function getExtensionClassNamingStyle(): 'prefix' | 'model-name' | 'prefix-leading' {
   const configured = process.env.EXTENSION_CLASS_NAMING_STYLE?.trim().toLowerCase();
   if (configured === 'prefix') return 'prefix';
   if (configured === 'model-name') return 'model-name';
+  if (configured === 'prefix-leading') return 'prefix-leading';
   return getExtensionNamingStyle();
 }
 
@@ -135,9 +145,9 @@ export function unrecognisedNamingStyleSettings(): string[] {
     out.push(`EXTENSION_NAMING_STYLE="${element}" is not a known value (prefix | model-name) — treated as "prefix".`);
   }
   const cls = process.env.EXTENSION_CLASS_NAMING_STYLE?.trim();
-  if (cls && !['inherit', 'prefix', 'model-name'].includes(cls.toLowerCase())) {
+  if (cls && !['inherit', 'prefix', 'model-name', 'prefix-leading'].includes(cls.toLowerCase())) {
     out.push(
-      `EXTENSION_CLASS_NAMING_STYLE="${cls}" is not a known value (inherit | prefix | model-name) — ` +
+      `EXTENSION_CLASS_NAMING_STYLE="${cls}" is not a known value (inherit | prefix | model-name | prefix-leading) — ` +
       `treated as "inherit", i.e. "${getExtensionNamingStyle()}".`,
     );
   }
@@ -319,7 +329,9 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
   // model name and the other with the prefix, and EXTENSION_CLASS_NAMING_STYLE is
   // what lets it say so. Unset, both resolve identically and nothing changes.
   const useModelNameForElement = !!modelName && getExtensionNamingStyle() === 'model-name';
-  const useModelNameForClass = !!modelName && getExtensionClassNamingStyle() === 'model-name';
+  const classNamingStyle = getExtensionClassNamingStyle();
+  const useModelNameForClass = !!modelName && classNamingStyle === 'model-name';
+  const usePrefixLeadingForClass = classNamingStyle === 'prefix-leading';
 
   // The model name as it may appear inside an object name — identical to modelName
   // unless the name carries characters an AOT identifier cannot (see #892).
@@ -382,6 +394,31 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
       }
       cleanBase = cleanBase.replace(/_+$/, '');
       return `${cleanBase}_${modelToken}_Extension`;
+    }
+
+    // Prefix-LEADING style: infix goes before the base, not before "_Extension"
+    // (CtsoCustTable_Extension, not CustTableCtso_Extension). Needs its own branch —
+    // the checks below this one look for the infix at the END of baseName, which is
+    // exactly the shape this style does not produce.
+    if (usePrefixLeadingForClass) {
+      const infixLower = extensionInfix.toLowerCase();
+
+      // Idempotent: infix already leads at a PascalCase word boundary.
+      if (baseName.toLowerCase().startsWith(infixLower)) {
+        const rest = baseName.slice(extensionInfix.length);
+        if (rest.length > 0 && rest[0] === rest[0].toUpperCase() && /[A-Za-z]/.test(rest[0])) {
+          return objectName;
+        }
+      }
+
+      // Strip a stale TRAILING infix first — a name written under the 'prefix' style
+      // before the convention switched — so re-running stays idempotent instead of
+      // growing CustTableCtsoCtso_Extension.
+      let cleanBase = baseName;
+      if (extensionInfix && cleanBase.toLowerCase().endsWith(infixLower)) {
+        cleanBase = cleanBase.slice(0, cleanBase.length - extensionInfix.length);
+      }
+      return `${extensionInfix}${cleanBase}_Extension`;
     }
 
     // Check if the extension infix is already present at the end (case-insensitive)

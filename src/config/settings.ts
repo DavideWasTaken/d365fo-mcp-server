@@ -375,8 +375,9 @@ export const SETTINGS: Setting[] = [
     default: 'inherit',
     choices: [
       { value: 'inherit', hint: 'follow naming.extensionStyle — the default, behaviour unchanged' },
-      { value: 'prefix', hint: 'CustTableCtso_Extension — embeds the extension prefix' },
+      { value: 'prefix', hint: 'CustTableCtso_Extension — embeds the extension prefix, trailing' },
       { value: 'model-name', hint: 'CustTable_ContosoRobotics_Extension — embeds the model name' },
+      { value: 'prefix-leading', hint: 'CtsoCustTable_Extension — embeds the extension prefix, leading (e.g. Avanade Development Guidelines)' },
     ],
   },
 

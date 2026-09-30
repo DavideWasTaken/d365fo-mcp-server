@@ -189,6 +189,22 @@ Unset (or `inherit`), `EXTENSION_CLASS_NAMING_STYLE` follows `EXTENSION_NAMING_S
 
 The extension patterns in `copilot-instructions.md` (or any other rules file) only *describe* this behaviour: editing them does not change what the tool writes, and it leaves the agent's instructions contradicting the tool. To switch styles, run `d365fo-mcp config naming` (or set `EXTENSION_NAMING_STYLE`) and restart the server. With `prefix`, the infix follows `EXTENSION_PREFIX`, or the spelling the model's existing extensions already use.
 
+### Prefix leading the class name
+
+Both `prefix` and `model-name` put the token right before `_Extension` — `CustTableCr_Extension`, `CustTable_ContosoRobotics_Extension`. Some conventions instead lead the class name with the token, e.g. the Avanade D365FO Development Guidelines: `CRCustTableDbt_Extension`, not `CustTableDbtCR_Extension`. `EXTENSION_CLASS_NAMING_STYLE=prefix-leading` writes that shape:
+
+```env
+EXTENSION_PREFIX=CR
+EXTENSION_CLASS_NAMING_STYLE=prefix-leading   # extension classes only — elements keep EXTENSION_NAMING_STYLE
+```
+
+| Base name | Written as |
+|-----------|------------|
+| `CustTable` | `CRCustTable_Extension` |
+| `CustTableDbt` (a caller-embedded type abbreviation — the tool has no notion of `Dbt`/`Frm`/`Cls` itself) | `CRCustTableDbt_Extension` |
+
+Element extensions are unaffected — `prefix-leading` only exists for classes, because `Base.{Infix}Extension` is Microsoft's own dot-notation shape and leading the infix there would not parse as an AOT name. A name already written under the trailing `prefix` style is converted rather than double-prefixed the first time it is normalised (`CustTableCr_Extension` → `CRCustTable_Extension`).
+
 ---
 
 ## Searching Custom Extensions

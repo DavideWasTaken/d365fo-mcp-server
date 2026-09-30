@@ -133,6 +133,7 @@ export interface ObjectNamingCheck {
   useModelName: boolean;
   namingStyle: string;
   useModelNameForClass: boolean;
+  usePrefixLeadingForClass: boolean;
   classNamingStyle: string;
   errors: string[];
   warnings: string[];
@@ -221,6 +222,7 @@ export async function checkObjectNaming(
     // class-extension branch below asks this one, the element branch asks the above.
     const classNamingStyle = getExtensionClassNamingStyle();
     const useModelNameForClass = classNamingStyle === 'model-name' && !!modelName;
+    const usePrefixLeadingForClass = classNamingStyle === 'prefix-leading';
     // The spelling of the model name that may appear INSIDE an object name — what the
     // write path embeds (applyObjectPrefix → normalizeModelToken, #892). Comparing the
     // raw name instead flagged the very name d365fo_file(create) writes and recommended
@@ -283,13 +285,23 @@ export async function checkObjectNaming(
       // about under the prefix style must still yield the base the writer derives from
       // it (objectNaming.ts case B), or check and writer name different targets. A name
       // ending in "_Extension" is a class, so the class style decides which goes first.
-      const candidates = useModelNameForClass ? [modelToken, extensionInfix] : [extensionInfix, modelToken];
-      const derived = args.baseObjectName;
-      for (const token of candidates) {
-        if (!token || !derived.toLowerCase().endsWith(token.toLowerCase())) continue;
-        const stripped = derived.slice(0, derived.length - token.length).replace(/_+$/, '');
-        if (stripped) args.baseObjectName = stripped;
-        break;
+      if (usePrefixLeadingForClass) {
+        // Prefix-leading names carry the token at the START, not the end — the
+        // opposite of what the trailing-strip loop below looks for.
+        const derived = args.baseObjectName;
+        if (extensionInfix && derived.toLowerCase().startsWith(extensionInfix.toLowerCase())) {
+          const stripped = derived.slice(extensionInfix.length).replace(/^_+/, '');
+          if (stripped) args.baseObjectName = stripped;
+        }
+      } else {
+        const candidates = useModelNameForClass ? [modelToken, extensionInfix] : [extensionInfix, modelToken];
+        const derived = args.baseObjectName;
+        for (const token of candidates) {
+          if (!token || !derived.toLowerCase().endsWith(token.toLowerCase())) continue;
+          const stripped = derived.slice(0, derived.length - token.length).replace(/_+$/, '');
+          if (stripped) args.baseObjectName = stripped;
+          break;
+        }
       }
     }
 
@@ -308,13 +320,40 @@ export async function checkObjectNaming(
         );
       } else {
         if (args.objectType === 'class-extension') {
-          // prefix style → {Base}{Prefix}_Extension; model-name style → {Base}_{ModelToken}_Extension
+          // prefix style → {Base}{Prefix}_Extension; model-name style → {Base}_{ModelToken}_Extension;
+          // prefix-leading style → {Prefix}{Base}_Extension
           const expectedPattern = useModelNameForClass
             ? `${baseObjectName}_${modelToken}_Extension`
-            : `${baseObjectName}${extensionInfix}_Extension`;
+            : usePrefixLeadingForClass
+              ? `${extensionInfix}${baseObjectName}_Extension`
+              : `${baseObjectName}${extensionInfix}_Extension`;
           const expectedToken = useModelNameForClass ? modelToken : extensionInfix;
 
-          if (!name.startsWith(baseObjectName)) {
+          if (usePrefixLeadingForClass) {
+            // The token leads here, so the structural checks run in the opposite
+            // order from the other two styles: base name immediately before
+            // "_Extension", token in front of that.
+            const expectedSuffix = `${baseObjectName}_Extension`;
+            if (!name.endsWith(expectedSuffix)) {
+              errors.push(
+                name.endsWith('_Extension')
+                  ? `Class extension names must have the base class name immediately before '_Extension'.\n  Expected format: ${expectedPattern}`
+                  : `Class extension names must end with '_Extension'.\n  Expected format: ${expectedPattern}`,
+              );
+              if (expectedToken) suggestions.push(`Correct name: ${expectedPattern}`);
+            } else {
+              const lead = name.slice(0, name.length - expectedSuffix.length);
+              if (
+                expectedToken &&
+                lead.toLowerCase() !== expectedToken.toLowerCase() &&
+                !lead.toLowerCase().includes(expectedToken.toLowerCase())
+              ) {
+                warnings.push(
+                  `Extension name does not lead with the extension infix "${extensionInfix}" (EXTENSION_CLASS_NAMING_STYLE=prefix-leading).\n  Current: ${name}\n  Recommended: ${expectedPattern}`,
+                );
+              }
+            }
+          } else if (!name.startsWith(baseObjectName)) {
             errors.push(
               `Class extension names must start with the base class name.\n  Expected format: ${expectedPattern}`,
             );
@@ -621,6 +660,7 @@ export async function checkObjectNaming(
     useModelName,
     namingStyle,
     useModelNameForClass,
+    usePrefixLeadingForClass,
     classNamingStyle,
     errors,
     warnings,
