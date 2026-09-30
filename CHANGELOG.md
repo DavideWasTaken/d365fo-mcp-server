@@ -28,6 +28,29 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+## [1.19.1] — 2026-09-30
+
+### Fixed
+- **`d365fo-mcp update` no longer fails on Windows when it renames the
+  installed package.** npm replaces a global package by first renaming its
+  folder under `%APPDATA%\npm\node_modules`. The update started npm from inside
+  that same folder, and Windows does not rename a folder that is a running
+  process's working directory, so npm stopped with `EBUSY`/`EPERM`. npm now
+  runs from the home directory. If the install still fails, the command says
+  that a running MCP server can also lock the folder.
+
+  **Updating from 1.19.0 or older:** `d365fo-mcp update` still runs the old
+  code, so it fails once more. Install this release by hand. Close VS Code /
+  Visual Studio first if they run the MCP server, then start npm from any
+  folder outside the package:
+
+  ```
+  cd C:\
+  npm install -g d365fo-mcp@latest
+  ```
+
+  From 1.19.1 on, `d365fo-mcp update` works again.
+
 ## [1.19.0] — 2026-09-29
 
 ### Added

@@ -7,7 +7,8 @@
  * build); an npm install reinstalls itself from the registry.
  */
 import * as fs from 'node:fs';
-import { DOTNET_MISSING, bridgeBuildCommand, installMode, isWindows, paths } from '../context.js';
+import { homedir } from 'node:os';
+import { DOTNET_MISSING, bridgeBuildCommand, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { bridgeFreshness } from '../bridgeSources.js';
 import { commandExists, runExe, runShell } from '../exec.js';
 import { branchStatus, changedFiles, gitHead } from '../gitState.js';
@@ -50,6 +51,20 @@ export function bridgeAction(hadBridge: boolean, existsNow: boolean, sourcesChan
 /** The bridge project, as a pathspec relative to the repository root. */
 const BRIDGE_SOURCES = 'bridge/D365MetadataBridge';
 
+/**
+ * Where `npm install -g` runs. Anywhere but the package itself.
+ *
+ * runShell defaults to repoRoot, which for an npm install IS the directory
+ * npm is about to replace — and npm replaces it by renaming it aside first.
+ * Windows refuses to rename a directory that any process has as its working
+ * directory, so the shell and npm spawned there held the very lock that made
+ * the rename fail with EBUSY/EPERM. The home directory is outside every
+ * global prefix npm uses.
+ */
+export function globalInstallCwd(): string {
+  return homedir();
+}
+
 export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
   p.intro('d365fo-mcp update');
   if (!requireFullInstall()) return;
@@ -88,7 +103,7 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
   const headBefore = installMode === 'git' ? gitHead() : null;
 
   const steps: [string, () => Promise<number>][] = installMode === 'npm'
-    ? [['npm install -g d365fo-mcp@latest', () => runShell('npm install -g d365fo-mcp@latest')]]
+    ? [['npm install -g d365fo-mcp@latest', () => runShell('npm install -g d365fo-mcp@latest', { cwd: globalInstallCwd() })]]
     : [
       ['git pull', () => runExe('git', ['pull'])],
       ['npm install', () => runShell('npm install')],
@@ -98,6 +113,12 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
     p.log.step(label);
     if (await run() !== 0) {
       p.log.error(`${label} failed — fix the error above and re-run.`);
+      if (installMode === 'npm' && isWindows) {
+        // The other thing that pins the package directory: a server still
+        // running from it (VS Code / Visual Studio keep MCP servers alive) or
+        // its bridge, when an older release built the bridge inside the package.
+        p.log.info(`If npm reports EPERM/EBUSY on ${repoRoot}, close VS Code / Visual Studio (or stop the MCP server) and run the update again.`);
+      }
       process.exitCode = 1;
       return;
     }
