@@ -19,7 +19,8 @@
 import * as fs from 'fs';
 import { promises as fsp } from 'fs';
 import { lookupSymbolNocase } from './symbolLookup.js';
-import { resolveDbPathLocally } from './metadataResolver.js';
+import * as path from 'path';
+import { resolveDbPathLocally, remapDbPathLocally } from './metadataResolver.js';
 import { getConfigManager, fallbackPackagePath } from './configManager.js';
 import { bridgeStartupState, type BridgeReadinessSource } from '../bridge/bridgeReadiness.js';
 
@@ -195,6 +196,34 @@ export function staleIndexNote(ref: IndexedObjectRef): string {
 export async function indexedPathIsMissing(indexedPath: string | null | undefined): Promise<boolean> {
   if (!indexedPath || !/PackagesLocalDirectory/i.test(indexedPath)) return false;
   return isStaleIndexedPath(indexedPath, await resolveLocalPath(indexedPath));
+}
+
+/**
+ * Was the indexed file deleted from THIS machine — as opposed to recorded somewhere
+ * this machine cannot see?
+ *
+ * The shipped symbol index records build-agent paths (`/home/vsts/work/1/...`), so
+ * "the recorded path does not exist" is true for every standard object on every
+ * developer machine and every hosted server. Treating that as deletion made the
+ * bridge-less table reader answer "not found" for CustTable and every other
+ * standard table, although the index held their full field list.
+ *
+ * Deletion is only observable where the object's folder is present: the AxTable
+ * (or model) folder exists — at the recorded path or at its local remap — but the
+ * file does not. That is exactly the rolled-back-object case the guard exists for.
+ */
+export async function indexedFileDeletedHere(indexedPath: string | null | undefined): Promise<boolean> {
+  if (!indexedPath) return false;
+  const candidates = [indexedPath];
+  const remapped = await remapDbPathLocally(indexedPath);
+  if (remapped) candidates.push(remapped);
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return false;
+  }
+  return candidates.some(p => {
+    const objectFolder = path.dirname(p);
+    return fs.existsSync(objectFolder) || fs.existsSync(path.dirname(objectFolder));
+  });
 }
 
 /**
