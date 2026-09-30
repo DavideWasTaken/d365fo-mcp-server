@@ -28,6 +28,15 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Fixed
+- **`d365fo-mcp update` no longer fails on Windows when it renames the
+  installed package.** npm replaces a global package by first renaming its
+  folder under `%APPDATA%\npm\node_modules`. The update started npm from inside
+  that same folder, and Windows does not rename a folder that is a running
+  process's working directory, so npm stopped with `EBUSY`/`EPERM`. npm now
+  runs from the home directory. If the install still fails, the command says
+  that a running MCP server can also lock the folder.
+
 ## [1.19.0] — 2026-09-29
 
 ### Added
