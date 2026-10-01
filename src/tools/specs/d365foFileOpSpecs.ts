@@ -875,7 +875,8 @@ export const D365FO_FILE_CREATE_PROPERTY_SPECS: Record<string, string> = {
   class: 'extends, implements, isFinal, isAbstract',
   table:
     'label, tableGroup, tableType, titleField1/2, cacheLookup?, primaryIndex?, ' +
-    'allowRowVersionChangeTracking? (dual-write), created/modifiedBy/DateTime?, ' +
+    'allowRowVersionChangeTracking? (dual-write), subscriberAccessLevel? ("Read=Allow,Create=Deny" | ' +
+    '{read:"Allow"} | "None"; default Read=Allow, none on TempDB/InMemory), created/modifiedBy/DateTime?, ' +
     'fields[{name,type?|edt?|fieldType?,enumType?,label?,mandatory?}] — enum fields need enumType ' +
     '(+ optionally fieldType:"AxTableFieldEnum"), validTimeStateFieldType? (Date|UtcDateTime — then ADD the ValidFrom/ValidTo ' +
     'fields yourself and give the key index validTimeStateKey:true), ' +

@@ -323,6 +323,10 @@ namespace D365MetadataBridge.Services
 
             var axTable = new AxTable { Name = name };
 
+            // Visual Studio puts SubscriberAccessLevel Read=Allow on a new table (issue
+            // #1073). Set before the caller's properties so an explicit value wins.
+            axTable.SubscriberAccessLevel = AccessGrantText.VisualStudioDefault();
+
             // Apply table-level properties (Label, TableGroup, CacheLookup, etc.).
             // Finding #35: an unknown key was dropped in silence — report it instead.
             var unsupportedProperties = new List<string>();
@@ -332,6 +336,12 @@ namespace D365MetadataBridge.Services
                     if (!SetAxTableProperty(axTable, kv.Key, kv.Value))
                         unsupportedProperties.Add(kv.Key);
             }
+
+            // ...except on TempDB/InMemory tables, which VS creates without one.
+            if ((axTable.TableType == Microsoft.Dynamics.AX.Metadata.Core.MetaModel.TableType.TempDB
+                    || axTable.TableType == Microsoft.Dynamics.AX.Metadata.Core.MetaModel.TableType.InMemory)
+                && !(properties?.Keys.Any(k => k.Equals("subscriberAccessLevel", StringComparison.OrdinalIgnoreCase)) ?? false))
+                axTable.SubscriberAccessLevel = new Microsoft.Dynamics.AX.Metadata.Core.MetaModel.AccessGrant();
 
             // Add fields
             if (fields != null)
@@ -492,6 +502,12 @@ namespace D365MetadataBridge.Services
             axTable.SaveDataPerCompany = isTempTable
                 ? Microsoft.Dynamics.AX.Metadata.Core.MetaModel.NoYes.No
                 : Microsoft.Dynamics.AX.Metadata.Core.MetaModel.NoYes.Yes;
+
+            // ── SubscriberAccessLevel — Read=Allow, as Visual Studio writes on a new
+            // regular table (issue #1073); none on TempDB/InMemory. extraProperties
+            // below can still set another value. ──
+            if (!isTempTable)
+                axTable.SubscriberAccessLevel = AccessGrantText.VisualStudioDefault();
 
             // ── Add fields ──
             var fieldNames = new List<string>();
@@ -1663,7 +1679,7 @@ namespace D365MetadataBridge.Services
                         ?? throw new ArgumentException($"Table '{objectName}' not found");
                     var msi = GetModelSaveInfoForObject(_provider.Tables, objectName);
                     if (!SetAxTableProperty(obj, propertyPath, propertyValue))
-                        throw new ArgumentException($"Unknown AxTable property '{propertyPath}' — nothing was written. Supported: label, developerDocumentation, configurationKey, formRef, tableGroup, cacheLookup, clusteredIndex, primaryIndex, replacementKey, saveDataPerCompany, allowRowVersionChangeTracking, createdBy, createdDateTime, createdTransactionId, modifiedBy, modifiedDateTime, modifiedTransactionId, tableType, supportInheritance, instanceRelationType, extends, titleField1, titleField2.");
+                        throw new ArgumentException($"Unknown AxTable property '{propertyPath}' — nothing was written. Supported: label, developerDocumentation, configurationKey, formRef, tableGroup, cacheLookup, clusteredIndex, primaryIndex, replacementKey, saveDataPerCompany, allowRowVersionChangeTracking, subscriberAccessLevel, createdBy, createdDateTime, createdTransactionId, modifiedBy, modifiedDateTime, modifiedTransactionId, tableType, supportInheritance, instanceRelationType, extends, titleField1, titleField2.");
                     ((IMetaTableProvider)_provider.Tables).Update(obj, msi);
                     return new { success = true, operation = "modify-property", objectType, objectName, propertyPath, propertyValue, api = "Update" };
                 }
@@ -3694,6 +3710,11 @@ namespace D365MetadataBridge.Services
                 // Dual-write's table-side change-tracking prerequisite.
                 case "allowrowversionchangetracking":
                     tbl.AllowRowVersionChangeTracking = ParseNoYes(value);
+                    break;
+                // "Subscriber access level": an AccessGrant (a struct of six permissions),
+                // written as "Read=Allow,Create=Deny" or "None" (issue #1073).
+                case "subscriberaccesslevel":
+                    tbl.SubscriberAccessLevel = AccessGrantText.Parse(value);
                     break;
                 case "createdby": tbl.CreatedBy = ParseNoYes(value); break;
                 case "createddatetime": tbl.CreatedDateTime = ParseNoYes(value); break;

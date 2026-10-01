@@ -28,6 +28,20 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Added
+- **Tables get "Subscriber access level", as Visual Studio creates them
+  (#1073).** A new regular table now carries
+  `<SubscriberAccessLevel><Read>Allow</Read></SubscriberAccessLevel>`, which
+  VS writes on every new table; TempDB/InMemory tables get none. The property
+  can be set on create (`properties.subscriberAccessLevel`: `"Read=Allow,Create=Deny"`,
+  `{ "read": "Allow" }` or `"None"`) and with
+  `modify-property propertyPath="SubscriberAccessLevel"`, and table reads show
+  it together with `AllowRowVersionChangeTracking`. It holds one child element
+  per permission, so the scalar property writer could neither express nor place
+  it, and the name was dropped. `AllowRowVersionChangeTracking` stays opt-in:
+  it is not a Visual Studio default. The regular-table eval goldens now include
+  the element.
+
 ### Fixed
 - **`labels(action="rename")` is now held to the cross-model write guard.**
   `labels(action="create")` refused to write a label into another model's
