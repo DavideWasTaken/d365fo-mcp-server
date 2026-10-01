@@ -23,6 +23,8 @@ import { defaultPackagesRoot } from '../../utils/packagesRoot.js';
 import { PackageResolver } from '../../utils/packageResolver.js';
 import { detectEol } from '../../utils/eolUtils.js';
 import { isExtensionLabelFile } from '../../metadata/labelParser.js';
+import { crossModelWriteRefusal, standDownNotice } from '../../utils/crossModelWriteGuard.js';
+import { resolveAnchorModel } from './writeAnchorGuard.js';
 
 const UTF8_BOM = '\uFEFF';
 
@@ -220,6 +222,25 @@ export async function renameLabelTool(request: CallToolRequest, context: XppServ
       resolvedPackageName = model;
     }
 
+    // Cross-model guard, as labels(create) applies it: the rename rewrites the
+    // owning model's label file, and another model's label file is that model's
+    // code. Checked for a dry run too — previewing a rename the real call would
+    // refuse only plans work that cannot be done.
+    const crossModelCheck = {
+      objectName: `@${labelFileId}:${oldLabelId}`,
+      objectType: 'label',
+      owningModel: model,
+      owningPackage: resolvedPackageName,
+      activeModel: await resolveAnchorModel(configManager),
+      toolSwitchedModel: configManager.getToolProjectSwitch()?.forcedModel ?? null,
+      action: 'modify' as const,
+    };
+    const crossModelRefusal = crossModelWriteRefusal(crossModelCheck);
+    if (crossModelRefusal) {
+      return { content: [{ type: 'text', text: crossModelRefusal }], isError: true };
+    }
+    const crossModelNotice = standDownNotice(crossModelCheck);
+
     const modelDir = path.join(resolvedPackagePath, resolvedPackageName, model);
     const labelResourcesDir = path.join(modelDir, 'AxLabelFile', 'LabelResources');
 
@@ -415,6 +436,8 @@ export async function renameLabelTool(request: CallToolRequest, context: XppServ
     if (dryRun && totalFiles > 0) {
       lines.push(`💡 Remove dryRun=true to apply the rename.`);
     }
+
+    if (crossModelNotice) lines.push(crossModelNotice.trim());
 
     return { content: [{ type: 'text', text: lines.join('\n') }] };
   } catch (err: any) {
