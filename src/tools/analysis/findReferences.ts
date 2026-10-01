@@ -738,14 +738,16 @@ function scanDeclaringTypeSource(symbolIndex: any, methodName: string, limit: nu
         texts = [...bodies.values()].map(m => m.source);
       }
 
+      const call = callOf(methodName);
+      const qualifiedCall = new RegExp(`::\\s*${escapeRegExp(methodName)}\\s*\\(`, 'i');
       for (const text of texts) {
         if (found.length >= limit) break;
         const lines = text.split('\n');
         for (let i = 0; i < lines.length && found.length < limit; i++) {
           // `this.m(` and `Type::m(` are calls; `m(` alone would match the
           // declaration and every same-named member in the file.
-          if (!/\bthis\.(\w+)\(/.test(lines[i]) && !new RegExp(`::${methodName}\\s*\\(`).test(lines[i])) continue;
-          if (!lines[i].includes(methodName + '(')) continue;
+          if (!/\bthis\s*\.\s*\w+\s*\(/.test(lines[i]) && !qualifiedCall.test(lines[i])) continue;
+          if (!call.test(lines[i])) continue;
           found.push({
             file: owner.file_path,
             model: '',
@@ -942,6 +944,23 @@ function findEnumReferences(symbolIndex: any, enumName: string, _scope: string, 
   return references;
 }
 
+/** A symbol name as a literal regex fragment. */
+function escapeRegExp(name: string): string {
+  return name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * "name(" the way X++ may write it: identifiers are case-insensitive and a
+ * space may stand before the parenthesis, so "validatewrite()" and
+ * "validateWrite ()" call validateWrite just as much. An exact
+ * includes("validateWrite(") dropped them — after the case-insensitive FTS
+ * lookup had already matched the method — and it also matched the tail of a
+ * longer name ("myValidateWrite(").
+ */
+function callOf(name: string): RegExp {
+  return new RegExp(`(?<![\\w$])${escapeRegExp(name)}\\s*\\(`, 'i');
+}
+
 /** Leading words that make a "name(" line a statement, not a declaration. */
 const STATEMENT_START = /^\s*(?:return|if|while|for|switch|case|throw|else|print|info|warning|error|next|super)\b/i;
 
@@ -951,8 +970,7 @@ const STATEMENT_START = /^\s*(?:return|if|while|for|switch|case|throw|else|print
  * same-named call elsewhere is never dropped by this.
  */
 function isMethodDeclarationLine(line: string, methodName: string): boolean {
-  const escaped = methodName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const declaration = new RegExp(`^\\s*(?:[A-Za-z_][\\w.<>\\[\\]]*\\s+)+${escaped}\\s*\\(`, 'i');
+  const declaration = new RegExp(`^\\s*(?:[A-Za-z_][\\w.<>\\[\\]]*\\s+)+${escapeRegExp(methodName)}\\s*\\(`, 'i');
   // No "=" test: an assignment ("real t = calcTotal(") cannot match the anchored
   // type-and-modifier prefix anyway, while a default parameter value
   // ("void foo(int _x = 5)") is still a declaration.
@@ -962,9 +980,10 @@ function isMethodDeclarationLine(line: string, methodName: string): boolean {
 function extractMethodCallContext(source: string, methodName: string, skipDeclaration = false): string | null {
   if (!source) return null;
 
+  const call = callOf(methodName);
   const lines = source.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes(methodName + '(')) {
+    if (call.test(lines[i])) {
       // The declaration counted as a call of the method to itself.
       if (skipDeclaration && isMethodDeclarationLine(lines[i], methodName)) continue;
       // Return 2 lines before and after
@@ -980,11 +999,11 @@ function extractMethodCallContext(source: string, methodName: string, skipDeclar
 function extractInstantiationContext(source: string, className: string): string | null {
   if (!source) return null;
 
-  const pattern = `new ${className}(`;
+  const pattern = new RegExp(`\\bnew\\s+${escapeRegExp(className)}\\s*\\(`, 'i');
   const lines = source.split('\n');
-  
+
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes(pattern)) {
+    if (pattern.test(lines[i])) {
       const start = Math.max(0, i - 1);
       const end = Math.min(lines.length, i + 2);
       return lines.slice(start, end).join('\n').trim();
