@@ -6,8 +6,8 @@
  * A label written through `labels(action="create")` lands as a line in
  * `<model>\AxLabelFile\LabelResources\<lang>\<file>.<lang>.label.txt`. Nothing
  * reads that text file at compile time: the compiler and the best-practice
- * checker resolve `@Model:Id` against the compiled resource assembly at
- * `<model>\Resources\<model>.dll`, which only labelc.exe produces.
+ * checker resolve `@LabelFile:Id` against the compiled resource assembly at
+ * `<model>\Resources\<LabelFile>.dll`, which only labelc.exe produces.
  *
  * This server never ran labelc, so on a model whose labels had only ever been
  * created through the MCP tools the `Resources` folder did not exist at all —
@@ -168,15 +168,45 @@ async function newestMtime(dirs: string[]): Promise<number> {
 export async function labelAssembliesAreStale(
   labelDirs: string[],
   resourcesDir: string,
-  moduleName: string,
 ): Promise<boolean> {
-  let builtAt: number;
-  try {
-    builtAt = (await stat(path.join(resourcesDir, `${moduleName}.dll`))).mtimeMs;
-  } catch {
-    return true; // never compiled
+  // labelc emits one assembly per LABEL FILE — Resources\<LabelFileId>.dll —
+  // not one per module. Looking for Resources\<module>.dll found nothing on any
+  // model whose label file is named differently (VLTBase / VLTLabel on the VM),
+  // so labelc ran on every build and rewrote Resources.
+  const labelFileIds = await labelFileIdsIn(labelDirs);
+  if (labelFileIds.size === 0) return true;
+  let builtAt = Infinity;
+  for (const id of labelFileIds) {
+    try {
+      builtAt = Math.min(builtAt, (await stat(path.join(resourcesDir, `${id}.dll`))).mtimeMs);
+    } catch {
+      return true; // this label file was never compiled
+    }
   }
   return (await newestMtime(labelDirs)) > builtAt;
+}
+
+/** Label file IDs of the `<id>.<lang>.label.txt` files under `dirs`. */
+async function labelFileIdsIn(dirs: string[]): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const stack = [...dirs];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) stack.push(path.join(dir, entry.name));
+      else {
+        const m = /^(.+)\.[^.]+\.label\.txt$/i.exec(entry.name);
+        if (m) ids.add(m[1]);
+      }
+    }
+  }
+  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +262,7 @@ export async function compileModelLabels(
     return { skipped: true, success: true, message: `${modelName} has no label files` };
   }
 
-  if (!force && !(await labelAssembliesAreStale(labelDirs, resourcesDir, modelName))) {
+  if (!force && !(await labelAssembliesAreStale(labelDirs, resourcesDir))) {
     return { skipped: true, success: true, message: 'label assemblies are up to date' };
   }
 
