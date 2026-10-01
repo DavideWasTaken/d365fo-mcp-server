@@ -292,6 +292,76 @@ export function resolveRegularObjectPrefixToken(modelName?: string): string {
   return resolved.charAt(0).toUpperCase() + resolved.slice(1);
 }
 
+export interface ApplyObjectPrefixOptions {
+  /**
+   * The text before "_Extension" is known to be the BASE class name, not a name
+   * that may already carry the infix — e.g. normalizeObjectName was handed a bare
+   * base for objectType "class-extension". Only the prefix-leading class style
+   * reads it: the other styles keep their string-only behaviour.
+   */
+  knownBase?: boolean;
+}
+
+/**
+ * Does `name` start with `infix` as its own PascalCase word? The character after
+ * the infix must be an uppercase letter: "CtsoCustTable" leads with "Ctso", while
+ * "ContactPerson" does not lead with "Con" (Con|t… is one word, not a prefix).
+ * The infix itself compares case-insensitively, so "CTSOCustTable" also counts.
+ */
+export function leadsWithInfix(name: string, infix: string): boolean {
+  if (!infix || name.length <= infix.length) return false;
+  if (name.slice(0, infix.length).toLowerCase() !== infix.toLowerCase()) return false;
+  return /[A-Z]/.test(name[infix.length]);
+}
+
+/**
+ * Does `name` end with `infix` as its own PascalCase word — the shape the trailing
+ * 'prefix' class style writes before "_Extension" (CustTableCtso)? The matched
+ * segment must START with an uppercase letter, so "SalesTable" does not end with
+ * the infix "Le" and "SalesLine" does not end with "Ne": those are the last
+ * letters of a word, and stripping them would cut the base name.
+ */
+export function endsWithInfix(name: string, infix: string): boolean {
+  if (!infix || name.length <= infix.length) return false;
+  const segment = name.slice(-infix.length);
+  if (segment.toLowerCase() !== infix.toLowerCase()) return false;
+  return /[A-Z]/.test(segment[0]);
+}
+
+/**
+ * The base class a prefix-leading extension-class stem (the part before
+ * "_Extension") names — the ONE derivation the writer (applyObjectPrefix) and the
+ * validator (checkObjectNaming) share, so the two cannot disagree on it.
+ *
+ *   CtsoCustTable  → CustTable     (infix leads — already prefix-leading)
+ *   CustTableCtso  → CustTable     (stale trailing infix from the 'prefix' style)
+ *   SalesTable, "Le" → SalesTable  (not a word boundary — nothing to strip)
+ *
+ * Ambiguous by construction: a base that itself starts with the infix as a word
+ * ("ProjTable" under prefix "Proj") reads as already prefixed. Callers that KNOW
+ * the base pass it through ApplyObjectPrefixOptions.knownBase instead.
+ */
+export function prefixLeadingBaseOf(stem: string, infix: string): string {
+  if (leadsWithInfix(stem, infix)) return stem.slice(infix.length);
+  if (endsWithInfix(stem, infix)) {
+    const stripped = stem.slice(0, stem.length - infix.length).replace(/_+$/, '');
+    if (stripped) return stripped;
+  }
+  return stem;
+}
+
+/**
+ * `{Infix}{Base}_Extension`. The base's first letter is upper-cased: the shipped
+ * camelCase classes (whsWorkExecute…) would otherwise give "CtsowhsWorkExecute",
+ * whose infix no longer ends at a word boundary — so the name could not be
+ * recognised as prefixed again and every re-run grew another "Ctso". X++ names
+ * are case-insensitive, so the class still extends the same base.
+ */
+export function prefixLeadingClassName(base: string, infix: string): string {
+  const pascalBase = base.charAt(0).toUpperCase() + base.slice(1);
+  return `${infix}${pascalBase}_Extension`;
+}
+
 /**
  * Apply prefix to a NEW model element name.
  * Per MS guidelines, the prefix is concatenated directly (no separator):
@@ -320,7 +390,12 @@ export function resolveRegularObjectPrefixToken(modelName?: string): string {
  * Prefer normalizeObjectName() (utils/objectNaming.ts), which is the one path
  * create/modify already share.
  */
-export function applyObjectPrefix(objectName: string, prefix: string, modelName?: string): string {
+export function applyObjectPrefix(
+  objectName: string,
+  prefix: string,
+  modelName?: string,
+  options?: ApplyObjectPrefixOptions,
+): string {
   if (!prefix) return objectName;
 
   // model-name style embeds the model name instead of the prefix infix for extension
@@ -401,24 +476,14 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
     // the checks below this one look for the infix at the END of baseName, which is
     // exactly the shape this style does not produce.
     if (usePrefixLeadingForClass) {
-      const infixLower = extensionInfix.toLowerCase();
-
-      // Idempotent: infix already leads at a PascalCase word boundary.
-      if (baseName.toLowerCase().startsWith(infixLower)) {
-        const rest = baseName.slice(extensionInfix.length);
-        if (rest.length > 0 && rest[0] === rest[0].toUpperCase() && /[A-Za-z]/.test(rest[0])) {
-          return objectName;
-        }
-      }
-
-      // Strip a stale TRAILING infix first — a name written under the 'prefix' style
-      // before the convention switched — so re-running stays idempotent instead of
-      // growing CustTableCtsoCtso_Extension.
-      let cleanBase = baseName;
-      if (extensionInfix && cleanBase.toLowerCase().endsWith(infixLower)) {
-        cleanBase = cleanBase.slice(0, cleanBase.length - extensionInfix.length);
-      }
-      return `${extensionInfix}${cleanBase}_Extension`;
+      // A caller that states the base outright (a bare base name given as
+      // class-extension) has settled the ambiguity the string alone cannot:
+      // `ProjTable` extended under prefix "Proj" is ProjProjTable_Extension, even
+      // though "ProjTable_Extension" would read as already prefixed.
+      if (options?.knownBase) return prefixLeadingClassName(baseName, extensionInfix);
+      // Already prefix-leading: returned as given, like the trailing style does.
+      if (leadsWithInfix(baseName, extensionInfix)) return objectName;
+      return prefixLeadingClassName(prefixLeadingBaseOf(baseName, extensionInfix), extensionInfix);
     }
 
     // Check if the extension infix is already present at the end (case-insensitive)

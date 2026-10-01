@@ -37,7 +37,11 @@ those are called out explicitly below.
   `validate_object_naming` and `get_workspace_info` recognise and render the
   new style; `d365fo_file(action="create")` and `normalizeObjectName` write it,
   including converting a name written under the trailing `prefix` style
-  instead of double-prefixing it. Element extensions are unaffected — the new
+  instead of double-prefixing it. The prefix is matched only as a separate
+  PascalCase word, with one derivation shared by the writer and the validator, so
+  a base ending in the same letters keeps them (`Le` + `SalesTable` →
+  `LeSalesTable_Extension`), and a camelCase base is upper-cased behind the prefix
+  (`CtsoWhsWorkExecute_Extension`) so re-running stays stable. Element extensions are unaffected — the new
   style only applies to CoC classes, since Microsoft's own dot-notation shape
   (`Base.{Infix}Extension`) cannot lead with the infix.
 

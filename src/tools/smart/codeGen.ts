@@ -2746,7 +2746,7 @@ export async function codeGenTool(request: CallToolRequest) {
     // data-source extension classes, 12 carry the token after "DS" and none before it;
     // 3 of 596 form extension classes use "{Infix}Form_Extension".
     const extensionClassName = (stem: string) =>
-      normalizeObjectName(`${stem}_Extension`, 'class-extension', resolvedModelName || undefined);
+      normalizeObjectName(`${stem}_Extension`, 'class-extension', resolvedModelName || undefined, undefined, { knownBase: true });
     const classStyleLine =
       `  Style: ${getExtensionClassNamingStyle()} (EXTENSION_CLASS_NAMING_STYLE) — the name d365fo_file(action="create") writes.`;
 

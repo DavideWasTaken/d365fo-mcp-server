@@ -18,6 +18,8 @@ import {
   getObjectSuffix,
   getExtensionNamingStyle,
   getExtensionClassNamingStyle,
+  prefixLeadingBaseOf,
+  prefixLeadingClassName,
   deriveExtensionInfix,
 } from './modelClassifier.js';
 import { normalizeObjectName } from './objectNaming.js';
@@ -287,12 +289,11 @@ export async function checkObjectNaming(
       // ending in "_Extension" is a class, so the class style decides which goes first.
       if (usePrefixLeadingForClass) {
         // Prefix-leading names carry the token at the START, not the end — the
-        // opposite of what the trailing-strip loop below looks for.
-        const derived = args.baseObjectName;
-        if (extensionInfix && derived.toLowerCase().startsWith(extensionInfix.toLowerCase())) {
-          const stripped = derived.slice(extensionInfix.length).replace(/^_+/, '');
-          if (stripped) args.baseObjectName = stripped;
-        }
+        // opposite of what the trailing-strip loop below looks for. The writer's own
+        // derivation, so a leading token is only taken off at a word boundary
+        // (ContactPerson is not Con|tactPerson) and a stale trailing one from the
+        // 'prefix' style is taken off exactly as the writer would.
+        args.baseObjectName = prefixLeadingBaseOf(args.baseObjectName, extensionInfix);
       } else {
         const candidates = useModelNameForClass ? [modelToken, extensionInfix] : [extensionInfix, modelToken];
         const derived = args.baseObjectName;
@@ -325,7 +326,7 @@ export async function checkObjectNaming(
           const expectedPattern = useModelNameForClass
             ? `${baseObjectName}_${modelToken}_Extension`
             : usePrefixLeadingForClass
-              ? `${extensionInfix}${baseObjectName}_Extension`
+              ? prefixLeadingClassName(baseObjectName, extensionInfix)
               : `${baseObjectName}${extensionInfix}_Extension`;
           const expectedToken = useModelNameForClass ? modelToken : extensionInfix;
 
@@ -333,8 +334,11 @@ export async function checkObjectNaming(
             // The token leads here, so the structural checks run in the opposite
             // order from the other two styles: base name immediately before
             // "_Extension", token in front of that.
+            // Case-insensitive: the writer upper-cases a camelCase base's first letter
+            // (CtsoWhsWorkExecute_Extension for whsWorkExecute), and X++ names are
+            // case-insensitive anyway.
             const expectedSuffix = `${baseObjectName}_Extension`;
-            if (!name.endsWith(expectedSuffix)) {
+            if (!name.toLowerCase().endsWith(expectedSuffix.toLowerCase())) {
               errors.push(
                 name.endsWith('_Extension')
                   ? `Class extension names must have the base class name immediately before '_Extension'.\n  Expected format: ${expectedPattern}`

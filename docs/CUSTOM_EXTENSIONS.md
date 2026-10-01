@@ -202,6 +202,9 @@ EXTENSION_CLASS_NAMING_STYLE=prefix-leading   # extension classes only — eleme
 |-----------|------------|
 | `CustTable` | `CRCustTable_Extension` |
 | `CustTableDbt` (a caller-embedded type abbreviation — the tool has no notion of `Dbt`/`Frm`/`Cls` itself) | `CRCustTableDbt_Extension` |
+| `whsWorkExecute` (a camelCase base) | `CRWhsWorkExecute_Extension` — the base's first letter is upper-cased so the prefix stays recognisable on re-run; X++ names are case-insensitive |
+
+The prefix is recognised only as a separate PascalCase word, so a base whose name merely starts or ends with the same letters keeps them: with `EXTENSION_PREFIX=Le`, `SalesTable` becomes `LeSalesTable_Extension`. One case cannot be told apart from the name alone — a base that itself starts with the prefix as a word (`ProjTable` under prefix `Proj`). Pass the bare base (`objectName: "ProjTable"`, `objectType: "class-extension"`) and it is written as `ProjProjTable_Extension`; a name you pass already ending in `_Extension` (`ProjTable_Extension`) is read as already prefixed and kept as given.
 
 Element extensions are unaffected — `prefix-leading` only exists for classes, because `Base.{Infix}Extension` is Microsoft's own dot-notation shape and leading the infix there would not parse as an AOT name. A name already written under the trailing `prefix` style is converted rather than double-prefixed the first time it is normalised (`CustTableCr_Extension` → `CRCustTable_Extension`).
 

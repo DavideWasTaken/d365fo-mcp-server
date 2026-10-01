@@ -78,6 +78,7 @@ export function normalizeObjectName(
   objectType: string,
   modelName: string | undefined,
   onNote?: (note: string) => void,
+  options?: { knownBase?: boolean },
 ): string {
   const objectPrefix = resolveObjectPrefix(modelName ?? '');
   // Elements and classes carry their own style: a convention may spell one with the
@@ -85,6 +86,9 @@ export function normalizeObjectName(
   const elementNamingStyle = getExtensionNamingStyle();
   const classNamingStyle = getExtensionClassNamingStyle();
   let effective = objectName;
+  // Whether the text before "_Extension" is known to be the base class itself —
+  // see ApplyObjectPrefixOptions.knownBase. Only the prefix-leading class style reads it.
+  let knownBase = options?.knownBase === true;
 
   // Cases A and B below strip a model-name token off a name that already carries
   // one, so they have to compare against the spelling a NAME can hold — the token,
@@ -143,13 +147,16 @@ export function normalizeObjectName(
       [deriveExtensionInfix(objectPrefix, modelName), objectPrefix, modelToken],
     );
     const hadExtensionWord = base !== effective;
+    // A bare base name states the base outright; one that carried an element-style
+    // "Extension" word was an extension name, and may already hold the infix.
+    if (!hadExtensionWord) knownBase = true;
     effective = `${base}_Extension`;
     onNote?.(hadExtensionWord
       ? `Element-style extension name rewritten to the class form: ${objectName} → ${effective}`
       : `Bare class-extension name auto-converted to _Extension form: ${objectName} → ${effective}`);
   }
 
-  let finalName = applyObjectPrefix(effective, objectPrefix, modelName);
+  let finalName = applyObjectPrefix(effective, objectPrefix, modelName, { knownBase });
 
   // EXTENSION_SUFFIX applies to NEW objects only — never to extensions. The
   // model-name style's "Base.ModelName" form has no "Extension" word, so
