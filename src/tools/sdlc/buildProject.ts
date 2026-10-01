@@ -510,9 +510,11 @@ function logFilePath(targetModel: string, queueIndex: number, customPackagesPath
 
 /**
  * Written BY the build, so always newer than it — scanning them would make
- * every cached result look stale and rebuild forever.
+ * every cached result look stale and rebuild forever. `Resources` is labelc's
+ * output (compileModelLabels, which runs before xppc and so after the build
+ * started); the label sources are under `<Model>\AxLabelFile`.
  */
-const BUILD_OUTPUT_DIRS = new Set(['bin', 'xppmetadata']);
+const BUILD_OUTPUT_DIRS = new Set(['bin', 'xppmetadata', 'resources']);
 
 /**
  * True when any source file in the model package changed after `since` (epoch

@@ -161,6 +161,18 @@ describe('hasSourceChangesSince: the package root', () => {
     await fs.utimes(modelDir, new Date(started + 30_000), new Date(started + 30_000));
     expect(await hasSourceChangesSince(modelDir, started)).toBe(false);
   });
+
+  it('ignores Resources/, which labelc rewrites at the start of every build', async () => {
+    // Seen on the VM: every MCP build of VLTBase logged "Labels compiled" and
+    // rewrote <Package>\Resources after the build started. Scanned, it made
+    // every finished result stale, so every status call started a new build.
+    const started = Date.now() - 60_000;
+    await writeAt(path.join(modelDir, MODEL, 'AxLabelFile', 'LabelResources', 'en-US', 'L.en-US.label.txt'), -120, started);
+    await writeAt(path.join(modelDir, 'Resources', 'L.dll'), 10, started);
+    await writeAt(path.join(modelDir, 'Resources', 'en-US', 'L.resources.dll'), 10, started);
+    await backdateDirs(path.join(modelDir, MODEL), -120, started);
+    expect(await hasSourceChangesSince(modelDir, started)).toBe(false);
+  });
 });
 
 describe('finishedResultStillDescribesDisk', () => {
