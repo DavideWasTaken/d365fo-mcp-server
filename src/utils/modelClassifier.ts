@@ -110,13 +110,23 @@ export function getExtensionNamingStyle(): 'prefix' | 'model-name' {
  * applyObjectPrefix now asks the question that belongs to it.
  *
  * Configured via EXTENSION_CLASS_NAMING_STYLE. Unset — or any value that is
- * neither 'prefix' nor 'model-name' — inherits getExtensionNamingStyle(), so a
- * setup that never sets it behaves exactly as before.
+ * neither 'prefix', 'model-name' nor 'prefix-leading' — inherits
+ * getExtensionNamingStyle(), so a setup that never sets it behaves exactly as
+ * before.
+ *
+ * 'prefix-leading' is the one shape 'prefix' cannot express: both put the
+ * extension infix on the class, but 'prefix' trails it (`CustTableCtso_Extension`,
+ * the shape shipped code and the element style use) while a convention such as
+ * the Avanade D365FO Development Guidelines leads with it instead
+ * (`CtsoCustTable_Extension`). Element extensions have no equivalent option —
+ * `Base.{Infix}Extension` is Microsoft's own dot-notation shape and leading the
+ * infix there would not parse as an AOT name.
  */
-export function getExtensionClassNamingStyle(): 'prefix' | 'model-name' {
+export function getExtensionClassNamingStyle(): 'prefix' | 'model-name' | 'prefix-leading' {
   const configured = process.env.EXTENSION_CLASS_NAMING_STYLE?.trim().toLowerCase();
   if (configured === 'prefix') return 'prefix';
   if (configured === 'model-name') return 'model-name';
+  if (configured === 'prefix-leading') return 'prefix-leading';
   return getExtensionNamingStyle();
 }
 
@@ -135,9 +145,9 @@ export function unrecognisedNamingStyleSettings(): string[] {
     out.push(`EXTENSION_NAMING_STYLE="${element}" is not a known value (prefix | model-name) — treated as "prefix".`);
   }
   const cls = process.env.EXTENSION_CLASS_NAMING_STYLE?.trim();
-  if (cls && !['inherit', 'prefix', 'model-name'].includes(cls.toLowerCase())) {
+  if (cls && !['inherit', 'prefix', 'model-name', 'prefix-leading'].includes(cls.toLowerCase())) {
     out.push(
-      `EXTENSION_CLASS_NAMING_STYLE="${cls}" is not a known value (inherit | prefix | model-name) — ` +
+      `EXTENSION_CLASS_NAMING_STYLE="${cls}" is not a known value (inherit | prefix | model-name | prefix-leading) — ` +
       `treated as "inherit", i.e. "${getExtensionNamingStyle()}".`,
     );
   }
@@ -282,6 +292,103 @@ export function resolveRegularObjectPrefixToken(modelName?: string): string {
   return resolved.charAt(0).toUpperCase() + resolved.slice(1);
 }
 
+export interface ApplyObjectPrefixOptions {
+  /**
+   * The text before "_Extension" is known to be the BASE class name, not a name
+   * that may already carry the infix — e.g. normalizeObjectName was handed a bare
+   * base for objectType "class-extension". Every class style reads it: a stated
+   * base is never mistaken for one already carrying the infix or model token.
+   */
+  knownBase?: boolean;
+}
+
+/**
+ * Does `name` start with `infix` as its own PascalCase word? The character after
+ * the infix must be an uppercase letter: "CtsoCustTable" leads with "Ctso", while
+ * "ContactPerson" does not lead with "Con" (Con|t… is one word, not a prefix).
+ * The infix itself compares case-insensitively, so "CTSOCustTable" also counts.
+ */
+export function leadsWithInfix(name: string, infix: string): boolean {
+  if (!infix || name.length <= infix.length) return false;
+  if (name.slice(0, infix.length).toLowerCase() !== infix.toLowerCase()) return false;
+  return /[A-Z]/.test(name[infix.length]);
+}
+
+/**
+ * Does `name` end with `infix` as its own PascalCase word — the shape the trailing
+ * 'prefix' class style writes before "_Extension" (CustTableCtso)? The matched
+ * segment must START with an uppercase letter, so "SalesTable" does not end with
+ * the infix "Le" and "SalesLine" does not end with "Ne": those are the last
+ * letters of a word, and stripping them would cut the base name.
+ */
+export function endsWithInfix(name: string, infix: string): boolean {
+  if (!infix || name.length <= infix.length) return false;
+  const segment = name.slice(-infix.length);
+  if (segment.toLowerCase() !== infix.toLowerCase()) return false;
+  return /[A-Z]/.test(segment[0]);
+}
+
+/**
+ * The base class a prefix-leading extension-class stem (the part before
+ * "_Extension") names — the ONE derivation the writer (applyObjectPrefix) and the
+ * validator (checkObjectNaming) share, so the two cannot disagree on it.
+ *
+ *   CtsoCustTable  → CustTable     (infix leads — already prefix-leading)
+ *   CustTableCtso  → CustTable     (stale trailing infix from the 'prefix' style)
+ *   SalesTable, "Le" → SalesTable  (not a word boundary — nothing to strip)
+ *
+ * Ambiguous by construction: a base that itself starts with the infix as a word
+ * ("ProjTable" under prefix "Proj") reads as already prefixed. Callers that KNOW
+ * the base pass it through ApplyObjectPrefixOptions.knownBase instead.
+ */
+export function prefixLeadingBaseOf(stem: string, infix: string): string {
+  if (leadsWithInfix(stem, infix)) return stem.slice(infix.length);
+  if (endsWithInfix(stem, infix)) {
+    const stripped = stem.slice(0, stem.length - infix.length).replace(/_+$/, '');
+    if (stripped) return stripped;
+  }
+  return stem;
+}
+
+/**
+ * `{Infix}{Base}_Extension`. The base's first letter is upper-cased: the shipped
+ * camelCase classes (whsWorkExecute…) would otherwise give "CtsowhsWorkExecute",
+ * whose infix no longer ends at a word boundary — so the name could not be
+ * recognised as prefixed again and every re-run grew another "Ctso". X++ names
+ * are case-insensitive, so the class still extends the same base.
+ */
+export function prefixLeadingClassName(base: string, infix: string): string {
+  const pascalBase = base.charAt(0).toUpperCase() + base.slice(1);
+  return `${infix}${pascalBase}_Extension`;
+}
+
+/**
+ * The base class an `_Extension` class name extends, under whichever class style
+ * wrote it — CustTableCtso_Extension, CtsoCustTable_Extension and
+ * CustTable_ContosoExt_Extension all give CustTable. Tokens are only taken off as
+ * their own PascalCase word (endsWithInfix / leadsWithInfix), so SalesTable stays
+ * SalesTable under a prefix "Le". A name not ending in "_Extension" is returned
+ * as given. Best effort for a name nobody stated the base of: a base that itself
+ * begins or ends with the token as a word is indistinguishable from a prefixed one.
+ */
+export function extensionClassBaseOf(name: string, modelName?: string): string {
+  if (!name.endsWith('_Extension')) return name;
+  const stem = name.slice(0, -'_Extension'.length);
+  const prefix = resolveObjectPrefix(modelName ?? '');
+  const infix = prefix ? deriveExtensionInfix(prefix, modelName) : '';
+  if (getExtensionClassNamingStyle() === 'prefix-leading' && leadsWithInfix(stem, infix)) {
+    return stem.slice(infix.length);
+  }
+  const modelToken = modelName ? normalizeModelToken(modelName) : '';
+  const tokens = [modelToken, infix].filter(Boolean).sort((a, b) => b.length - a.length);
+  for (const token of tokens) {
+    if (!endsWithInfix(stem, token)) continue;
+    const stripped = stem.slice(0, stem.length - token.length).replace(/_+$/, '');
+    if (stripped) return stripped;
+  }
+  return stem.replace(/_+$/, '') || stem;
+}
+
 /**
  * Apply prefix to a NEW model element name.
  * Per MS guidelines, the prefix is concatenated directly (no separator):
@@ -310,7 +417,12 @@ export function resolveRegularObjectPrefixToken(modelName?: string): string {
  * Prefer normalizeObjectName() (utils/objectNaming.ts), which is the one path
  * create/modify already share.
  */
-export function applyObjectPrefix(objectName: string, prefix: string, modelName?: string): string {
+export function applyObjectPrefix(
+  objectName: string,
+  prefix: string,
+  modelName?: string,
+  options?: ApplyObjectPrefixOptions,
+): string {
   if (!prefix) return objectName;
 
   // model-name style embeds the model name instead of the prefix infix for extension
@@ -319,7 +431,9 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
   // model name and the other with the prefix, and EXTENSION_CLASS_NAMING_STYLE is
   // what lets it say so. Unset, both resolve identically and nothing changes.
   const useModelNameForElement = !!modelName && getExtensionNamingStyle() === 'model-name';
-  const useModelNameForClass = !!modelName && getExtensionClassNamingStyle() === 'model-name';
+  const classNamingStyle = getExtensionClassNamingStyle();
+  const useModelNameForClass = !!modelName && classNamingStyle === 'model-name';
+  const usePrefixLeadingForClass = classNamingStyle === 'prefix-leading';
 
   // The model name as it may appear inside an object name — identical to modelName
   // unless the name carries characters an AOT identifier cannot (see #892).
@@ -377,15 +491,47 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
       const lowerModel = modelToken.toLowerCase();
       if (cleanBase.toLowerCase().endsWith('_' + lowerModel)) {
         cleanBase = cleanBase.slice(0, cleanBase.length - lowerModel.length - 1);
-      } else if (cleanBase.toLowerCase().endsWith(lowerModel)) {
+      } else if (!options?.knownBase && endsWithInfix(cleanBase, modelToken)) {
+        // A legacy CustTableContosoExt stem — only as its own word, so a base whose
+        // last letters merely spell a short model name (SalesTable under model
+        // "Able") keeps them; and never for a stated base (SalesTax under "Tax").
         cleanBase = cleanBase.slice(0, cleanBase.length - lowerModel.length);
       }
       cleanBase = cleanBase.replace(/_+$/, '');
       return `${cleanBase}_${modelToken}_Extension`;
     }
 
-    // Check if the extension infix is already present at the end (case-insensitive)
-    if (baseName.toLowerCase().endsWith(extensionInfix.toLowerCase())) {
+    // Prefix-LEADING style: infix goes before the base, not before "_Extension"
+    // (CtsoCustTable_Extension, not CustTableCtso_Extension). Needs its own branch —
+    // the checks below this one look for the infix at the END of baseName, which is
+    // exactly the shape this style does not produce.
+    if (usePrefixLeadingForClass) {
+      // A caller that states the base outright (a bare base name given as
+      // class-extension) has settled the ambiguity the string alone cannot:
+      // `ProjTable` extended under prefix "Proj" is ProjProjTable_Extension, even
+      // though "ProjTable_Extension" would read as already prefixed.
+      if (options?.knownBase) return prefixLeadingClassName(baseName, extensionInfix);
+      // Already prefix-leading: returned as given, like the trailing style does.
+      if (leadsWithInfix(baseName, extensionInfix)) return objectName;
+      return prefixLeadingClassName(prefixLeadingBaseOf(baseName, extensionInfix), extensionInfix);
+    }
+
+    // A caller that states the base outright (a bare base given as class-extension,
+    // codeGen, the cross-model suggestion) settles what the string alone cannot:
+    // ProjTable extended under prefix "Proj" is ProjTableProj_Extension, although
+    // "ProjTable_Extension" on its own reads as already prefixed (see below). A base
+    // that already ENDS with the infix as a word is still taken as prefixed — that
+    // is this style's own output minus "_Extension", far likelier than a real base.
+    if (options?.knownBase) {
+      if (endsWithInfix(baseName, extensionInfix)) return objectName;
+      return `${baseName}${extensionInfix}_Extension`;
+    }
+
+    // Already carries the infix at the end — as its own PascalCase word. The match
+    // used to be a bare case-insensitive endsWith, so a base whose last letters
+    // spell the infix read as prefixed and was never given one: prefix "Le" left
+    // SalesTable_Extension, "Ne" SalesLine_Extension, unprefixed.
+    if (endsWithInfix(baseName, extensionInfix) || baseName.toLowerCase() === extensionInfix.toLowerCase()) {
       return objectName; // Already has the correct infix, return as-is
     }
 
@@ -400,13 +546,11 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
     // The discriminator is the PascalCase boundary, which keeps a real base name
     // that merely begins with the same letters safe: "ConDemoRanges" is Con|D…
     // (already prefixed), while "ConfigKey" is Con|f… (a word, not a prefix), so
-    // ConfigKey_Extension still becomes ConfigKeyCon_Extension as it should.
-    const infixLower = extensionInfix.toLowerCase();
-    if (baseName.toLowerCase().startsWith(infixLower)) {
-      const rest = baseName.slice(extensionInfix.length);
-      if (rest.length > 0 && rest[0] === rest[0].toUpperCase() && /[A-Za-z]/.test(rest[0])) {
-        return objectName;
-      }
+    // ConfigKey_Extension still becomes ConfigKeyCon_Extension as it should. A base
+    // that begins with the infix AS a word (ProjTable under "Proj") cannot be told
+    // apart here; callers that know the base pass knownBase (above).
+    if (leadsWithInfix(baseName, extensionInfix)) {
+      return objectName;
     }
 
     // Inject the extension infix before "_Extension"

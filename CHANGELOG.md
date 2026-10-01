@@ -29,6 +29,44 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Added
+- **`naming.extensionClassStyle` / `EXTENSION_CLASS_NAMING_STYLE` accepts a new
+  value, `prefix-leading`.** `prefix` and `model-name` both put the token right
+  before `_Extension` (`CustTableCr_Extension`); some conventions instead lead
+  the class name with it (`CRCustTable_Extension`) — the Avanade D365FO
+  Development Guidelines are one, and neither existing value can express it.
+  `validate_object_naming` and `get_workspace_info` recognise and render the
+  new style; `d365fo_file(action="create")` and `normalizeObjectName` write it,
+  including converting a name written under the trailing `prefix` style
+  instead of double-prefixing it. The prefix is matched only as a separate
+  PascalCase word, with one derivation shared by the writer and the validator, so
+  a base ending in the same letters keeps them (`Le` + `SalesTable` →
+  `LeSalesTable_Extension`), and a camelCase base is upper-cased behind the prefix
+  (`CtsoWhsWorkExecute_Extension`) so re-running stays stable. Element extensions are unaffected — the new
+  style only applies to CoC classes, since Microsoft's own dot-notation shape
+  (`Base.{Infix}Extension`) cannot lead with the infix.
+- **Edit an existing data entity in place, and set AllowEdit and IgnoreEDTRelation on
+  table fields.** `d365fo_file(action="modify", objectType="data-entity")` now supports
+  `modify-property` for `ConfigurationKey`, `PrimaryCompanyContext`, `CountryRegionCodes`,
+  `SingularLabel` and the Yes/No entity properties (`IsObsolete`, `AllowArchival`,
+  `AutoCreateDataverse`, `EnableSetBasedSqlOperations`, `ValidTimeStateEnabled`, alongside the
+  ones the bridge already handled). It writes one top-level property per call, in the
+  serialised element order measured over shipped entities. A nested path is refused, and
+  `Modules`, `OperationalDomain` and `SubscriberAccessLevel` are refused because their values
+  are not validated here; `EntityCategory` must be one of the enum's values. Space-indented
+  entity and table files are edited too. `add-data-source` adds an embedded, joined query datasource
+  (`joinField`, `relatedField`, `linkType`, `dataSourceReadOnly`) and `add-field` a mapped
+  field (`dataField` + `dataSource`). These used to fail with "Unknown AxDataEntityView
+  property" / "add-data-source not supported for objectType 'data-entity'" and ended in a
+  hand-edited file. Entity `create` now also honours `isReadOnly`, `tags`, `configurationKey`,
+  `primaryCompanyContext` and `surrogateKey` (a `SourceKey` field mapped to `RecId`, as
+  shipped entities name it), lists any `properties` key it does not read instead of dropping
+  it silently, and says when `dataManagementEnabled` writes a staging-table reference that
+  nothing creates. `dataManagementEnabled` now accepts `"Yes"` / `"true"` as well as `true`,
+  like the other Yes/No properties. Table `create` accepts `fields[].allowEdit` and
+  `fields[].ignoreEdtRelation`, and `modify-field` accepts `fieldAllowEdit` and
+  `fieldIgnoreEdtRelation` (for `BPErrorTablePrimaryKeyEditable` and `BPErrorEDTNotMigrated`).
+  A table field given only `enumType` is now an enum field (it became a string field through
+  the bridge).
 - **Tables get "Subscriber access level", as Visual Studio creates them
   (#1073).** A new regular table now carries
   `<SubscriberAccessLevel><Read>Allow</Read></SubscriberAccessLevel>`, which
@@ -43,6 +81,28 @@ those are called out explicitly below.
   the element.
 
 ### Fixed
+- **Extension-class names under the `prefix` and `model-name` class styles now
+  match the infix / model token only as a separate PascalCase word. This changes
+  the name existing `prefix`-style users get for some bases.**
+  - A base whose last letters spelled the infix was read as already prefixed and
+    never got one: with prefix `Le`, `SalesTable` was written as
+    `SalesTable_Extension`; it is now `SalesTableLe_Extension` (likewise `Ne` +
+    `SalesLine` → `SalesLineNe_Extension`). Names that really end in the infix
+    (`CustTableCtso_Extension`, `CustTableCTSO_Extension`) are kept as before.
+  - A bare base that begins with the infix as a word was also read as already
+    prefixed: `ProjTable` under prefix `Proj` gave `ProjTable_Extension`, and is
+    now `ProjTableProj_Extension` (also `TaxTrans` + `Tax`, `CRMTable` + `Cr`).
+    A full name you pass already ending in `_Extension` (`ProjTable_Extension`)
+    is still kept as given — from the name alone it cannot be told apart from a
+    prefixed one.
+  - `model-name` style no longer cuts a base whose last letters spell the model
+    token (`SalesTable` under model `Able` was written `SalesT_Able_Extension`).
+  - `validate_object_naming` derives the base by the same rule, so it no longer
+    accepts `SalesTable_Extension` as carrying the infix `Le`.
+  - A class-extension skeleton created without `properties.baseClass` derived its
+    `[ExtensionOf(classStr(…))]` target with a regex that only fit the
+    `model-name` shape — `CustTableCtso_Extension` targeted itself. It now uses
+    the same base derivation for all three class styles.
 - **`labels(action="rename")` is now held to the cross-model write guard.**
   `labels(action="create")` refused to write a label into another model's
   label file, but a rename of a label in that same file went through and
