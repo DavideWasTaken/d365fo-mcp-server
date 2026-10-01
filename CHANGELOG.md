@@ -28,6 +28,16 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Fixed
+- **`find_references` without the xref database no longer drops calls written
+  in a different letter case or with a space before the parenthesis.** X++
+  identifiers are case-insensitive, so `this.validatewrite()` and
+  `this.validateWrite ()` call `validateWrite` — the index lookup matched them,
+  then an exact `validateWrite(` text match threw them away. The same applies
+  to instantiations (`new mycontroller ()`). The match also no longer takes a
+  longer name ending in the target (`revalidateWrite(`) for a call, and a
+  call found both in the index and in the declaring type's file is listed once.
+
 ## [1.19.1] — 2026-09-30
 
 ### Fixed
