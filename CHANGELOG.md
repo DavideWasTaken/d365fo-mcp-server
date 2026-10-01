@@ -28,6 +28,14 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Fixed
+- **`labels(action="rename")` no longer creates a duplicate label ID.** In a
+  `.label.txt` without a BOM, an ID on the first line was invisible to the
+  "target already exists" check, so renaming another label onto it left two
+  declarations of the same ID (and renaming that first-line label itself
+  answered "not found"). The checks and the rewrite now read the file the same
+  way. The rename also keeps the file's BOM as it was instead of adding one.
+
 ## [1.19.1] — 2026-09-30
 
 ### Fixed
