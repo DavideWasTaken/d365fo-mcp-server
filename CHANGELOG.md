@@ -28,6 +28,14 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Fixed
+- **`labels(action="rename")` is now held to the cross-model write guard.**
+  `labels(action="create")` refused to write a label into another model's
+  label file, but a rename of a label in that same file went through and
+  rewrote it. The rename now gets the same refusal (also for `dryRun:true`),
+  and the same configuration (`D365FO_CROSS_MODEL_WRITE_MODELS`,
+  `D365FO_ALLOW_CROSS_MODEL_WRITE`) allows it, with a note on the result.
+
 ## [1.19.1] — 2026-09-30
 
 ### Fixed

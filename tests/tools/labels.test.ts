@@ -1714,6 +1714,58 @@ describe('rename_label', () => {
     // No CRLF sequences must be present — file must stay pure LF.
     expect(labelWrite!.content).not.toContain('\r\n');
   });
+
+  describe('cross-model guard', () => {
+    afterEach(() => { delete process.env.D365FO_CROSS_MODEL_WRITE_MODELS; });
+
+    // labels(create) refused a label in another model's file, while a rename of a
+    // label in that same file went through and rewrote it.
+    it.each([false, true])('refuses a rename in another model\'s label file (dryRun=%s)', async (dryRun) => {
+      const fsMock = await import('fs');
+      (fsMock.promises.writeFile as any).mockClear();
+      (fsMock.promises.readdir as any).mockClear();
+
+      const result = await renameLabelTool(
+        req('rename_label', {
+          oldLabelId: 'OldName',
+          newLabelId: 'NewName',
+          labelFileId: 'ForeignLabels',
+          model: 'ForeignModel',
+          dryRun,
+        }),
+        ctx,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Refusing to modify "@ForeignLabels:OldName" in model "ForeignModel"');
+      expect(result.content[0].text).toContain('targets model "MyModel"');
+      expect(fsMock.promises.readdir as any).not.toHaveBeenCalled();
+      expect(fsMock.promises.writeFile as any).not.toHaveBeenCalled();
+    });
+
+    it('lets configuration allow it, and says so on the result', async () => {
+      process.env.D365FO_CROSS_MODEL_WRITE_MODELS = 'ForeignModel';
+      const fsMock = await import('fs');
+      (fsMock.promises.readdir as any).mockResolvedValueOnce(['en-US']);
+      (fsMock.promises.readFile as any).mockResolvedValue('﻿OldName=Old text\r\n');
+
+      const result = await renameLabelTool(
+        req('rename_label', {
+          oldLabelId: 'OldName',
+          newLabelId: 'NewName',
+          labelFileId: 'ForeignLabels',
+          model: 'ForeignModel',
+          dryRun: true,
+        }),
+        ctx,
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content[0].text).toContain('DRY RUN');
+      expect(result.content[0].text).toContain('ForeignModel');
+      expect(result.content[0].text).toMatch(/D365FO_CROSS_MODEL_WRITE_MODELS|configuration/);
+    });
+  });
 });
 
 describe('labels dispatcher: action aliases + errors', () => {
