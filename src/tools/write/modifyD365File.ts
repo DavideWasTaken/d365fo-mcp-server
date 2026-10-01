@@ -626,7 +626,7 @@ export const ModifyD365FileArgsSchema = z.object({
     'If omitted the tool auto-picks based on the EDT base type if controlDataField is provided.'
   ),
   controlLabel: z.string().optional().describe(
-    'Optional label for the new control (add-control). Becomes the control <Label>.'
+    'Caption of the new control (add-control); Label, Text or Caption by type.'
   ),
   positionType: z.string().optional().describe(
     'Optional positioning: AfterItem (needs previousSibling) | Begin | End. Omit to append at the ' +

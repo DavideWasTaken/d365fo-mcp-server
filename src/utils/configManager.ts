@@ -1598,17 +1598,29 @@ class ConfigManager {
   }
 
   /**
-   * Get the cross-reference database server (UDE: CrossReferencesDbServerName).
+   * Get the cross-reference database server: bridge.xrefDbServer
+   * (D365FO_XREF_DB_SERVER) when configured, else the XPP config's
+   * CrossReferencesDbServerName (UDE), else null — the bridge then uses localhost.
+   *
+   * The XPP config exists only on UDE, so on a traditional VM the configured
+   * value is the only way to point the bridge at DYNAMICSXREFDB; without it
+   * find_references always fell back to its name-based search.
    */
   async getXrefDbServer(): Promise<string | null> {
+    const configured = process.env.D365FO_XREF_DB_SERVER?.trim();
+    if (configured) return configured;
     await this.ensureXppConfig();
     return this.xppConfig?.xrefDbServer || null;
   }
 
   /**
-   * Get the cross-reference database name (UDE: CrossReferencesDatabaseName).
+   * Get the cross-reference database name: bridge.xrefDbName
+   * (D365FO_XREF_DB_NAME) when configured, else the XPP config's
+   * CrossReferencesDatabaseName (UDE), else null — cross-references stay off.
    */
   async getXrefDbName(): Promise<string | null> {
+    const configured = process.env.D365FO_XREF_DB_NAME?.trim();
+    if (configured) return configured;
     await this.ensureXppConfig();
     return this.xppConfig?.xrefDbName || null;
   }

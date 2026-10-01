@@ -52,6 +52,33 @@ those are called out explicitly below.
   `fieldIgnoreEdtRelation` (for `BPErrorTablePrimaryKeyEditable` and `BPErrorEDTNotMigrated`).
   A table field given only `enumType` is now an enum field (it became a string field through
   the bridge).
+
+## [1.19.1] — 2026-09-30
+
+### Fixed
+- **`d365fo-mcp update` no longer fails on Windows when it renames the
+  installed package.** npm replaces a global package by first renaming its
+  folder under `%APPDATA%\npm\node_modules`. The update started npm from inside
+  that same folder, and Windows does not rename a folder that is a running
+  process's working directory, so npm stopped with `EBUSY`/`EPERM`. npm now
+  runs from the home directory. If the install still fails, the command says
+  that a running MCP server can also lock the folder.
+
+  **Updating from 1.19.0 or older:** `d365fo-mcp update` still runs the old
+  code, so it fails once more. Install this release by hand. Close VS Code /
+  Visual Studio first if they run the MCP server, then start npm from any
+  folder outside the package:
+
+  ```
+  cd C:\
+  npm install -g d365fo-mcp@latest
+  ```
+
+  From 1.19.1 on, `d365fo-mcp update` works again.
+
+## [1.19.0] — 2026-09-29
+
+### Added
 - **`build_d365fo_project` can restart the local AOS after a successful build**
   (`restartAos: true`, off by default). A build can succeed while a new object,
   for example a menu item, is still missing in the browser until the AOS is
@@ -85,6 +112,137 @@ those are called out explicitly below.
 
   Nothing is overwritten, and the folder must already look like a projects folder.
   Contract: `get_knowledge(kind="op-spec", topic="project")`.
+
+### Fixed
+- **`d365fo_file(action="project")` checks an explicit label-file `languages` list
+  against the files on disk.** `add-object` with `objectType: "label-file"` and a
+  `languages` list wrote an entry for every listed language without looking for its
+  `<name>_<lang>.xml`, so a language with no file (or a mistyped tag) was registered and
+  the Visual Studio build failed later. Without the list the languages already came from
+  disk; with it, a language that has no file is now refused, naming the ones that exist.
+- **The name-based `find_references` fallback no longer counts a method's declaration as
+  a call to it, and says what a table count leaves out.** In the declaring method's own
+  body the first `name(` is `public void name(`, which was reported as a caller; it is
+  skipped now (a recursive call still counts). A table target used to get a bare number,
+  although its declarative references — form data sources, relations, entity mappings —
+  are only in the cross-reference database; it now says so, as an EDT target already did.
+- **`find_references` finds methods added by `[ExtensionOf]` classes.** The
+  cross-reference database records such a method under the extension class only
+  (`/Classes/<Ext>/Methods/<m>`); `Owner.method` queried `/Tables/<Owner>/Methods/<m>`,
+  which does not exist, and reported 0 for a method with callers. It now also queries
+  every class extension of the owner that declares the method, from the index's
+  extension records. A bare method name (no owner) is resolved to the types that
+  declare it and queried by their full paths, instead of reaching the bridge as a bare
+  name that matches nothing and falling back to the name-based search; past 25
+  declaring types it stays a bare-name lookup.
+- **`find_references` includes declarative metadata references.** The bridge looked
+  a target up only in its X++ shape (`/Tables/X`, `/Edts/X`), on the belief that
+  targets are always plural with a leading slash. Metadata references are stored
+  singular and without it, and for an EDT under its concrete subtype (`Table/X`,
+  `Form/X`, `EdtString/X`, members `Table/X/TableFieldString/F`, `Table/X/Method/M`):
+  on a live DYNAMICSXREFDB 2.3M of 19.5M references. A custom table's where-used
+  returned 334 of its 785 references, missing every form data source and entity
+  mapping; a custom EDT's, 12 of 108, missing every table field typed with it. Both
+  shapes are queried now — including for `Owner.member` and explicit AOT paths, whose
+  metadata twins are derived for methods of tables, classes, forms, views, data entities
+  and maps, and for fields of tables, maps, views and data entities, each field under
+  its exact type segment (a wildcard also matched a field group of the same name) —
+  and metadata rows read as "object › member › property".
+  The bridge returns exact totals split into code and metadata (references whose source
+  no longer exists in the database are left out of both, as they are of the rows), and up to 500 rows per
+  shape instead of 500 in all: sorted by source path, code rows used to fill the cap, so
+  a large table (CustTable) showed no metadata reference at all. The list gives each
+  shape its share of `limit`. A `targetType` that names a type now scopes a bare name to
+  it (`CustTable` with `table` no longer counts the form, menu item and query named
+  CustTable). The bridge's `--xref-database` help no longer claims a default it does
+  not have.
+- **The cross-reference database can be configured on a traditional VM.** The bridge got
+  its DYNAMICSXREFDB server and name only from the XPP config, which exists only on UDE,
+  so on a traditional VM it always started without cross-references and `find_references`
+  quietly answered from its name-based search, missing every metadata reference. New
+  settings `bridge.xrefDbName` / `D365FO_XREF_DB_NAME` (usually `DYNAMICSXREFDB`) and
+  `bridge.xrefDbServer` / `D365FO_XREF_DB_SERVER` (defaults to localhost) take
+  precedence over the XPP config, and `doctor` says when a traditional VM has none set.
+- **`find_references` finds enum values, members an extension adds, entity members,
+  table indexes, field groups and form data source methods.**
+  An enum value is found as `Enum::Value` or `Enum.Value` (`/Enums/E/EnumValues/v`,
+  `Enum/E/EnumValue/v`); there was no way to ask for one. A table field or enum value
+  an extension adds is stored under the extension only (`/TableExtensions/T.Ext/Fields/f`,
+  `/EnumExtensions/E.Ext/EnumValues/v`, and their metadata shapes), so `PurchLine.<added
+  field>` returned 0; those are queried now. The index records a data entity as a view,
+  so `Entity.field` was looked up under `/Views/` and matched nothing. New `targetType`
+  values `data-entity`, `map` and `menu-item` scope a bare name like the other types do:
+  an entity is not under `/Views/`, and a menu item often shares its name with the class
+  or report it runs. `Table.Name` with `targetType` `index` or `field-group` finds a table
+  index (`/Tables/T/TableIndexs/i`, `Table/T/TableIndex/i`) or field group
+  (`/Tables/T/TableFieldGroups/g`, `Table/T/TableFieldGroup/g`); only when asked, because
+  they often share a name with a field. `Form.DataSource.method` finds a form data source's
+  method (`/Forms/F/DataSources/DS/Methods/m`, `Form/F/FormDataSourceRoot/DS/Method/m`).
+- **A button added with `add-control` shows its caption** (#1047). The label was always
+  written as `<Label>`, but buttons keep their caption in `<Text>` and groups in
+  `<Caption>`. D365FO dropped the unknown element without an error, so the button
+  rendered blank while the tool reported success. The caption element now follows the
+  control type, in the order shipped forms use, on both the form-extension writer and
+  the bridge. A data binding that the control type cannot carry (for example
+  `dataField` on a Button) is no longer written; the reply says it was skipped.
+  `controlType: "CommandButton"` and `"MenuFunctionButton"` in a form extension were
+  written as String controls; they now produce the requested button.
+- **`d365fo_file(action="project")` only touches projects under the configured solution
+  roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
+  like a projects folder", which every Visual Studio repo on the machine passes, and so
+  does `%TEMP%`. One call could take a project out of another repo's solution and
+  delete its files, or add a project there. `create`, `delete`, `add-object` and
+  `remove-object` now refuse a path outside `D365FO_SOLUTIONS_PATH`, `workspacePath` or
+  `solutionPath`. The error names these settings. The active project does not
+  count as a root, because `create` activates what it makes and a project created in a
+  foreign folder would otherwise vouch for the next call there. `delete` checks the
+  projects folder rather than the project, since the shared `.sln` it rewrites sits one
+  level above the project folder.
+- **A table field's length is available without the bridge.** The full index
+  build stored a field's bare base type as its signature and dropped the EDT the
+  extracted metadata carried, so `DirPartyTable.Name` indexed as `String`
+  rather than `DirPartyName`. `update_symbol_index` already stored the EDT, so
+  the same column meant different things depending on which path last wrote the
+  table. On a deployment with no bridge, `get_object_info(table)` therefore could
+  not give a field's length at all, and an agent asked for it had to guess. The full
+  build now stores the EDT (or enum type, or the base type when a field has
+  neither), the same as the incremental path. The index-only table reader
+  resolves each field's size through the EDT chain in `edt_metadata`:
+  `Name: DirPartyName (String Size 160)`, and for a derived EDT that declares
+  no size of its own, `(String Size 160, inherited from DirPartyName)`.
+  The EDT is found whatever casing the field spells it in, and the output says
+  the size leaves EDT extensions out — the index stores none, and an extension
+  can change `StringSize`. Consumers that read the signature as an EDT —
+  relation generation, table patterns, find-method parameter types, "fields
+  typed as X" — now get one on a full index too. **Takes effect only after a
+  full index rebuild.**
+- **`search` ranking is unchanged by the above.** `search` full-text-matches
+  the signature, and a table field is very often named after its EDT, so such a
+  field would have matched the EDT's name twice and outscored everything that
+  matches it once: on an ApplicationPlatform + Directory + Foundation index,
+  `CustName` returned 20 fields called CustName out of 20 and lost every EDT and
+  method. Table fields are now scored without their signature, which is exactly
+  how they scored when it held a base type; view and data-entity fields, whose
+  signature was never an EDT, keep theirs. Across 12 common EDT-name queries the
+  top 20 is identical to the previous index's. The query still sorts by FTS5's own
+  `rank` and re-scores the streamed rows, stopping as soon as no later row can enter
+  the window: sorting on the score expression in SQL gave the same answer but made a
+  broad query 2–3× slower on a full index (`Trans` 172 → 499 ms). Streamed, it costs
+  0–45 ms (`Trans` 189 ms, `Name` 64 → 107 ms, warm cache).
+
+### Dependencies
+- **Major:** `vitest` and `@vitest/coverage-v8` 4.1.11 → 5.0.2 (dev only; no test or
+  config change was needed, the coverage thresholds hold) and `dotenv` 17.4.2 → 18.0.4.
+  dotenv 18 keeps the `config`/`parse` API the server uses; its log line moved from
+  stdout to stderr, and the server passes `quiet: true` anyway, so the MCP stdio stream
+  stays clean (checked with an `initialize` + `tools/list` round trip).
+- Within the existing ranges: `@modelcontextprotocol/sdk` 1.30.0 → 1.31.0,
+  `@azure/storage-blob` 12.33.0 → 12.34.0, `@types/node` 26.6.1 → 26.6.3, `tsx`
+  4.23.13 → 4.23.15, plus transitive updates. Supersedes Dependabot #1058–#1063.
+
+## [1.18.0] — 2026-09-24
+
+### Added
 - **Extension classes can follow their own naming style.** `EXTENSION_NAMING_STYLE`
   drove two independent decisions — the token of an element extension
   (`CustTable.ContosoRobotics`) and that of a CoC class
@@ -148,17 +306,6 @@ those are called out explicitly below.
   `GROUNDING_ENFORCE=true` they can block a write.
 
 ### Fixed
-- **`d365fo_file(action="project")` only touches projects under the configured solution
-  roots.** Its `.rnrproj`/`.sln` writes and deletes were bounded only by "the folder looks
-  like a projects folder", which every Visual Studio repo on the machine passes, and so
-  does `%TEMP%`. One call could take a project out of another repo's solution and
-  delete its files, or add a project there. `create`, `delete`, `add-object` and
-  `remove-object` now refuse a path outside `D365FO_SOLUTIONS_PATH`, `workspacePath` or
-  `solutionPath`. The error names these settings. The active project does not
-  count as a root, because `create` activates what it makes and a project created in a
-  foreign folder would otherwise vouch for the next call there. `delete` checks the
-  projects folder rather than the project, since the shared `.sln` it rewrites sits one
-  level above the project folder.
 - **`generate_object` names an extension class what `create` will write** (#1041).
   The pattern generator assembled `{Base}{Infix}…_Extension` by hand, while
   `d365fo_file(action="create")` normalises every `_Extension` name with the token
@@ -206,37 +353,6 @@ those are called out explicitly below.
   is written and the reply names the existing bindings, so an accidental
   duplicate of a template stub is visible without being refused. **Requires a rebuilt bridge binary**; the reporting fix
   above is TypeScript and takes effect without one.
-- **A table field's length is available without the bridge.** The full index
-  build stored a field's bare base type as its signature and dropped the EDT the
-  extracted metadata carried, so `DirPartyTable.Name` indexed as `String`
-  rather than `DirPartyName`. `update_symbol_index` already stored the EDT, so
-  the same column meant different things depending on which path last wrote the
-  table. On a deployment with no bridge, `get_object_info(table)` therefore could
-  not give a field's length at all, and an agent asked for it had to guess. The full
-  build now stores the EDT (or enum type, or the base type when a field has
-  neither), the same as the incremental path. The index-only table reader
-  resolves each field's size through the EDT chain in `edt_metadata`:
-  `Name: DirPartyName (String Size 160)`, and for a derived EDT that declares
-  no size of its own, `(String Size 160, inherited from DirPartyName)`.
-  The EDT is found whatever casing the field spells it in, and the output says
-  the size leaves EDT extensions out — the index stores none, and an extension
-  can change `StringSize`. Consumers that read the signature as an EDT —
-  relation generation, table patterns, find-method parameter types, "fields
-  typed as X" — now get one on a full index too. **Takes effect only after a
-  full index rebuild.**
-- **`search` ranking is unchanged by the above.** `search` full-text-matches
-  the signature, and a table field is very often named after its EDT, so such a
-  field would have matched the EDT's name twice and outscored everything that
-  matches it once: on an ApplicationPlatform + Directory + Foundation index,
-  `CustName` returned 20 fields called CustName out of 20 and lost every EDT and
-  method. Table fields are now scored without their signature, which is exactly
-  how they scored when it held a base type; view and data-entity fields, whose
-  signature was never an EDT, keep theirs. Across 12 common EDT-name queries the
-  top 20 is identical to the previous index's. The query still sorts by FTS5's own
-  `rank` and re-scores the streamed rows, stopping as soon as no later row can enter
-  the window: sorting on the score expression in SQL gave the same answer but made a
-  broad query 2–3× slower on a full index (`Trans` 172 → 499 ms). Streamed, it costs
-  0–45 ms (`Trans` 189 ms, `Name` 64 → 107 ms, warm cache).
 - **The naming check no longer warns about the canonical extension-class name.**
   `CustTableBku_Extension` is exactly what the prefix style produces and what the
   write path returns untouched, yet the check answered "Extension name does not
@@ -263,17 +379,15 @@ those are called out explicitly below.
   sat behind was kept, so the infix landed one character late. It is now
   `CustTableCtso_Extension`, the spelling every name of this shape in
   PackagesLocalDirectory uses.
-
-### Dependencies
-- Routine lockfile refresh within the existing semver ranges: `@clack/prompts`
-  1.8.0 → 1.8.1, `@biomejs/biome` 2.5.12 → 2.5.14, `@types/node` 26.5.1 →
-  26.6.1, `zod` 4.6.1 → 4.6.5, `hono` 4.13.7 → 4.13.8, plus transitive updates
-  (`package-lock.json` only). `@clack/prompts` 1.8.1 now types a cancelled
-  prompt as `typeof CANCEL_SYMBOL` instead of `symbol`, which broke the
-  type-check of every CLI prompt; the CLI's `ensure()` helper now strips any
-  symbol from the result type. No runtime change.
-
-### Fixed
+- **A full build shipped runtime metadata for code that no longer existed**
+  (#1026). xppc's metadata write-back does not reliably refresh an existing
+  `XppMetadata` tree: a class whose field was removed compiled to IL without it,
+  while its `XppMetadata` — and so the binary `.md` manifest serialized from it —
+  still declared it, under a green build. `build_d365fo_project(fullBuild: true)`
+  now clears the model's compiler-metadata tree before compiling, so the
+  write-back is unconditional; a failed delete warns (the `.md` may then not
+  match the code) rather than failing the build. The incremental counterpart is
+  the next entry.
 - **An incremental build still shipped runtime metadata for code that no longer
   existed.** xppc's metadata write-back rewrites an element's
   `XppMetadata` file when the element gains something, but never when it loses
@@ -289,6 +403,22 @@ those are called out explicitly below.
   xppc on a UDE box: removed fields and deleted classes disappear from the
   metadata and the `.md`, unchanged elements are untouched, and the scan takes
   ~0.3 s for a 4,400-element package.
+- **Writing a descriptor no longer invents a class or a missing project entry**
+  (#1030). A file in no `Ax*` folder was classified as a class by the symbol
+  indexer — every descriptor write added a phantom CLASS named after the model,
+  which `search` returned as an exact match — and the inline write verification
+  reported a missing `.rnrproj` entry for an invented `AxClass\<Model>`. Such
+  files are no longer indexed (a re-index cleans up earlier phantoms), and the
+  membership check is skipped for any type with no `Ax*` folder.
+
+### Dependencies
+- Routine lockfile refresh within the existing semver ranges: `@clack/prompts`
+  1.8.0 → 1.8.1, `@biomejs/biome` 2.5.12 → 2.5.14, `@types/node` 26.5.1 →
+  26.6.1, `zod` 4.6.1 → 4.6.5, `hono` 4.13.7 → 4.13.8, plus transitive updates
+  (`package-lock.json` only). `@clack/prompts` 1.8.1 now types a cancelled
+  prompt as `typeof CANCEL_SYMBOL` instead of `symbol`, which broke the
+  type-check of every CLI prompt; the CLI's `ensure()` helper now strips any
+  symbol from the result type. No runtime change.
 
 ## [1.17.4] — 2026-09-10
 
