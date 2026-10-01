@@ -372,10 +372,19 @@ export class GuidedBrowser {
       try {
         await uniqueCompany(this.page, this.company.target, this.company.expected);
       } catch {
-        throw new GuidedBrowserError(
-          'NOT_VERIFIED',
-          'The company control changed or no longer matches the bound company',
-        );
+        // Fork: a bound element that is gone is not a different company. A full
+        // page load (a ?mi= link, a reload) replaces every element while the page
+        // still shows the company, and reporting that as NOT_VERIFIED ended the
+        // case. It is recoverable: re-observe and confirm the company again. An
+        // element still in the page that no longer matches stays NOT_VERIFIED.
+        const attached = await this.company.target.handle.evaluate(el => el.isConnected).catch(() => false);
+        if (!attached)
+          throw new GuidedBrowserError(
+            'NEEDS_OBSERVATION',
+            'The bound company control is gone (the page reloaded?). Observe again and repeat case begin ' +
+              'with the new snapshotId and companyRef; the case keeps its progress',
+          );
+        throw new GuidedBrowserError('NOT_VERIFIED', 'The company control changed or no longer matches the bound company');
       }
     });
   }

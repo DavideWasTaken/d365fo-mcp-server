@@ -400,7 +400,24 @@ export class GuidedSessionManager {
       await this.collectSystemErrors(s);
       if (input.operation === 'begin') {
         this.stopForSystemErrors(c);
-        if (c.begun) return { payload: { phase: s.phase, caseId: c.id } };
+        if (c.begun) {
+          // Fork: a repeated begin is a no-op while the binding holds. A full page
+          // load (a ?mi= link, a reload) detaches the bound DOM element although
+          // the page still shows the same company, and every check then answered
+          // NOT_VERIFIED with no way back — this used to return here without
+          // looking. Re-confirm the same company on the new observation instead;
+          // checks and progress are kept, and a different company still fails.
+          try {
+            await s.browser.checkCompany();
+            return { payload: { phase: s.phase, caseId: c.id } };
+          } catch {
+            /* binding lost — re-confirm below */
+          }
+          await s.browser.bindCompany(input.snapshotId!, input.companyRef!, s.mission.company);
+          this.checkAbort(s);
+          await s.journal.append('company_reconfirmed', { caseId: c.id });
+          return { payload: { phase: s.phase, caseId: c.id, companyReconfirmed: true } };
+        }
         await s.browser.bindCompany(input.snapshotId!, input.companyRef!, s.mission.company);
         this.checkAbort(s);
         c.begun = true;

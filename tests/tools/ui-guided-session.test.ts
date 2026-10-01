@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir as readdirOf, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { GuidedSessionManager } from '../../src/tools/sdlc/uiVerification/guided/sessionManager.js';
@@ -464,6 +464,73 @@ describe('guided session workflow', () => {
         .payload.code,
     ).toBe('NEEDS_OBSERVATION');
     expect(f.clicks()).toBe(0);
+  });
+  // A full page load detaches the bound company element while the page still
+  // shows the company. begin used to return early once the case had begun, so
+  // the binding could never be re-confirmed and every check stayed NOT_VERIFIED.
+  describe('company binding lost to a full page load', () => {
+    async function withBinding() {
+      const f = await fixture();
+      let bound = false;
+      const binds: string[] = [];
+      f.browser.bindCompany = async (_snapshot: string, _ref: string, company: string) => {
+        binds.push(company);
+        bound = true;
+      };
+      f.browser.checkCompany = async () => {
+        // What browserSession.checkCompany reports for a detached element.
+        if (!bound) throw Object.assign(new Error('The bound company control is gone'), { code: 'NEEDS_OBSERVATION' });
+      };
+      const base = await ready(f);
+      return { f, base, binds, detach: () => { bound = false; } };
+    }
+
+    it('re-confirms the same company on a new observation and keeps the case going', async () => {
+      const { f, base, binds, detach } = await withBinding();
+      detach();
+      const lost = await f.manager.call({ action: 'check', ...base, criterionId: 'result', ref: 'e1' });
+      // Recoverable: the case is not ended, so begin can re-confirm.
+      expect(lost.payload.code).toBe('NEEDS_OBSERVATION');
+
+      const observed = await f.manager.call({ action: 'observe', sessionId: f.sessionId });
+      const again = await f.manager.call({
+        action: 'case', operation: 'begin', ...base, snapshotId: observed.payload.observation.snapshotId, companyRef: 'e1',
+      });
+      expect(again.payload.companyReconfirmed).toBe(true);
+      expect(binds).toEqual([f.mission.company, f.mission.company]);
+
+      const acted = await f.manager.call({
+        action: 'act', ...base, snapshotId: observed.payload.observation.snapshotId, operationId: 'open',
+        actions: [{ type: 'click', ref: 'e1' }],
+      });
+      const check = await f.manager.call({
+        action: 'check', ...base, snapshotId: acted.payload.observation.snapshotId, criterionId: 'result', ref: 'e1',
+      });
+      expect(check.payload.check.status).toBe('PASS');
+      const run = (await readdirOf(f.dir)).find(n => n.startsWith('guided-'))!;
+      expect(await readFile(path.join(f.dir, run, 'events.jsonl'), 'utf8')).toContain('company_reconfirmed');
+    });
+
+    it('leaves an intact binding alone on a repeated begin', async () => {
+      const { f, base, binds } = await withBinding();
+      const again = await f.manager.call({ action: 'case', operation: 'begin', ...base, snapshotId: base.snapshotId, companyRef: 'e1' });
+      expect(again.payload.companyReconfirmed).toBeUndefined();
+      expect(binds).toHaveLength(1);
+    });
+
+    it('does not re-confirm when the page no longer shows the company', async () => {
+      const { f, base, detach } = await withBinding();
+      detach();
+      f.browser.bindCompany = async () => {
+        throw Object.assign(new Error('The observed company does not match the requested company exactly'), { code: 'NOT_VERIFIED' });
+      };
+      const observed = await f.manager.call({ action: 'observe', sessionId: f.sessionId });
+      const again = await f.manager.call({
+        action: 'case', operation: 'begin', ...base, snapshotId: observed.payload.observation.snapshotId, companyRef: 'e1',
+      });
+      expect(again.payload.code).toBe('NOT_VERIFIED');
+      expect(again.payload.companyReconfirmed).toBeUndefined();
+    });
   });
   it('allows finish after a call budget is exhausted', async () => {
     const f = await fixture({ limits: { calls: 1 } });
