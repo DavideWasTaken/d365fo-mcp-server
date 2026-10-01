@@ -47,7 +47,8 @@ those are called out explicitly below.
   `this.validateWrite ()` call `validateWrite` — the index lookup matched them,
   then an exact `validateWrite(` text match threw them away. The same applies
   to instantiations (`new mycontroller ()`). The match also no longer takes a
-  longer name ending in the target (`revalidateWrite(`) for a call.
+  longer name ending in the target (`revalidateWrite(`) for a call, and a
+  call found both in the index and in the declaring type's file is listed once.
 - **`web.config` / `SysTestConsole.exe.config` settings are read as XML reads
   them.** A previous `Infrastructure.HostUrl` kept in a `<!-- … -->` comment
   above the live one was taken as the AOS address by `restartAos` without an

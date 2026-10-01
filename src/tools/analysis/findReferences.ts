@@ -496,7 +496,10 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
     // declaring type's own source — one indexed lookup and up to three files.
     const intraTypeRefs = wantsMethod
       ? scanDeclaringTypeSource(symbolIndex, ftsName, limit).filter(
-          r => !references.some(existing => existing.file === r.file && existing.context === r.context),
+          // Same call site already reported from the index. The two paths cut
+          // different windows around it (±1 line here, ±2 there), so equal
+          // contexts never matched and every call both found was listed twice.
+          r => !references.some(existing => existing.file === r.file && existing.context.includes(r.context)),
         )
       : [];
     references.push(...intraTypeRefs);

@@ -11,6 +11,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
 import { findReferencesTool } from '../../src/tools/analysis/findReferences';
 
 function stubIndex(rows: Array<Record<string, unknown>>) {
@@ -77,5 +80,46 @@ describe('find_references fallback: what counts as a call', () => {
 
     expect(text).toContain('new mycontroller ()');
     expect(text).toMatch(/instantiation/i);
+  });
+});
+
+describe('find_references fallback: one call site, one reference', () => {
+  it('does not list a call twice when the index and the declaring-type scan both find it', async () => {
+    // Seen on the VM once case-insensitive calls were found: the scan of the
+    // declaring type's file reported this.validatewrite() again, because it
+    // cuts a ±1-line window where the index path cuts ±2, and the duplicate
+    // check compared the two windows for equality.
+    const dir = mkdtempSync(path.join(tmpdir(), 'fr-dedupe-'));
+    try {
+      const file = path.join(dir, 'MyTable.xml');
+      const body = [
+        'public boolean callLower()',
+        '{',
+        '    boolean ok;',
+        '    ok = this.validatewrite();',
+        '    return ok;',
+        '}',
+      ].join('\n');
+      writeFileSync(file, body);
+      const db = {
+        prepare: (sql: string) => ({
+          all: (..._params: any[]) => {
+            if (/DISTINCT parent_name/.test(sql)) return [{ parent_name: 'MyTable', file_path: file }];
+            if (/symbols_fts/.test(sql)) {
+              return [{ name: 'callLower', parent_name: 'MyTable', file_path: file, model: 'MyModel', source_snippet: body, source: body }];
+            }
+            return [];
+          },
+          get: () => undefined,
+        }),
+      };
+      const text = textOf(await call(
+        { targetName: 'validateWrite', targetType: 'method', includeContext: true },
+        { getReadDb: () => db, searchLabels: () => [] },
+      ));
+      expect(text).toMatch(/Total References Found:\*\* 1\b/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
