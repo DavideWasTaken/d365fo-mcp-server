@@ -96,9 +96,17 @@ vi.mock('../../src/utils/packageResolver', () => ({
   })),
 }));
 
-vi.mock('../../src/utils/modelClassifier', () => {
+vi.mock('../../src/utils/modelClassifier', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/utils/modelClassifier')>();
   const getExtensionNamingStyle = vi.fn(() => 'prefix');
   return {
+    // Pure word-boundary predicates — the real ones, since they read no configuration.
+    endsWithInfix: real.endsWithInfix,
+    leadsWithInfix: real.leadsWithInfix,
+    // With no prefix resolved (resolveObjectPrefix is '' below) the real helper
+    // only takes "_Extension" off; the stand-in does the same without its config reads.
+    extensionClassBaseOf: vi.fn((name: string) =>
+      name.endsWith('_Extension') ? name.slice(0, -'_Extension'.length) : name),
     registerCustomModel: vi.fn(),
     resolveObjectPrefix: vi.fn(() => ''),
     applyObjectPrefix: vi.fn((name: string) => name),
