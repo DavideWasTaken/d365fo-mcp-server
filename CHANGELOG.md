@@ -28,6 +28,14 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Fixed
+- **labelc no longer runs on every build of a model whose label file has
+  its own name.** The "are the label assemblies current?" check looked for
+  `Resources\<model>.dll`, but labelc writes one assembly per label file
+  (`Resources\<LabelFile>.dll`). A model such as `VLTBase` with label file
+  `VLTLabel` never had the file it looked for, so every build recompiled
+  its labels and rewrote `Resources`.
+
 ## [1.19.1] — 2026-09-30
 
 ### Fixed
