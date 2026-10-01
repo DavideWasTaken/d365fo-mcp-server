@@ -130,9 +130,12 @@ export async function findLabelFileDirs(packageDir: string): Promise<string[]> {
   return hits;
 }
 
-/** Newest mtime anywhere under `dirs`, or 0 when they hold nothing readable. */
-async function newestMtime(dirs: string[]): Promise<number> {
-  let newest = 0;
+/**
+ * Newest source mtime per label file ID under `dirs`: its
+ * `<id>.<lang>.label.txt` files and its `<id>_<lang>.xml` descriptors.
+ */
+async function newestSourcePerLabelFile(dirs: string[]): Promise<Map<string, number>> {
+  const newest = new Map<string, number>();
   const stack = [...dirs];
   while (stack.length > 0) {
     const dir = stack.pop()!;
@@ -148,9 +151,11 @@ async function newestMtime(dirs: string[]): Promise<number> {
         stack.push(full);
         continue;
       }
+      const id = /^(.+)\.[^.]+\.label\.txt$/i.exec(entry.name)?.[1] ?? /^(.+)_[^_]+\.xml$/i.exec(entry.name)?.[1];
+      if (!id) continue;
       try {
         const { mtimeMs } = await stat(full);
-        if (mtimeMs > newest) newest = mtimeMs;
+        if (mtimeMs > (newest.get(id) ?? 0)) newest.set(id, mtimeMs);
       } catch { /* vanished mid-scan */ }
     }
   }
@@ -172,41 +177,20 @@ export async function labelAssembliesAreStale(
   // labelc emits one assembly per LABEL FILE — Resources\<LabelFileId>.dll —
   // not one per module. Looking for Resources\<module>.dll found nothing on any
   // model whose label file is named differently (VLTBase / VLTLabel on the VM),
-  // so labelc ran on every build and rewrote Resources.
-  const labelFileIds = await labelFileIdsIn(labelDirs);
-  if (labelFileIds.size === 0) return true;
-  let builtAt = Infinity;
-  for (const id of labelFileIds) {
+  // so labelc ran on every build and rewrote Resources. Each assembly is held
+  // to its OWN sources: on that model the other nine label files' assemblies
+  // are older than VLTLabel's latest edit, and measured against the model's
+  // newest source they would keep it stale forever.
+  const sources = await newestSourcePerLabelFile(labelDirs);
+  if (sources.size === 0) return true;
+  for (const [id, newestSource] of sources) {
     try {
-      builtAt = Math.min(builtAt, (await stat(path.join(resourcesDir, `${id}.dll`))).mtimeMs);
+      if (newestSource > (await stat(path.join(resourcesDir, `${id}.dll`))).mtimeMs) return true;
     } catch {
       return true; // this label file was never compiled
     }
   }
-  return (await newestMtime(labelDirs)) > builtAt;
-}
-
-/** Label file IDs of the `<id>.<lang>.label.txt` files under `dirs`. */
-async function labelFileIdsIn(dirs: string[]): Promise<Set<string>> {
-  const ids = new Set<string>();
-  const stack = [...dirs];
-  while (stack.length > 0) {
-    const dir = stack.pop()!;
-    let entries;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (entry.isDirectory()) stack.push(path.join(dir, entry.name));
-      else {
-        const m = /^(.+)\.[^.]+\.label\.txt$/i.exec(entry.name);
-        if (m) ids.add(m[1]);
-      }
-    }
-  }
-  return ids;
+  return false;
 }
 
 // ---------------------------------------------------------------------------

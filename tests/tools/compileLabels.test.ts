@@ -117,6 +117,25 @@ describe('labelAssembliesAreStale', () => {
     expect(await labelAssembliesAreStale([labelDir], resourcesDir)).toBe(false);
   });
 
+  // VLTBase on the VM: ten label files, all assemblies present; VLTLabel was
+  // edited and recompiled later than the other nine were built. Measured
+  // against the model's newest source, the nine older assemblies kept it
+  // "stale" for good.
+  it('holds each assembly to its own label file, not to the newest source in the model', async () => {
+    const now = Date.now();
+    const labelDir = path.join(packageDir, MODEL, 'AxLabelFile');
+    const resourcesDir = path.join(packageDir, 'Resources');
+    await writeAt(path.join(labelDir, 'LabelResources', 'en-US', 'Old.en-US.label.txt'), now - 600_000);
+    await writeAt(path.join(labelDir, 'Old_en-US.xml'), now - 600_000);
+    await writeAt(path.join(resourcesDir, 'Old.dll'), now - 300_000);
+    await writeAt(path.join(labelDir, 'LabelResources', 'it-IT', 'VLTLabel.it-IT.label.txt'), now - 120_000);
+    await writeAt(path.join(resourcesDir, 'VLTLabel.dll'), now);
+    expect(await labelAssembliesAreStale([labelDir], resourcesDir)).toBe(false);
+
+    await writeAt(path.join(labelDir, 'Old_en-US.xml'), now - 60_000);
+    expect(await labelAssembliesAreStale([labelDir], resourcesDir)).toBe(true);
+  });
+
   it('is true when one of several label files has no assembly yet', async () => {
     const builtAt = Date.now();
     const labelDir = path.join(packageDir, MODEL, 'AxLabelFile');
