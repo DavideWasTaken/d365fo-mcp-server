@@ -1637,6 +1637,55 @@ describe('rename_label', () => {
     expect((fsMock.promises.writeFile as any)).not.toHaveBeenCalled();
   });
 
+  // A file without a BOM: its first line starts neither with "\n" nor with the
+  // BOM, which is all the existence and collision checks used to look for.
+  it('refuses to rename onto an ID declared on the first line of a file without a BOM', async () => {
+    const fsMock = await import('fs');
+    (fsMock.promises.writeFile as any).mockClear();
+    (fsMock.promises.readdir as any).mockResolvedValueOnce(['en-US']);
+    (fsMock.promises.readFile as any).mockResolvedValue('NewFeatureName=Already here\r\nOldFeatureName=Some text\r\n');
+
+    const result = await renameLabelTool(
+      req('rename_label', {
+        oldLabelId: 'OldFeatureName',
+        newLabelId: 'NewFeatureName',
+        labelFileId: 'MyModel',
+        model: 'MyModel',
+        updateIndex: false,
+      }),
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('"NewFeatureName" already exists');
+    expect(fsMock.promises.writeFile as any).not.toHaveBeenCalled();
+  });
+
+  it('renames an ID declared on the first line of a file without a BOM, and adds no BOM', async () => {
+    const fsMock = await import('fs');
+    const writeCalls: Array<{ path: string; content: string }> = [];
+    (fsMock.promises.writeFile as any).mockImplementation(async (p: string, content: string) => {
+      writeCalls.push({ path: p, content });
+    });
+    (fsMock.promises.readdir as any).mockResolvedValueOnce(['en-US']);
+    (fsMock.promises.readFile as any).mockResolvedValue('OldFeatureName=Some text\r\n ;A comment\r\nZebraLabel=Zebra text\r\n');
+
+    const result = await renameLabelTool(
+      req('rename_label', {
+        oldLabelId: 'OldFeatureName',
+        newLabelId: 'NewFeatureName',
+        labelFileId: 'MyModel',
+        model: 'MyModel',
+        updateIndex: false,
+      }),
+      ctx,
+    );
+
+    if (result.isError) throw new Error(`rename_label failed: ${result.content[0].text}`);
+    const labelWrite = writeCalls.find(c => writeTargets(c.path, '.label.txt'));
+    expect(labelWrite!.content).toBe('NewFeatureName=Some text\r\n ;A comment\r\nZebraLabel=Zebra text\r\n');
+  });
+
   it('preserves CRLF line endings when renaming inside a CRLF .label.txt', async () => {
     const fsMock = await import('fs');
     const writeCalls: Array<{ path: string; content: string }> = [];
@@ -1713,55 +1762,6 @@ describe('rename_label', () => {
     expect(labelWrite!.content).toContain('AppleLabel=Apple text\n');
     // No CRLF sequences must be present — file must stay pure LF.
     expect(labelWrite!.content).not.toContain('\r\n');
-  });
-
-  // A file without a BOM: its first line starts neither with "\n" nor with the
-  // BOM, which is all the existence and collision checks used to look for.
-  it('refuses to rename onto an ID declared on the first line of a file without a BOM', async () => {
-    const fsMock = await import('fs');
-    (fsMock.promises.writeFile as any).mockClear();
-    (fsMock.promises.readdir as any).mockResolvedValueOnce(['en-US']);
-    (fsMock.promises.readFile as any).mockResolvedValue('NewFeatureName=Already here\r\nOldFeatureName=Some text\r\n');
-
-    const result = await renameLabelTool(
-      req('rename_label', {
-        oldLabelId: 'OldFeatureName',
-        newLabelId: 'NewFeatureName',
-        labelFileId: 'MyModel',
-        model: 'MyModel',
-        updateIndex: false,
-      }),
-      ctx,
-    );
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('"NewFeatureName" already exists');
-    expect(fsMock.promises.writeFile as any).not.toHaveBeenCalled();
-  });
-
-  it('renames an ID declared on the first line of a file without a BOM, and adds no BOM', async () => {
-    const fsMock = await import('fs');
-    const writeCalls: Array<{ path: string; content: string }> = [];
-    (fsMock.promises.writeFile as any).mockImplementation(async (p: string, content: string) => {
-      writeCalls.push({ path: p, content });
-    });
-    (fsMock.promises.readdir as any).mockResolvedValueOnce(['en-US']);
-    (fsMock.promises.readFile as any).mockResolvedValue('OldFeatureName=Some text\r\n ;A comment\r\nZebraLabel=Zebra text\r\n');
-
-    const result = await renameLabelTool(
-      req('rename_label', {
-        oldLabelId: 'OldFeatureName',
-        newLabelId: 'NewFeatureName',
-        labelFileId: 'MyModel',
-        model: 'MyModel',
-        updateIndex: false,
-      }),
-      ctx,
-    );
-
-    if (result.isError) throw new Error(`rename_label failed: ${result.content[0].text}`);
-    const labelWrite = writeCalls.find(c => writeTargets(c.path, '.label.txt'));
-    expect(labelWrite!.content).toBe('NewFeatureName=Some text\r\n ;A comment\r\nZebraLabel=Zebra text\r\n');
   });
 });
 
