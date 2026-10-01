@@ -12,7 +12,7 @@ import { z } from 'zod';
 import type { XppServerContext } from '../../types/context.js';
 import { findD365FileOnDisk } from '../../utils/objectFileLookup.js';
 import { tryBridgeTable } from '../../bridge/bridgeAdapter.js';
-import { bridgeUnavailableNote, indexedFileDeletedHere } from '../../utils/indexedXmlLookup.js';
+import { bridgeUnavailableNote, indexedPathIsMissing } from '../../utils/indexedXmlLookup.js';
 import { canonicalSymbolName } from '../../utils/symbolLookup.js';
 import { indexedEdtStringSize, INDEXED_SIZE_CAVEAT } from './edtInfo.js';
 import { pageFields, fieldsHeading, fieldsFooter, TABLE_FIELD_PAGE_SIZE } from '../../utils/payloadBudget.js';
@@ -161,8 +161,8 @@ function indexedFieldSize(db: any, edtName: string): string {
  * resolving here as if it still existed ("Served from symbol index"), and
  * generate_object(scaffold) trusted that phantom hit to bind a new form's
  * datasource, producing a form that references a table with no file on disk —
- * 4 build errors ("Table '<Name>' does not exist"). Guard against a stale row by
- * checking the indexed filePath actually still exists before trusting the hit;
+ * 4 build errors ("Table '<Name>' does not exist"). Guard against a stale row with
+ * the shared rule (indexedPathIsMissing) before trusting the hit;
  * a stale entry is treated the same as "not found" so the caller's disk-scan
  * fallback (or the final not-found error, which now hints at re-indexing) applies.
  */
@@ -184,7 +184,8 @@ async function buildTableResponseFromDb(
   // Only a file deleted from THIS machine makes the row stale. A path that simply
   // is not here (the shipped index records build-agent paths) is not evidence of
   // anything — rejecting it made every standard table "not found" without the bridge.
-  if (tableSym.filePath && await indexedFileDeletedHere(tableSym.filePath)) {
+  // Same rule as every other index reader and search's stale-row marking.
+  if (tableSym.filePath && await indexedPathIsMissing(tableSym.filePath)) {
     console.error(
       `[tableInfo] Stale symbol-index entry for table '${tableSym.name}' — indexed file ` +
       `'${tableSym.filePath}' no longer exists on disk (likely rolled back/deleted since ` +

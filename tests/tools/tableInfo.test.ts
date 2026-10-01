@@ -29,6 +29,7 @@ vi.mock('../../src/tools/write/modifyD365File', () => ({
 vi.mock('../../src/utils/metadataResolver', async (orig) => ({
   ...(await orig<any>()),
   remapDbPathLocally: vi.fn(async () => null), // no local packages root
+  resolveDbPathLocally: vi.fn(async () => null),
 }));
 
 vi.mock('../../src/utils/symbolLookup', async (orig) => ({
