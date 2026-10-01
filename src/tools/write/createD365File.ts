@@ -7,6 +7,8 @@ import * as fs from 'fs/promises';
 import { directXmlSetIndexValidTimeState, coerceNoYesFlag } from './directXmlWriters.js';
 import { writeFileAtomic } from '../../utils/atomicFileWrite.js';
 import { XmlTemplateGenerator } from '../xml/xmlTemplateGenerator.js';
+import { findIgnoredEntityProperties, stagingTableNote } from '../xml/dataEntityXml.js';
+import { fieldPropertiesFromSpecs, applyFieldPropertyPatches } from '../xml/tableFieldPropertyEdit.js';
 import * as path from 'path';
 import type { CallToolRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -349,6 +351,8 @@ export function normalizeFieldSpecsForBridge(
   return fields.map((f) => {
     let fieldType = f.type ?? f.fieldType;
     if (typeof fieldType === 'string') fieldType = fieldType.replace(/^AxTableField/, '');
+    // enumType alone is the type: without it the bridge writes an AxTableFieldString with an <EnumType>.
+    if ((fieldType == null || fieldType === '') && f.enumType) fieldType = 'Enum';
     const out: Record<string, unknown> = { name: f.name };
     if (fieldType != null && fieldType !== '') out.type = fieldType;
     if (f.edt != null) out.edt = f.edt;
@@ -580,6 +584,21 @@ export function sourceAsWritten(sourceCode: string | undefined, finalObjectName:
   }
 }
 
+/** Notes for a data-entity create: `properties` keys it did not read, and the staging table it did not create. */
+function dataEntityCreateNotes(objectType: string, properties: unknown, entityName: string): string {
+  if (objectType !== 'data-entity') return '';
+  const props = properties as Record<string, any> | undefined;
+  const ignored = findIgnoredEntityProperties(props);
+  return (
+    (ignored.length
+      ? `\n⚠️ ${ignored.length} property key(s) were NOT written — the data-entity generator does not read: ` +
+        `${ignored.join(', ')}. Anything else can be set afterwards with modify (modify-property / ` +
+        `add-data-source / add-field).`
+      : '') +
+    stagingTableNote(entityName, props)
+  );
+}
+
 /**
  * Warn, on an extensible enum create, that xppc allows only equality on it.
  *
@@ -620,10 +639,24 @@ async function reconcileCreatedTableProperties(
   try {
     const onDisk = await fs.readFile(filePath, 'utf-8');
     const reconciled = reconcileTableCreateProperties(onDisk, properties as Record<string, unknown>);
-    if (reconciled.patched.length > 0) {
-      await writeFileAtomic(filePath, normalizeD365Xml(reconciled.xml));
+    // AllowEdit / IgnoreEDTRelation have no key in the bridge's create payload: applied to the XML on top of the reconcile.
+    const fieldSpecs = (properties as Record<string, unknown>).fields;
+    const fieldPatches = Array.isArray(fieldSpecs)
+      ? fieldPropertiesFromSpecs(fieldSpecs as Array<Record<string, unknown>>)
+      : [];
+    let fieldNote = '';
+    let finalXml = reconciled.xml;
+    if (fieldPatches.length > 0) {
+      const applied = applyFieldPropertyPatches(finalXml.replace(/\r\n/g, '\n'), fieldPatches);
+      finalXml = applied.xml;
+      if (applied.failed.length > 0) {
+        fieldNote = `\n⚠️ Field properties NOT applied: ${applied.failed.join('; ')}`;
+      }
     }
-    return renderTableCreateHonestyReport(reconciled);
+    if (reconciled.patched.length > 0 || fieldPatches.length > 0) {
+      await writeFileAtomic(filePath, normalizeD365Xml(finalXml));
+    }
+    return renderTableCreateHonestyReport(reconciled) + fieldNote;
   } catch (e) {
     console.error(`[create_d365fo_file] table property reconcile skipped: ${e}`);
     return '';
@@ -2179,6 +2212,7 @@ export async function handleCreateD365File(
             rawLabelBpWarning(args.properties, finalObjectName) +
             labelAutoNote +
             extensibleEnumOrderingWarning(args.objectType, args.properties, finalObjectName) +
+            dataEntityCreateNotes(args.objectType, args.properties, finalObjectName) +
             projectMessage +
             verifyNote +
             indexNote +
