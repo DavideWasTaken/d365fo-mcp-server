@@ -28,6 +28,16 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Fixed
+- **A source changed while a build was running no longer comes back as
+  compiled.** Whether a finished build result still describes the disk was
+  measured from when the build *ended* — written only after runtime metadata
+  regeneration (and the AOS restart, when asked for). A file edited during
+  the compile or the "finalizing" phase (~40 s on a real VM) was older than
+  that, so the next call collected "✅ Build succeeded" for sources xppc never
+  saw. It is now measured from when the build started; the build's own
+  outputs (`bin`, `XppMetadata`, and labelc's `Resources`) are not counted.
+
 ## [1.19.1] — 2026-09-30
 
 ### Fixed
