@@ -238,7 +238,7 @@ export function suggestedExtensionName(
   const prefix = resolveObjectPrefix(activeModel);
   if (!prefix) return null;
   return baseType === 'class'
-    ? applyObjectPrefix(`${baseObject}_Extension`, prefix, activeModel)
+    ? applyObjectPrefix(`${baseObject}_Extension`, prefix, activeModel, { knownBase: true })
     : applyObjectPrefix(`${baseObject}.Extension`, prefix, activeModel);
 }
 

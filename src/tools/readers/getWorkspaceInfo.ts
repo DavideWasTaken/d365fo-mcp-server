@@ -236,7 +236,9 @@ export async function getWorkspaceInfoTool(
   const extClassNamingStyle = getExtensionClassNamingStyle();
   const sampleClassExt = extClassNamingStyle === 'model-name' && writeModelToken
     ? `CustTable_${writeModelToken}_Extension`
-    : `CustTable${extInfix}_Extension`;
+    : extClassNamingStyle === 'prefix-leading'
+      ? `${extInfix}CustTable_Extension`
+      : `CustTable${extInfix}_Extension`;
   const sampleElemExt = extNamingStyle === 'model-name' && writeModelToken
     ? `CustTable.${writeModelToken}`
     : `CustTable.${extInfix}Extension`;
