@@ -26,7 +26,12 @@ import { buildSuppressionXml } from '../../knowledge/bpMonikers/index.js';
 import { upsertAxTableProperty, AX_TABLE_NON_EXISTENT_PROPERTIES } from '../../utils/axTablePropertyOrder.js';
 import { upsertAxFormDesignProperty } from '../../utils/axFormDesignProperties.js';
 import { buildAxDataEntityViewFieldXml } from '../xml/dataEntityViewExtensionXml.js';
+import {
+  upsertDataEntityProperty, addDataEntityDataSource, addDataEntityMappedField,
+  type EntityDataSourceSpec, type EntityMappedFieldSpec,
+} from '../xml/dataEntityViewEdit.js';
 import { escapeXml } from '../../utils/xmlEscape.js';
+import { upsertTableFieldProperty } from '../xml/tableFieldPropertyEdit.js';
 import {
   addModuleReference, removeModuleReference, parseModuleReferences, invalidateModelVisibility,
 } from '../../metadata/modelDescriptor.js';
@@ -168,6 +173,31 @@ export const directXmlModifyProperty = serializedOnFile(async (
       return {
         success: true,
         message: `✅ Form Design property '${tagName}'='${propertyValue}' set via direct XML (the bridge does not support modify-property for forms). File: ${filePath}`,
+      };
+    }
+
+    // Entity properties: the element is usually absent (defaults are omitted) and names like
+    // Label recur inside fields, so the generic whole-file match below cannot serve them.
+    if (/<AxDataEntityView[\s>]/.test(content)) {
+      // tagName is the last segment: "Fields.X.Label" would otherwise rewrite the entity's own Label.
+      if (/[./]/.test(propertyPath)) {
+        return {
+          success: false,
+          message:
+            `❌ '${propertyPath}' is a nested path; this writer sets one top-level entity property ` +
+            `(e.g. "Label") — nothing was written.`,
+        };
+      }
+      const edited = upsertDataEntityProperty(content.replace(/\r\n/g, '\n'), tagName, String(propertyValue));
+      if (!edited.ok) {
+        return { success: false, message: `❌ ${edited.message} — nothing was written.` };
+      }
+      await writeFileAtomic(filePath, normalizeD365Xml(edited.xml!));
+      return {
+        success: true,
+        message:
+          `✅ Entity property '${tagName}'='${propertyValue}' set via direct XML (${edited.message}, ` +
+          `in canonical AxDataEntityView element order). File: ${filePath}`,
       };
     }
 
@@ -2032,5 +2062,90 @@ export const directXmlRemoveModuleReference = serializedOnFile(async (
       message:
         `❌ Could not remove the module reference from ${filePath}: ${err instanceof Error ? err.message : err}`,
     };
+  }
+});
+
+/** add-data-source on a data-entity: an embedded, joined query datasource (no bridge operation exists). */
+export const directXmlAddDataEntityDataSource = serializedOnFile(async (
+  filePath: string,
+  spec: EntityDataSourceSpec,
+): Promise<{ success: boolean; message: string } | null> => {
+  try {
+    const raw = await fs.readFile(filePath, 'utf-8');
+    const content = raw.replace(/^﻿/, '').replace(/\r\n/g, '\n');
+    if (!/<AxDataEntityView[\s>]/.test(content)) return null;
+    const r = addDataEntityDataSource(content, spec);
+    if (!r.ok) return { success: false, message: `❌ add-data-source: ${r.message} — nothing was written.` };
+    await writeFileAtomic(filePath, normalizeD365Xml(r.xml!));
+    return {
+      success: true,
+      message:
+        `✅ Datasource '${spec.name}' (${spec.table}, ${spec.joinMode ?? 'InnerJoin'} on ` +
+        `${spec.joinSource ?? 'the root datasource'}.${spec.joinField} = ${spec.name}.${spec.relatedField}) ` +
+        `added to the entity query via direct XML. Map its fields with add-field ` +
+        `(dataField + dataSource="${spec.name}"). File: ${filePath}`,
+    };
+  } catch (err) {
+    console.error(`[modify_d365fo_file] directXmlAddDataEntityDataSource failed: ${err}`);
+    return null;
+  }
+});
+
+/** add-field on a data-entity: one mapped field bound to an existing datasource of its query. */
+export const directXmlAddDataEntityField = serializedOnFile(async (
+  filePath: string,
+  spec: EntityMappedFieldSpec,
+): Promise<{ success: boolean; message: string } | null> => {
+  try {
+    const raw = await fs.readFile(filePath, 'utf-8');
+    const content = raw.replace(/^﻿/, '').replace(/\r\n/g, '\n');
+    if (!/<AxDataEntityView[\s>]/.test(content)) return null;
+    const known = [...content.matchAll(/<(?:AxQuerySimpleRootDataSource|AxQuerySimpleEmbeddedDataSource)>\s*<Name>([^<]+)<\/Name>/g)]
+      .map(m => m[1]);
+    if (!known.includes(spec.dataSource)) {
+      return {
+        success: false,
+        message:
+          `❌ add-field: the entity has no datasource '${spec.dataSource}' (have: ${known.join(', ') || 'none'}). ` +
+          `Add it first with add-data-source — nothing was written.`,
+      };
+    }
+    const r = addDataEntityMappedField(content, spec);
+    if (!r.ok) return { success: false, message: `❌ add-field: ${r.message} — nothing was written.` };
+    await writeFileAtomic(filePath, normalizeD365Xml(r.xml!));
+    return {
+      success: true,
+      message:
+        `✅ Mapped field '${spec.name}' (${spec.dataSource}.${spec.dataField}) added to the entity via direct XML. ` +
+        `File: ${filePath}`,
+    };
+  } catch (err) {
+    console.error(`[modify_d365fo_file] directXmlAddDataEntityField failed: ${err}`);
+    return null;
+  }
+});
+
+/** modify-field AllowEdit / IgnoreEDTRelation, written to the XML; writes nothing when the field is absent. */
+export const directXmlSetTableFieldProperties = serializedOnFile(async (
+  filePath: string,
+  fieldName: string,
+  props: Record<string, string>,
+): Promise<{ success: boolean; message: string } | null> => {
+  try {
+    const raw = await fs.readFile(filePath, 'utf-8');
+    let content = raw.replace(/^﻿/, '').replace(/\r\n/g, '\n');
+    if (!/<AxTable(Extension)?[\s>]/.test(content)) return null;
+    const done: string[] = [];
+    for (const [prop, value] of Object.entries(props)) {
+      const r = upsertTableFieldProperty(content, fieldName, prop, value);
+      if (!r.ok) return { success: false, message: `❌ modify-field: ${r.message} — nothing was written.` };
+      content = r.xml!;
+      done.push(r.message);
+    }
+    await writeFileAtomic(filePath, normalizeD365Xml(content));
+    return { success: true, message: `✅ Field property set via direct XML (canonical order): ${done.join(', ')}. File: ${filePath}` };
+  } catch (err) {
+    console.error(`[modify_d365fo_file] directXmlSetTableFieldProperties failed: ${err}`);
+    return null;
   }
 });
