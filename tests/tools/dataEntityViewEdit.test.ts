@@ -83,4 +83,51 @@ describe('addDataEntityMappedField', () => {
     const a = addDataEntityMappedField(base(), { name: 'X', dataField: 'F', dataSource: 'AssetTrans' });
     expect(addDataEntityMappedField(a.xml!, { name: 'X', dataField: 'F', dataSource: 'AssetTrans' }).ok).toBe(false);
   });
+  // fieldMandatory is a boolean on the tool surface and arrives as String(bool): "true" is not
+  // a NoYes value (shipped entities carry only Yes / No).
+  it('writes Mandatory as Yes / No, whatever boolean spelling it is given', () => {
+    const yes = addDataEntityMappedField(base(), { name: 'X', dataField: 'F', dataSource: 'AssetTrans', mandatory: String(true) });
+    expect(yes.xml).toContain('<Mandatory>Yes</Mandatory>');
+    expect(yes.xml).not.toContain('<Mandatory>true</Mandatory>');
+    const no = addDataEntityMappedField(base(), { name: 'X', dataField: 'F', dataSource: 'AssetTrans', mandatory: 'false' });
+    expect(no.xml).toContain('<Mandatory>No</Mandatory>');
+    expect(addDataEntityMappedField(base(), { name: 'X', dataField: 'F', dataSource: 'AssetTrans', mandatory: 'maybe' }).ok).toBe(false);
+  });
+});
+
+describe('EntityCategory on the XML path', () => {
+  it('normalises a known value and refuses one outside the enum', () => {
+    const ok = upsertDataEntityProperty(base(), 'EntityCategory', 'reference');
+    expect(ok.xml).toContain('<EntityCategory>Reference</EntityCategory>');
+    const bad = upsertDataEntityProperty(base(), 'EntityCategory', 'Masterr');
+    expect(bad.ok).toBe(false);
+    expect(bad.message).toContain('Master, Configuration, Transaction, Reference, Document, Parameters');
+  });
+});
+
+// About 2% of shipped metadata is indented with two spaces instead of tabs.
+describe('space-indented documents', () => {
+  const spaced = () => base().replace(/^\t+/gm, tabs => '  '.repeat(tabs.length));
+  const spacedOrder = (xml: string) => [...xml.matchAll(/^ {2}<(\w+)[ />]/gm)].map(m => m[1]);
+
+  it('inserts an entity property at one indent unit, in canonical order', () => {
+    const r = upsertDataEntityProperty(spaced(), 'PrimaryCompanyContext', 'DataAreaId');
+    expect(r.ok).toBe(true);
+    expect(r.xml).toContain('\n  <PrimaryCompanyContext>DataAreaId</PrimaryCompanyContext>\n');
+    const o = spacedOrder(r.xml!);
+    expect(o.indexOf('PrimaryCompanyContext')).toBeLessThan(o.indexOf('PrimaryKey'));
+    expect(r.xml).not.toContain('\t');
+  });
+  it('adds a datasource under the root datasource and a mapped field to the top-level Fields', () => {
+    const ds = addDataEntityDataSource(spaced(), {
+      name: 'DefaultDimensionDAVS', table: 'DimensionSetEntity', joinMode: 'OuterJoin',
+      joinField: 'DefaultDimension', relatedField: 'RecId',
+    });
+    expect(ds.ok).toBe(true);
+    expect(ds.xml).toMatch(/\n {6}<AxQuerySimpleRootDataSource>[\s\S]*\n {8}<DataSources>\n {10}<AxQuerySimpleEmbeddedDataSource>\n {12}<Name>DefaultDimensionDAVS<\/Name>/);
+    const f = addDataEntityMappedField(ds.xml!, { name: 'DisplayValue', dataField: 'DisplayValue', dataSource: 'DefaultDimensionDAVS' });
+    expect(f.ok).toBe(true);
+    expect(f.xml).toMatch(/\n {4}<AxDataEntityViewField xmlns=""\n {6}i:type="AxDataEntityViewMappedField">\n {6}<Name>DisplayValue<\/Name>/);
+    expect(f.xml).not.toContain('\t');
+  });
 });

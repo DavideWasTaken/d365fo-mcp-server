@@ -2121,7 +2121,7 @@ export const directXmlAddDataEntityField = serializedOnFile(async (
   }
 });
 
-/** modify-field properties the bridge has no key for; writes nothing when the field is absent. */
+/** modify-field AllowEdit / IgnoreEDTRelation, written to the XML; writes nothing when the field is absent. */
 export const directXmlSetTableFieldProperties = serializedOnFile(async (
   filePath: string,
   fieldName: string,

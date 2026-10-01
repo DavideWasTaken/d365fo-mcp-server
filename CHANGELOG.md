@@ -29,15 +29,16 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Added
-- **Edit an existing data entity in place, and set two table-field properties the bridge
-  could not.** `d365fo_file(action="modify", objectType="data-entity")` now supports
+- **Edit an existing data entity in place, and set AllowEdit and IgnoreEDTRelation on
+  table fields.** `d365fo_file(action="modify", objectType="data-entity")` now supports
   `modify-property` for `ConfigurationKey`, `PrimaryCompanyContext`, `CountryRegionCodes`,
   `SingularLabel` and the Yes/No entity properties (`IsObsolete`, `AllowArchival`,
   `AutoCreateDataverse`, `EnableSetBasedSqlOperations`, `ValidTimeStateEnabled`, alongside the
   ones the bridge already handled). It writes one top-level property per call, in the
   serialised element order measured over shipped entities. A nested path is refused, and
   `Modules`, `OperationalDomain` and `SubscriberAccessLevel` are refused because their values
-  are not validated here. `add-data-source` adds an embedded, joined query datasource
+  are not validated here; `EntityCategory` must be one of the enum's values. Space-indented
+  entity and table files are edited too. `add-data-source` adds an embedded, joined query datasource
   (`joinField`, `relatedField`, `linkType`, `dataSourceReadOnly`) and `add-field` a mapped
   field (`dataField` + `dataSource`). These used to fail with "Unknown AxDataEntityView
   property" / "add-data-source not supported for objectType 'data-entity'" and ended in a

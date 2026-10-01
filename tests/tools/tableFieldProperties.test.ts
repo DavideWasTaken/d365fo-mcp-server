@@ -65,6 +65,14 @@ describe('upsertTableFieldProperty', () => {
     const r = upsertTableFieldProperty(TABLE, 'Other', 'IgnoreEDTRelation', 'Yes');
     expect(r.xml).toMatch(/<Name>Other<\/Name>\s*<ExtendedDataType>Name<\/ExtendedDataType>\s*<IgnoreEDTRelation>Yes/);
   });
+  it('a space-indented table (about 2% of shipped metadata) is edited at its own indentation', () => {
+    const spaced = TABLE.replace(/^\t+/gm, tabs => '  '.repeat(tabs.length));
+    const r = upsertTableFieldProperty(spaced, 'AssetId', 'AllowEdit', 'No');
+    expect(r.ok).toBe(true);
+    expect(r.xml).toContain('\n      <Name>AssetId</Name>\n      <AllowEdit>No</AllowEdit>\n      <ExtendedDataType>');
+    expect(r.xml).not.toContain('\t');
+    expect(r.xml!.slice(r.xml!.indexOf('<Name>Other</Name>'))).not.toContain('AllowEdit');
+  });
   it('unknown field / property refused', () => {
     expect(upsertTableFieldProperty(TABLE, 'Nope', 'AllowEdit', 'No').ok).toBe(false);
     expect(upsertTableFieldProperty(TABLE, 'AssetId', 'Mandatory2', 'No').ok).toBe(false);

@@ -1,6 +1,7 @@
 /**
- * Field properties the C# bridge has no key for (AllowEdit, IgnoreEDTRelation), written
- * to the table XML. AllowEdit=No clears BPErrorTablePrimaryKeyEditable on staging key
+ * AllowEdit and IgnoreEDTRelation on a table field, written to the table XML. The bridge's
+ * create payload has no key for either, and its modify-field reads allowEdit but not
+ * IgnoreEDTRelation; writing both here keeps one path that also works without the bridge. AllowEdit=No clears BPErrorTablePrimaryKeyEditable on staging key
  * fields; IgnoreEDTRelation=Yes clears BPErrorEDTNotMigrated on fields whose EDT has a relation.
  *
  * Sub-element order was measured over the fields of a real repo (no two files disagree):
@@ -30,6 +31,16 @@ export interface FieldEditResult {
   message: string;
 }
 
+/**
+ * The document's indent unit, read from the first child of the root element. Shipped
+ * metadata is tab-indented, but about 2% of it uses two spaces; an edit anchored on a
+ * hard-coded tab would find nothing in those files.
+ */
+export function detectIndentUnit(xml: string): string {
+  const m = /^<Ax\w+\b[^>]*>\r?\n([ \t]+)</m.exec(xml);
+  return m ? m[1] : '\t';
+}
+
 /** true/"yes" → Yes, false/"no" → No, anything else → undefined. */
 export const yesNo = (v: unknown): 'Yes' | 'No' | undefined => {
   if (v === true || (typeof v === 'string' && /^(yes|true)$/i.test(v.trim()))) return 'Yes';
@@ -52,15 +63,18 @@ export function upsertTableFieldProperty(
   if (!v) return { ok: false, message: `${canonical} takes Yes or No, not '${value}'.` };
 
   const esc = fieldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const u = detectIndentUnit(xml);
+  const u2 = u.repeat(2);
+  const u3 = u.repeat(3);
   const field = new RegExp(
-    `^(\\t\\t<AxTableField\\b[^>]*>\\n)((?:\\t\\t\\t[^\\n]*\\n)*?\\t\\t\\t<Name>${esc}</Name>\\n(?:\\t\\t\\t[^\\n]*\\n)*?)(\\t\\t</AxTableField\\w*>)`,
+    `^(${u2}<AxTableField\\b[^>]*>\\n)((?:${u3}[^\\n]*\\n)*?${u3}<Name>${esc}</Name>\\n(?:${u3}[^\\n]*\\n)*?)(${u2}</AxTableField\\w*>)`,
     'm',
   ).exec(xml);
   if (!field) return { ok: false, message: `field '${fieldName}' not found in the table` };
 
   const body = field[2];
-  const element = `\t\t\t<${canonical}>${escapeXml(v)}</${canonical}>\n`;
-  const existing = new RegExp(`^\\t\\t\\t<${canonical}>[^<]*</${canonical}>\\n`, 'm');
+  const element = `${u3}<${canonical}>${escapeXml(v)}</${canonical}>\n`;
+  const existing = new RegExp(`^${u3}<${canonical}>[^<]*</${canonical}>\\n`, 'm');
   let newBody: string;
   if (existing.test(body)) {
     newBody = body.replace(existing, () => element);
@@ -74,7 +88,7 @@ export function upsertTableFieldProperty(
     const mine = rank(canonical);
     let at = lines.length - 1; // default: after the last element (lines ends with '')
     for (let i = 0; i < lines.length; i++) {
-      const m = /^\t\t\t<(\w+)[ />]/.exec(lines[i]);
+      const m = new RegExp(`^${u3}<(\\w+)[ />]`).exec(lines[i]);
       if (m && rank(m[1]) > mine) { at = i; break; }
     }
     lines.splice(at, 0, element.replace(/\n$/, ''));

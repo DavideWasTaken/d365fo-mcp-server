@@ -614,7 +614,7 @@ export const D365FO_FILE_OP_SPECS: Record<string, D365FileOpSpec> = {
       'fields, BPErrorTablePrimaryKeyEditable); fieldIgnoreEdtRelation=true writes ' +
       '<IgnoreEDTRelation>Yes</IgnoreEDTRelation> (a field whose EDT has a relation, ' +
       'BPErrorEDTNotMigrated / BPUpgradeMetadataEDTRelation). Both are written by this server in ' +
-      'canonical element order, since the bridge has no key for them; create accepts the same as ' +
+      'canonical element order (also without the bridge); create accepts the same as ' +
       'fields[].allowEdit / fields[].ignoreEdtRelation.',
   },
   'rename-field': {

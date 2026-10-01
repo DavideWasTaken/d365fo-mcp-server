@@ -6,11 +6,16 @@
  *
  * Element order matters: the deserializer drops a mis-ordered element silently, and an
  * element missing from the order table lets a new property land on the wrong side of it.
+ *
+ * Every edit is anchored on the file's indent unit (detectIndentUnit): an element's depth is
+ * read from its indentation, which is what keeps an edit off a nested collection of the same
+ * name. Shipped metadata is tab-indented; about 2% of it uses two spaces.
  */
 
 import { escapeXml } from '../../utils/xmlEscape.js';
+import { ENTITY_CATEGORIES } from '../../utils/axEnumProperties.js';
 import { buildAxDataEntityViewFieldXml } from './dataEntityViewExtensionXml.js';
-import { yesNo } from './tableFieldPropertyEdit.js';
+import { yesNo, detectIndentUnit } from './tableFieldPropertyEdit.js';
 
 /**
  * Top-level elements of an AxDataEntityView in serialised order, measured over the ~5,800
@@ -60,10 +65,10 @@ function isEntity(xml: string): boolean {
   return /<AxDataEntityView[\s>]/.test(xml);
 }
 
-/** Top-level (one tab) element lines, with their offsets. */
-function topLevelElements(xml: string): Array<{ name: string; index: number }> {
+/** Top-level (one indent unit) element lines, with their offsets. */
+function topLevelElements(xml: string, u: string): Array<{ name: string; index: number }> {
   const out: Array<{ name: string; index: number }> = [];
-  const re = /^\t<(\w+)(?:\s[^>]*)?(?:\/>|>)/gm;
+  const re = new RegExp(`^${u}<(\\w+)(?:\\s[^>]*)?(?:/>|>)`, 'gm');
   let m: RegExpExecArray | null;
   while ((m = re.exec(xml))) out.push({ name: m[1], index: m.index });
   return out;
@@ -90,22 +95,30 @@ export function upsertDataEntityProperty(xml: string, name: string, value: strin
     if (!v) return fail(`${canonical} takes Yes or No, not '${value}'.`);
     written = v;
   }
+  // EntityCategory is an enum: a value outside it is one the deserializer cannot read.
+  // Empty is let through: it means "back to the default", and the caller drops the element.
+  if (canonical === 'EntityCategory' && value.trim() !== '') {
+    const v = ENTITY_CATEGORIES.find(c => c.toLowerCase() === value.trim().toLowerCase());
+    if (!v) return fail(`EntityCategory takes one of ${ENTITY_CATEGORIES.join(', ')}, not '${value}'.`);
+    written = v;
+  }
+  const u = detectIndentUnit(xml);
   const text = `<${canonical}>${escapeXml(written)}</${canonical}>`;
 
   // Existing element (leaf or empty): replace in place.
-  const existing = new RegExp(`^\\t<${canonical}(?:>[^<]*</${canonical}>|\\s*/>)`, 'm');
+  const existing = new RegExp(`^${u}<${canonical}(?:>[^<]*</${canonical}>|\\s*/>)`, 'm');
   if (existing.test(xml)) {
-    return { ok: true, xml: xml.replace(existing, () => `\t${text}`), message: `${canonical} updated` };
+    return { ok: true, xml: xml.replace(existing, () => `${u}${text}`), message: `${canonical} updated` };
   }
 
   // Insert before the first top-level element that belongs AFTER this one.
   const rank = (n: string) => ENTITY_TOP_LEVEL_ORDER.indexOf(n as never);
   const mine = rank(canonical);
-  const later = topLevelElements(xml).find(e => rank(e.name) > mine);
+  const later = topLevelElements(xml, u).find(e => rank(e.name) > mine);
   if (!later) return fail('could not find an insertion point (no collections in the document)');
   return {
     ok: true,
-    xml: `${xml.slice(0, later.index)}\t${text}\n${xml.slice(later.index)}`,
+    xml: `${xml.slice(0, later.index)}${u}${text}\n${xml.slice(later.index)}`,
     message: `${canonical} inserted`,
   };
 }
@@ -159,7 +172,11 @@ export function addDataEntityDataSource(xml: string, spec: EntityDataSourceSpec)
   if (vm < 0) return fail('the entity has no <ViewMetadata> query (it is an inert skeleton)');
   const query = xml.slice(vm);
 
-  const dsElement = /^(\t+)<(AxQuerySimpleRootDataSource|AxQuerySimpleEmbeddedDataSource)>\n\t+<Name>([^<]+)<\/Name>/gm;
+  const u = detectIndentUnit(xml);
+  const dsElement = new RegExp(
+    `^((?:${u})+)<(AxQuerySimpleRootDataSource|AxQuerySimpleEmbeddedDataSource)>\\n(?:${u})+<Name>([^<]+)</Name>`,
+    'gm',
+  );
   const sources: Array<{ name: string; indent: string; index: number }> = [];
   let m: RegExpExecArray | null;
   while ((m = dsElement.exec(query))) sources.push({ name: m[3], indent: m[1], index: vm + m.index });
@@ -168,7 +185,7 @@ export function addDataEntityDataSource(xml: string, spec: EntityDataSourceSpec)
     return fail(`datasource '${spec.name}' already exists on this entity`);
   }
 
-  const root = sources.find(s => s.indent === '\t\t\t') ?? sources[0];
+  const root = sources.find(s => s.indent === u.repeat(3)) ?? sources[0];
   const parent = spec.joinSource ? sources.find(s => s.name === spec.joinSource) : root;
   if (!parent) {
     return fail(`joinSource '${spec.joinSource}' is not a datasource of this entity (have: ${sources.map(s => s.name).join(', ')}).`);
@@ -176,14 +193,13 @@ export function addDataEntityDataSource(xml: string, spec: EntityDataSourceSpec)
 
   // The parent's OWN <DataSources>, found by exact indentation so a nested one is never taken.
   const pi = parent.indent;
-  const childIndent = `${pi}\t\t`;
   const after = xml.slice(parent.index);
-  const own = new RegExp(`^${pi}\\t<DataSources(?: />|>)`, 'm').exec(after);
+  const own = new RegExp(`^${pi}${u}<DataSources(?: />|>)`, 'm').exec(after);
   if (!own) return fail(`could not find the <DataSources> of '${parent.name}'`);
   const ownAt = parent.index + own.index;
 
-  const t = (n: number) => '\t'.repeat(n);
-  const depth = childIndent.length; // tabs
+  const t = (n: number) => u.repeat(n);
+  const depth = pi.length / u.length + 2; // indent units: parent > DataSources > new datasource
   const lines = [
     `${t(depth)}<AxQuerySimpleEmbeddedDataSource>`,
     `${t(depth + 1)}<Name>${escapeXml(spec.name)}</Name>`,
@@ -210,10 +226,10 @@ export function addDataEntityDataSource(xml: string, spec: EntityDataSourceSpec)
   let updated: string;
   if (own[0].endsWith('/>')) {
     updated =
-      `${xml.slice(0, ownAt)}${pi}\t<DataSources>\n${lines}\n${pi}\t</DataSources>` +
+      `${xml.slice(0, ownAt)}${pi}${u}<DataSources>\n${lines}\n${pi}${u}</DataSources>` +
       `${xml.slice(ownAt + openLen)}`;
   } else {
-    const closeRe = new RegExp(`^${pi}\\t</DataSources>`, 'm');
+    const closeRe = new RegExp(`^${pi}${u}</DataSources>`, 'm');
     const rest = xml.slice(ownAt + openLen);
     const close = closeRe.exec(rest);
     if (!close) return fail(`unbalanced <DataSources> under '${parent.name}'`);
@@ -239,21 +255,29 @@ export function addDataEntityMappedField(xml: string, spec: EntityMappedFieldSpe
   if (new RegExp(`<AxDataEntityViewField\\b[^>]*>\\s*<Name>${esc}</Name>`).test(xml)) {
     return fail(`field '${spec.name}' already exists on this entity`);
   }
+  // A Mandatory that is not Yes/No is a value the NoYes deserializer cannot read.
+  let mandatory: string | undefined;
+  if (spec.mandatory !== undefined) {
+    mandatory = yesNo(spec.mandatory);
+    if (!mandatory) return fail(`Mandatory takes Yes or No, not '${spec.mandatory}'.`);
+  }
+  const u = detectIndentUnit(xml);
+  // The builder indents with tabs; re-indent it in the file's own unit (it carries no CDATA).
   const element = buildAxDataEntityViewFieldXml({
     name: spec.name, dataField: spec.dataField, dataSource: spec.dataSource,
-    label: spec.label, accessModifier: spec.accessModifier, mandatory: spec.mandatory,
-  });
-  const empty = /^\t<Fields \/>/m.exec(xml);
+    label: spec.label, accessModifier: spec.accessModifier, mandatory,
+  }).replace(/^\t+/gm, tabs => u.repeat(tabs.length));
+  const empty = new RegExp(`^${u}<Fields />`, 'm').exec(xml);
   if (empty) {
     return {
       ok: true,
-      xml: `${xml.slice(0, empty.index)}\t<Fields>\n${element}\n\t</Fields>${xml.slice(empty.index + empty[0].length)}`,
+      xml: `${xml.slice(0, empty.index)}${u}<Fields>\n${element}\n${u}</Fields>${xml.slice(empty.index + empty[0].length)}`,
       message: `field ${spec.name} added`,
     };
   }
-  const open = /^\t<Fields>\n/m.exec(xml);
+  const open = new RegExp(`^${u}<Fields>\\n`, 'm').exec(xml);
   if (!open) return fail('the entity has no top-level <Fields> collection');
-  const close = /^\t<\/Fields>/m.exec(xml.slice(open.index));
+  const close = new RegExp(`^${u}</Fields>`, 'm').exec(xml.slice(open.index));
   if (!close) return fail('unbalanced <Fields>');
   const at = open.index + close.index;
   return { ok: true, xml: `${xml.slice(0, at)}${element}\n${xml.slice(at)}`, message: `field ${spec.name} added` };

@@ -584,16 +584,6 @@ export function sourceAsWritten(sourceCode: string | undefined, finalObjectName:
   }
 }
 
-/**
- * Warn, on an extensible enum create, that xppc allows only equality on it.
- *
- * IsExtensible=Yes makes the numbering an implementation detail the compiler
- * refuses to expose: `<`, `>`, `<=`, `>=` is the hard error "Cannot use
- * extensible enumerated type '…' in non-equality comparison". Extensibility is
- * the right default, but ranking needs ordering, and only the build says so.
- *
- * Advisory: an extensible enum compared only with == is perfectly correct.
- */
 /** Notes for a data-entity create: `properties` keys it did not read, and the staging table it did not create. */
 function dataEntityCreateNotes(objectType: string, properties: unknown, entityName: string): string {
   if (objectType !== 'data-entity') return '';
@@ -609,6 +599,16 @@ function dataEntityCreateNotes(objectType: string, properties: unknown, entityNa
   );
 }
 
+/**
+ * Warn, on an extensible enum create, that xppc allows only equality on it.
+ *
+ * IsExtensible=Yes makes the numbering an implementation detail the compiler
+ * refuses to expose: `<`, `>`, `<=`, `>=` is the hard error "Cannot use
+ * extensible enumerated type '…' in non-equality comparison". Extensibility is
+ * the right default, but ranking needs ordering, and only the build says so.
+ *
+ * Advisory: an extensible enum compared only with == is perfectly correct.
+ */
 function extensibleEnumOrderingWarning(objectType: string, properties: unknown, enumName: string): string {
   if (objectType !== 'enum') return '';
   if (!(properties as Record<string, unknown> | undefined)?.isExtensible) return '';
@@ -639,7 +639,7 @@ async function reconcileCreatedTableProperties(
   try {
     const onDisk = await fs.readFile(filePath, 'utf-8');
     const reconciled = reconcileTableCreateProperties(onDisk, properties as Record<string, unknown>);
-    // AllowEdit / IgnoreEDTRelation have no bridge key: applied to the XML on top of the reconcile.
+    // AllowEdit / IgnoreEDTRelation have no key in the bridge's create payload: applied to the XML on top of the reconcile.
     const fieldSpecs = (properties as Record<string, unknown>).fields;
     const fieldPatches = Array.isArray(fieldSpecs)
       ? fieldPropertiesFromSpecs(fieldSpecs as Array<Record<string, unknown>>)

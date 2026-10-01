@@ -55,13 +55,16 @@ describe('entity property insertion next to elements shipped entities carry', ()
   });
   it('every writable property lands where the order table puts it, in a document holding all the others', () => {
     const rank = (n: string) => (ENTITY_TOP_LEVEL_ORDER as readonly string[]).indexOf(n);
+    const valueFor = (p: string) =>
+      p === 'EntityCategory' ? 'Reference'
+        : /^(Is|Allow|Auto|Enable|Supports|Valid|DataManagementEnabled)/.test(p) && !/Staging|Public(Coll|Ent)/.test(p) ? 'Yes' : 'x';
     for (const prop of ENTITY_SCALAR_PROPERTIES) {
       const others = [...ENTITY_SCALAR_PROPERTIES].filter(p => p !== prop);
       let xml = entity();
-      for (const p of others) xml = upsertDataEntityProperty(xml, p, /^(Is|Allow|Auto|Enable|Supports|Valid|DataManagementEnabled|AllowRow)/.test(p) && !/Staging|Public(Coll|Ent)/.test(p) ? 'Yes' : 'x').xml!;
+      for (const p of others) xml = upsertDataEntityProperty(xml, p, valueFor(p)).xml!;
       const before = topLevel(xml).filter(n => rank(n) >= 0);
       expect(before, `document before ${prop}`).toEqual([...before].sort((a, b) => rank(a) - rank(b)));
-      const after = topLevel(upsertDataEntityProperty(xml, prop, /^(Is|Allow|Auto|Enable|Supports|Valid|DataManagementEnabled)/.test(prop) && !/Staging|Public(Coll|Ent)/.test(prop) ? 'Yes' : 'x').xml!)
+      const after = topLevel(upsertDataEntityProperty(xml, prop, valueFor(prop)).xml!)
         .filter(n => rank(n) >= 0);
       expect(after, `after inserting ${prop}`).toEqual([...after].sort((a, b) => rank(a) - rank(b)));
     }

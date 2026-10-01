@@ -1,6 +1,6 @@
 /**
- * Dispatch glue for what the bridge cannot do on a data entity or a table field's XML-only
- * properties. Lives here because modifyD365File.ts is held to a line budget
+ * Dispatch glue for what the bridge cannot do on a data entity, and for the table-field
+ * properties written to the XML (AllowEdit / IgnoreEDTRelation). Lives here because modifyD365File.ts is held to a line budget
  * (tests/utils/layering.test.ts); the writers are in directXmlWriters.ts.
  */
 
@@ -57,7 +57,7 @@ export async function entityAddField(filePath: string, args: Args): Promise<OpRe
   return r ? viaXmlFallback(r) : null;
 }
 
-/** modify-field properties with no bridge key (AllowEdit / IgnoreEDTRelation), as XML property → value. */
+/** modify-field properties written to the XML (AllowEdit / IgnoreEDTRelation), as XML property → value. */
 export function xmlOnlyFieldProps(args: Args): Record<string, string> {
   const out: Record<string, string> = {};
   if (args.fieldAllowEdit !== undefined) out.AllowEdit = args.fieldAllowEdit ? 'Yes' : 'No';
@@ -81,8 +81,9 @@ export async function applyXmlOnlyFieldProps(
 }
 
 /**
- * modify-field: the params the bridge knows go through it; AllowEdit / IgnoreEDTRelation are
- * written to the XML afterwards. `bridge` is the context's bridge client.
+ * modify-field: the other field params go through the bridge; AllowEdit / IgnoreEDTRelation are
+ * written to the XML afterwards (the bridge reads allowEdit but not IgnoreEDTRelation, and the
+ * XML path also works without it). `bridge` is the context's bridge client.
  */
 export async function modifyFieldOp(
   bridge: Parameters<typeof bridgeModifyField>[0],
