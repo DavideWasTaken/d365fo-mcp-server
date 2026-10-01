@@ -980,6 +980,54 @@ describe('build_d365fo_project', () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
+  // dbSync:true syncs the PROJECT's tables (a full sync only without a project),
+  // so it covers a later table list only as far as that run actually reached.
+  describe('dbSync:true saved, a table list asked later', () => {
+    const buildThenAsk = async (syncedScope: unknown, ask: any) => {
+      syncMock.mockResolvedValue({ content: [{ type: 'text', text: 'Tables synced' }], syncedScope });
+      const child = makeFakeChild(42);
+      spawnMock.mockReturnValue(child);
+      allowPaths([PROJECT_PATH, XPPC, PKG]);
+      await buildProjectTool({ projectPath: PROJECT_PATH, wait: false, dbSync: true }, {});
+      await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+      const saved = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
+      serveState(saved);
+      readdirMock.mockResolvedValue([]);
+      return { saved: JSON.parse(saved), result: await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: ask }, {}) };
+    };
+
+    it('starts a new build for a table the project sync did not reach', async () => {
+      const { saved, result } = await buildThenAsk(['MyTable'], ['OtherTable']);
+      expect(saved.postBuild.sync.synced).toEqual(['MyTable']);
+      expect(result.content[0].text).toContain('started');
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('collects the saved result for a table the project sync did reach', async () => {
+      const { result } = await buildThenAsk(['MyTable'], ['mytable']);
+      expect(result.content[0].text).toContain('Collected');
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('collects the saved result when the sync was a full sync', async () => {
+      const { result } = await buildThenAsk('full', ['OtherTable']);
+      expect(result.content[0].text).toContain('Collected');
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts a new build when the saved state does not say what was synced', async () => {
+      const { result } = await buildThenAsk(undefined, ['OtherTable']);
+      expect(result.content[0].text).toContain('started');
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('collects the saved result for dbSync:true again — the same request', async () => {
+      const { result } = await buildThenAsk(['MyTable'], true);
+      expect(result.content[0].text).toContain('Collected');
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('summarizes a BP check too large for a build result and keeps the full text in a file', async () => {
     const finding = (i: number) =>
       `BPUpgradeCodeRecId: dynamics://Class/MyClass${i}/Method/run\nWarning AxClass [(1,1),(2,2)] Rule text ${i}`;
