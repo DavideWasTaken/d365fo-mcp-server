@@ -281,7 +281,13 @@ describe('#35 create table: properties.configurationKey must not vanish', () => 
 // ─── The reconciler itself ───────────────────────────────────────────────────
 
 describe('reconcileTableCreateProperties', () => {
-  const base = smartTableXmlAsWrittenByTheBridge('ConDemoGatedSetting');
+  const bridgeBase = smartTableXmlAsWrittenByTheBridge('ConDemoGatedSetting');
+  // With the SubscriberAccessLevel Visual Studio puts on a new table, which the
+  // reconcile otherwise adds — so a document it must leave alone already has it.
+  const base = bridgeBase.replace(
+    '\t<TableGroup>',
+    '\t<SubscriberAccessLevel>\n\t\t<Read>Allow</Read>\n\t</SubscriberAccessLevel>\n\t<TableGroup>',
+  );
 
   it('patches every string property the writer skipped, in canonical order', () => {
     const r = reconcileTableCreateProperties(base, {
@@ -385,5 +391,41 @@ describe('reconcileTableCreateProperties', () => {
     expect(renderTableCreateHonestyReport({
       xml: base, patched: [], unhonoured: [], droppedCollections: [],
     })).toBe('');
+  });
+});
+
+// ─── SubscriberAccessLevel (#1073) ───────────────────────────────────────────
+
+describe('create table: SubscriberAccessLevel as Visual Studio writes it', () => {
+  const createVia = (bridge: unknown, properties: Record<string, unknown>) =>
+    handleCreateD365File(
+      req({
+        objectType: 'table',
+        objectName: 'ConDemoGatedSetting',
+        modelName: 'Contoso',
+        packageName: 'Contoso',
+        packagePath: 'K:\\PackagesLocalDirectory',
+        addToProject: false,
+        properties,
+      }),
+      buildContext(bridge),
+    );
+
+  it('gives a table created by a bridge that writes none the Read=Allow VS puts on a new table', async () => {
+    const { bridge } = legacyBridge();
+    const result = await createVia(bridge, { label: 'Gated setting', tableGroup: 'Main' });
+    expect((result as any).isError).toBeFalsy();
+    const onDisk = files.get(TABLE_PATH)!.replace(/\r\n/g, '\n');
+    expect(onDisk).toMatch(/<Label>Gated setting<\/Label>\n\t<SubscriberAccessLevel>\n\t\t<Read>Allow<\/Read>\n\t<\/SubscriberAccessLevel>\n\t<TableGroup>/);
+    // The default is not a dropped property — nothing to report.
+    expect(result.content[0].text).not.toMatch(/Written after the create|DROPPED/);
+  });
+
+  it('writes a requested access level and reports that the writer dropped it', async () => {
+    const { bridge } = legacyBridge();
+    const result = await createVia(bridge, { label: 'Gated setting', subscriberAccessLevel: 'Read=Allow,Update=Deny' });
+    const onDisk = files.get(TABLE_PATH)!.replace(/\r\n/g, '\n');
+    expect(onDisk).toContain('\t<SubscriberAccessLevel>\n\t\t<Read>Allow</Read>\n\t\t<Update>Deny</Update>\n\t</SubscriberAccessLevel>');
+    expect(result.content[0].text).toContain('SubscriberAccessLevel');
   });
 });

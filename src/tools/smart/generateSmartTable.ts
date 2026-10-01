@@ -20,6 +20,8 @@ import { normalizeD365Xml } from '../../utils/d365XmlNormalizer.js';
 import { lookupSymbolNocase } from '../../utils/symbolLookup.js';
 import { scaffoldWriteRefusalResult } from '../write/writeAnchorGuard.js';
 import { upsertWrittenFileIntoIndex } from '../write/inlineIndexUpsert.js';
+import { reconcileTableCreateProperties } from '../xml/createTablePropertyHonesty.js';
+import * as debouncedRefresh from '../../bridge/debouncedRefresh.js';
 
 interface GenerateSmartTableArgs {
   name: string;
@@ -925,6 +927,22 @@ export async function handleGenerateSmartTable(
 
     if (bridgeResult?.success && bridgeResult.filePath) {
       console.log(`[generateSmartTable] ✅ Created via C# bridge: ${bridgeResult.filePath}`);
+
+      // CreateSmartTable writes no SubscriberAccessLevel; give the table Visual
+      // Studio's Read=Allow (none on TempDB/InMemory), as the XML builder does.
+      // The bridge refreshed its provider from the pre-patch bytes, so refresh
+      // again after this write — otherwise the next bridge Update() serialises
+      // the cached copy back over it.
+      try {
+        const onDisk = await fs.promises.readFile(bridgeResult.filePath, 'utf-8');
+        const reconciled = reconcileTableCreateProperties(onDisk, undefined);
+        if (reconciled.xml !== onDisk) {
+          await fs.promises.writeFile(bridgeResult.filePath, normalizeD365Xml(reconciled.xml), 'utf-8');
+          void debouncedRefresh.refresh(bridge);
+        }
+      } catch (e) {
+        console.error(`[generateSmartTable] SubscriberAccessLevel default skipped: ${e}`);
+      }
 
       // Add to Visual Studio project
       let projectMessage = '';

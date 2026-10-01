@@ -26,6 +26,7 @@ import { xppMethodSourceForXml } from '../../utils/xppFormat.js';
 import { bridgeValidateAfterWrite, canBridgeCreate, bridgeCreateObject, bridgeCreateSmartTable, isBridgeFailure, describeBridgeFailure } from '../../bridge/index.js';
 import type { BridgeFailure } from '../../bridge/index.js';
 import * as debouncedRefresh from '../../bridge/debouncedRefresh.js';
+import { subscriberAccessLevelValue } from '../../utils/subscriberAccessLevel.js';
 import {
   checkObjectIdentity,
   renderIdentityRefusal,
@@ -602,6 +603,18 @@ function extensibleEnumOrderingWarning(objectType: string, properties: unknown, 
 }
 
 /**
+ * `subscriberAccessLevel` in the "Read=Allow,Create=Deny" / "None" text the
+ * bridge's property setter reads, so an object value reaches it too. Any other
+ * key, and an invalid value, pass through unchanged: the create reconcile
+ * writes or reports what the bridge did not.
+ */
+function bridgeSubscriberAccessLevel(key: string, value: unknown): unknown {
+  if (key.toLowerCase() !== 'subscriberaccesslevel' || value === null || value === undefined) return value;
+  const v = subscriberAccessLevelValue(value);
+  return v.ok ? v.bridgeText : value;
+}
+
+/**
  * Post-write parameter honesty for a table create (cluster #35).
  *
  * The metadata writer — bridge or template — accepts `properties` it does not know
@@ -616,11 +629,16 @@ async function reconcileCreatedTableProperties(
   filePath: string | undefined,
   properties: unknown,
 ): Promise<string> {
-  if (!filePath || !properties || typeof properties !== 'object') return '';
+  if (!filePath) return '';
   try {
     const onDisk = await fs.readFile(filePath, 'utf-8');
-    const reconciled = reconcileTableCreateProperties(onDisk, properties as Record<string, unknown>);
-    if (reconciled.patched.length > 0) {
+    // No properties still reconciles: a regular table gets Visual Studio's
+    // SubscriberAccessLevel, which no bridge create writes.
+    const reconciled = reconcileTableCreateProperties(
+      onDisk,
+      properties && typeof properties === 'object' ? (properties as Record<string, unknown>) : undefined,
+    );
+    if (reconciled.xml !== onDisk) {
       await writeFileAtomic(filePath, normalizeD365Xml(reconciled.xml));
     }
     return renderTableCreateHonestyReport(reconciled);
@@ -1289,6 +1307,7 @@ export async function handleCreateD365File(
         const scalarProperties: Record<string, string> | undefined = args.properties
           ? Object.fromEntries(
               Object.entries(args.properties as Record<string, unknown>)
+                .map(([k, v]): [string, unknown] => [k, bridgeSubscriberAccessLevel(k, v)])
                 .filter(([, v]) => v != null && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
                 .map(([k, v]) => [k, String(v)]),
             )
