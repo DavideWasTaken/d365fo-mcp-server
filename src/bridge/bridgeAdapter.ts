@@ -32,6 +32,7 @@ import { ensureXppDocComment, ensureBlankLineBeforeClosingBrace } from '../utils
 import { parseXppDeclaration, parseXppClassHeader } from '../metadata/xppDeclaration.js';
 import { rankCustomFirst, isExactNameMatch } from '../utils/exactMatchRanking.js';
 import { COMPACT_METHODS_HINT, fullBodyHint } from '../utils/methodBodyHint.js';
+import { subscriberAccessLevelValue } from '../utils/subscriberAccessLevel.js';
 import {
   pageFields, fieldsHeading, fieldsFooter,
   createControlBudget, chargeControl, chargeSkippedSubtree, controlsFooter,
@@ -184,6 +185,8 @@ function formatTable(
   if (t.cacheLookup) out += `**CacheLookup:** ${t.cacheLookup}\n`;
   if (t.clusteredIndex) out += `**ClusteredIndex:** ${t.clusteredIndex}\n`;
   if (t.primaryIndex) out += `**PrimaryIndex:** ${t.primaryIndex}\n`;
+  if (t.subscriberAccessLevel) out += `**SubscriberAccessLevel:** ${t.subscriberAccessLevel}\n`;
+  if (t.allowRowVersionChangeTracking === 'Yes') out += `**AllowRowVersionChangeTracking:** Yes\n`;
   out += `_Source: C# bridge (IMetadataProvider)_\n\n`;
 
   // Fields — paged like methods below. A Microsoft table can carry 400+ fields,
@@ -1882,6 +1885,15 @@ export async function bridgeSetProperty(
 ): Promise<{ success: boolean; message: string } | null> {
   if (!bridge?.isReady || !bridge.metadataAvailable) return null;
   if (!BRIDGE_MODIFY_TYPES.has(objectType.toLowerCase())) return null;
+
+  // SubscriberAccessLevel (#1073): the bridge reads "Read=Allow,Create=Deny" or
+  // "None", so a JSON object value is passed in that form. An invalid value is not
+  // sent at all; the direct XML fallback refuses it with the reason.
+  if (objectType.toLowerCase() === 'table' && propertyPath.toLowerCase() === 'subscriberaccesslevel') {
+    const v = subscriberAccessLevelValue(propertyValue);
+    if (!v.ok) return null;
+    propertyValue = v.bridgeText;
+  }
 
   try {
     const result = await bridge.setProperty(objectType, objectName, propertyPath, propertyValue);
