@@ -56,6 +56,13 @@ those are called out explicitly below.
   `&amp;` undecoded. Both now go through one reader (`src/utils/appSettings.ts`)
   that skips comments, accepts any attribute order and quote style, decodes
   entities and reads only `<appSettings>`.
+- **A source changed while a build was running no longer comes back as
+  compiled.** Whether a finished build result still describes the disk was
+  measured from when the build *ended* — written only after runtime metadata
+  regeneration (and the AOS restart, when asked for). A file edited during
+  the compile or the "finalizing" phase (~40 s on a real VM) was older than
+  that, so the next call collected "✅ Build succeeded" for sources xppc never
+  saw. It is now measured from when the build started.
 
 ## [1.19.1] — 2026-09-30
 

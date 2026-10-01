@@ -270,7 +270,11 @@ interface BuildJobState {
   modelName: string;       // Currently building model
   targetModel: string;     // Final target model — state file is keyed by this
   tool: string;
-  startTime: string;
+  startTime: string;       // Start of the CURRENT model in the queue
+  // When the job began, before any xppc read a source. Unlike startTime it is
+  // not reset as the queue advances: a source changed after it may be missing
+  // from the result (finishedResultStillDescribesDisk).
+  sourcesAsOf?: string;
   logFile: string;         // Log for the CURRENT model in the queue
   status: 'running' | 'succeeded' | 'failed';
   // What a 'running' state is actually doing. 'preparing' is compiler metadata
@@ -512,7 +516,11 @@ export async function hasSourceChangesSince(
       // The directory's OWN mtime is what catches a DELETION: removing a class
       // leaves no file to stat, but the parent's mtime moves. Without this a
       // deleted source reads as "unchanged" and the stale result comes back.
-      if ((await stat(dir)).mtimeMs > since) return true;
+      // Not for the package root: its entries are the build's own bin and
+      // XppMetadata, which a build creates and a full build deletes, so its
+      // mtime moves during every such build — and `since` is now the build's
+      // START, so that would make every result look stale.
+      if (dir !== modelDir && (await stat(dir)).mtimeMs > since) return true;
       entries = await readdir(dir, { withFileTypes: true });
     } catch {
       // Unreadable subtree: can't prove it is unchanged.
@@ -553,10 +561,19 @@ export async function finishedResultStillDescribesDisk(
   targetModel: string,
   customPackagesPath: string,
 ): Promise<boolean> {
-  if (!state.endTime) return false; // no idea when it finished — do not trust it
-  const endedAt = new Date(state.endTime).getTime();
-  if (!Number.isFinite(endedAt)) return false;
-  return !(await hasSourceChangesSince(path.join(customPackagesPath, targetModel), endedAt));
+  // No idea whether, or when, it finished — do not trust it.
+  if (!state.endTime || !Number.isFinite(new Date(state.endTime).getTime())) return false;
+  // Measured from when the build STARTED, not from when it ended: xppc reads
+  // the sources at the start, and endTime is written only after runtime
+  // metadata regeneration (and a restart, if one was asked for). A file
+  // changed in between — tens of seconds of "finalizing" on a real VM, plus
+  // the compile itself — was older than endTime, so the result of a compile
+  // that never saw it came back as current. Older state files without
+  // sourcesAsOf fall back to the current queue entry's startTime: the target
+  // model is compiled last, so that is when its sources were read.
+  const sourcesAt = new Date(state.sourcesAsOf ?? state.startTime).getTime();
+  if (!Number.isFinite(sourcesAt)) return false;
+  return !(await hasSourceChangesSince(path.join(customPackagesPath, targetModel), sourcesAt));
 }
 
 async function readBuildState(targetModel: string, customPackagesPath: string): Promise<BuildJobState | null> {
@@ -2236,7 +2253,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // Build finished. It may be this caller collecting the result they were
       // handed off ("call again to collect"), or a fresh build request that
       // merely arrived after an old state file. Only the disk can tell them
-      // apart: if sources changed since the build ended, the cached result
+      // apart: if sources changed since the build started, the cached result
       // describes a tree that no longer exists and must not be replayed as
       // this call's success.
       const stillCurrent = await finishedResultStillDescribesDisk(
@@ -2252,7 +2269,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
         // mistake a collected result for a fresh one.
         const collected =
           `ℹ️  Collected the result of the build that ended ${existingState.endTime} ` +
-          `(no source changes since — nothing was recompiled by this call).\n\n`;
+          `(no source changes since it started — nothing was recompiled by this call).\n\n`;
         return {
           ...result,
           content: [{ type: 'text', text: collected + (result.content[0]?.text ?? '') }],
@@ -2261,7 +2278,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // Sources moved on — fall through and build for real.
       await buildLog(
         'WARN',
-        `discarding finished build state for ${targetModel}: sources changed after ${existingState.endTime}`,
+        `discarding finished build state for ${targetModel}: sources changed after ${existingState.sourcesAsOf ?? existingState.startTime}`,
       );
       } // end else (buildModeChanged)
     }
@@ -2357,6 +2374,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       projectPath: params.projectPath,
       packagePath: params.packagePath,
     };
+    const jobStartedAt = new Date().toISOString();
     const initState: BuildJobState = {
       jobId,
       ownerPid: process.pid,
@@ -2377,7 +2395,8 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       modelName: firstModel,
       targetModel,
       tool: 'xppc.exe',
-      startTime: new Date().toISOString(),
+      startTime: jobStartedAt,
+      sourcesAsOf: jobStartedAt,
       logFile: firstLogFile,
       status: 'running',
       phase: 'preparing',
