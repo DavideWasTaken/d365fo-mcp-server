@@ -370,6 +370,57 @@ describe('build_d365fo_project', () => {
     vi.restoreAllMocks();
   });
 
+  // Fork: the close handler runs only the post-build actions the starting request
+  // saved. A BP check or sync asked for while the build runs got a progress line
+  // (or, with wait:true, a ✅ result without them) and was never run.
+  describe('post-build actions asked for while the build is running', () => {
+    const running = (postBuild?: Record<string, unknown>) => {
+      const stateJson = JSON.stringify({
+        pid: 777, projectPath: PROJECT_PATH, tool: 'xppc.exe', modelName: MODEL_NAME, targetModel: MODEL_NAME,
+        startTime: new Date().toISOString(), logFile: 'C:\\Temp\\d365build_log_abc.log', status: 'running',
+        ...(postBuild ? { postBuild: { request: postBuild } } : {}),
+      });
+      readFileMock.mockImplementation(async (p: string) => {
+        if (p.includes('d365build_state')) return stateJson;
+        if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
+        if (p.includes('d365build_log')) return 'Compiling...';
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      const origKill = process.kill.bind(process);
+      vi.spyOn(process, 'kill').mockImplementation((pid: any, sig: any) => {
+        if (pid === 777 && sig === 0) return true as any;
+        return origKill(pid, sig);
+      });
+    };
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it.each([false, true])('refuses a BP check the running build was not started with (wait=%s)', async (wait) => {
+      running();
+      const result = await buildProjectTool({ projectPath: PROJECT_PATH, wait, bpCheck: true }, {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('bpCheck cannot be added to the build that is already running');
+      expect(result.content[0].text).not.toContain('dbSync: ');
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(bpMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a sync table the running build was not started with, and names only that', async () => {
+      running({ bpCheck: true, dbSync: ['MyTable'] });
+      const result = await buildProjectTool({ projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['MyTable', 'OtherTable'] }, {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('dbSync: ["MyTable","OtherTable"] cannot be added');
+      expect(result.content[0].text).not.toContain('bpCheck and');
+      expect(syncMock).not.toHaveBeenCalled();
+    });
+
+    it('still follows the build for a call that repeats the starting request', async () => {
+      running({ bpCheck: true, dbSync: ['MyTable'] });
+      const result = await buildProjectTool({ projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['mytable'] }, {});
+      expect(result.isError).toBeFalsy();
+      expect(result.content[0].text).toContain('Call again to refresh');
+    });
+  });
+
   it('returns succeeded result when previous build finished successfully', async () => {
     const stateJson = JSON.stringify({
       pid: 888,
@@ -978,6 +1029,54 @@ describe('build_d365fo_project', () => {
     const result = await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: ['OtherTable'] }, {});
     expect(result.content[0].text).toContain('started');
     expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  // dbSync:true syncs the PROJECT's tables (a full sync only without a project),
+  // so it covers a later table list only as far as that run actually reached.
+  describe('dbSync:true saved, a table list asked later', () => {
+    const buildThenAsk = async (syncedScope: unknown, ask: any) => {
+      syncMock.mockResolvedValue({ content: [{ type: 'text', text: 'Tables synced' }], syncedScope });
+      const child = makeFakeChild(42);
+      spawnMock.mockReturnValue(child);
+      allowPaths([PROJECT_PATH, XPPC, PKG]);
+      await buildProjectTool({ projectPath: PROJECT_PATH, wait: false, dbSync: true }, {});
+      await child.on.mock.calls.find((c: any[]) => c[0] === 'close')[1](0);
+      const saved = writeFileMock.mock.calls.filter(c => c[0].includes('d365build_state')).at(-1)![1];
+      serveState(saved);
+      readdirMock.mockResolvedValue([]);
+      return { saved: JSON.parse(saved), result: await buildProjectTool({ projectPath: PROJECT_PATH, dbSync: ask }, {}) };
+    };
+
+    it('starts a new build for a table the project sync did not reach', async () => {
+      const { saved, result } = await buildThenAsk(['MyTable'], ['OtherTable']);
+      expect(saved.postBuild.sync.synced).toEqual(['MyTable']);
+      expect(result.content[0].text).toContain('started');
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('collects the saved result for a table the project sync did reach', async () => {
+      const { result } = await buildThenAsk(['MyTable'], ['mytable']);
+      expect(result.content[0].text).toContain('Collected');
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('collects the saved result when the sync was a full sync', async () => {
+      const { result } = await buildThenAsk('full', ['OtherTable']);
+      expect(result.content[0].text).toContain('Collected');
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts a new build when the saved state does not say what was synced', async () => {
+      const { result } = await buildThenAsk(undefined, ['OtherTable']);
+      expect(result.content[0].text).toContain('started');
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('collects the saved result for dbSync:true again — the same request', async () => {
+      const { result } = await buildThenAsk(['MyTable'], true);
+      expect(result.content[0].text).toContain('Collected');
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('summarizes a BP check too large for a build result and keeps the full text in a file', async () => {

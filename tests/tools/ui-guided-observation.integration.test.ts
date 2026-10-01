@@ -239,6 +239,24 @@ describe('guided browser observed targets', () => {
       await browser.close();
     }
   });
+  it('asks for a new observation, not NOT_VERIFIED, when a full page load drops the bound company', async () => {
+    const browser = await open();
+    try {
+      await browser.prepareCase('one');
+      let snapshot = await browser.observe();
+      let company = snapshot.nodes.find(n => n.name === 'Company')!;
+      await browser.bindCompany(snapshot.snapshotId, company.ref, 'USMF');
+      await browser.page.reload();
+      // The page still shows USMF; only the bound element was replaced.
+      await expect(browser.checkCompany()).rejects.toMatchObject({ code: 'NEEDS_OBSERVATION' });
+      snapshot = await browser.observe();
+      company = snapshot.nodes.find(n => n.name === 'Company')!;
+      await browser.bindCompany(snapshot.snapshotId, company.ref, 'USMF');
+      await browser.checkCompany();
+    } finally {
+      await browser.close();
+    }
+  });
   it('resolves same-origin iframe references and rejects hidden controls and navigated documents', async () => {
     const browser = await open('/frame');
     try {

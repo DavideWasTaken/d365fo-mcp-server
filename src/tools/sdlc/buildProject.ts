@@ -243,6 +243,18 @@ interface QueueResult {
   logFile: string;
 }
 
+/**
+ * Fork: a post-build sync's output, and what it covered — 'full', or the
+ * objects it synced. `dbSync: true` names no tables: it becomes the project's
+ * list, or a full sync when there is no project, and only the run knows which.
+ * Absent when the sync failed or did not run, and in states saved before it.
+ */
+interface PostBuildSyncResult {
+  section: string;
+  failed: boolean;
+  synced?: 'full' | string[];
+}
+
 interface BuildJobState {
   jobId?: string;
   // The MCP server process whose close handler finishes this build. Once it is
@@ -256,21 +268,25 @@ interface BuildJobState {
   postBuild?: {
     request: { bpCheck?: boolean; dbSync?: boolean | string[]; projectPath?: string; packagePath?: string };
     bpSection?: string;
-    sync?: { section: string; failed: boolean };
+    sync?: PostBuildSyncResult;
   };
   restartWorkflow?: {
     // aosUrlSource: 'aosUrl' when passed, else the web.config the root was read from.
     request: { aosUrl: string; aosUrlSource?: string; bpCheck?: boolean; dbSync?: boolean | string[]; projectPath?: string; packagePath?: string };
     stage: 'pending' | 'prerequisites' | 'restarting' | 'complete' | 'uncertain';
     bpSection?: string;
-    sync?: { section: string; failed: boolean };
+    sync?: PostBuildSyncResult;
     result?: RuntimeRestartResult;
   };
   pid: number;
   modelName: string;       // Currently building model
   targetModel: string;     // Final target model — state file is keyed by this
   tool: string;
-  startTime: string;
+  startTime: string;       // Start of the CURRENT model in the queue
+  // When the job began, before any xppc read a source. Unlike startTime it is
+  // not reset as the queue advances: a source changed after it may be missing
+  // from the result (finishedResultStillDescribesDisk).
+  sourcesAsOf?: string;
   logFile: string;         // Log for the CURRENT model in the queue
   status: 'running' | 'succeeded' | 'failed';
   // What a 'running' state is actually doing. 'preparing' is compiler metadata
@@ -406,11 +422,19 @@ const activeBuildJobs = new Map<string, string>();
 /**
  * Fork: whether a request asks for a BP check or a sync that the saved build
  * did not run — then it is a request for a new build, not for the saved result.
- * `true` (project scope) covers any table list; a list covers the tables it names.
+ *
+ * A table list is covered by what was actually synced: a full sync covers any
+ * list, a partial one the objects it named. `dbSync: true` used to count as
+ * covering every list, but it syncs only the project's tables (a full sync only
+ * when there is no project), so a later `dbSync: ["OtherTable"]` collected the
+ * saved result and OtherTable was never synced. Without a recorded scope only
+ * the saved request's own list counts. `dbSync: true` again is a repeat of the
+ * same request.
  */
 function requestAddsPostBuildActions(
   params: any,
   saved: { bpCheck?: boolean; dbSync?: boolean | string[] } | undefined,
+  savedSync?: PostBuildSyncResult,
 ): boolean {
   const wantsBp = params.bpCheck === true || params.bpCheck === 'true';
   if (wantsBp && !saved?.bpCheck) return true;
@@ -419,9 +443,11 @@ function requestAddsPostBuildActions(
   const wantsSync = askedTables ? askedTables.length > 0 : asked === true || asked === 'true';
   if (!wantsSync) return false;
   const had = saved?.dbSync;
-  if (had === true) return false;
-  if (!Array.isArray(had) || !askedTables) return true;
-  const synced = new Set(had.map(t => String(t).trim().toLowerCase()));
+  if (!askedTables) return had !== true;
+  if (savedSync?.synced === 'full') return false;
+  const covered = Array.isArray(savedSync?.synced) ? savedSync.synced : Array.isArray(had) ? had : null;
+  if (!covered) return true;
+  const synced = new Set(covered.map(t => String(t).trim().toLowerCase()));
   return askedTables.some((t: string) => !synced.has(t.trim().toLowerCase()));
 }
 
@@ -484,9 +510,11 @@ function logFilePath(targetModel: string, queueIndex: number, customPackagesPath
 
 /**
  * Written BY the build, so always newer than it — scanning them would make
- * every cached result look stale and rebuild forever.
+ * every cached result look stale and rebuild forever. `Resources` is labelc's
+ * output (compileModelLabels, which runs before xppc and so after the build
+ * started); the label sources are under `<Model>\AxLabelFile`.
  */
-const BUILD_OUTPUT_DIRS = new Set(['bin', 'xppmetadata']);
+const BUILD_OUTPUT_DIRS = new Set(['bin', 'xppmetadata', 'resources']);
 
 /**
  * True when any source file in the model package changed after `since` (epoch
@@ -512,7 +540,11 @@ export async function hasSourceChangesSince(
       // The directory's OWN mtime is what catches a DELETION: removing a class
       // leaves no file to stat, but the parent's mtime moves. Without this a
       // deleted source reads as "unchanged" and the stale result comes back.
-      if ((await stat(dir)).mtimeMs > since) return true;
+      // Not for the package root: its entries are the build's own bin and
+      // XppMetadata, which a build creates and a full build deletes, so its
+      // mtime moves during every such build — and `since` is now the build's
+      // START, so that would make every result look stale.
+      if (dir !== modelDir && (await stat(dir)).mtimeMs > since) return true;
       entries = await readdir(dir, { withFileTypes: true });
     } catch {
       // Unreadable subtree: can't prove it is unchanged.
@@ -553,10 +585,19 @@ export async function finishedResultStillDescribesDisk(
   targetModel: string,
   customPackagesPath: string,
 ): Promise<boolean> {
-  if (!state.endTime) return false; // no idea when it finished — do not trust it
-  const endedAt = new Date(state.endTime).getTime();
-  if (!Number.isFinite(endedAt)) return false;
-  return !(await hasSourceChangesSince(path.join(customPackagesPath, targetModel), endedAt));
+  // No idea whether, or when, it finished — do not trust it.
+  if (!state.endTime || !Number.isFinite(new Date(state.endTime).getTime())) return false;
+  // Measured from when the build STARTED, not from when it ended: xppc reads
+  // the sources at the start, and endTime is written only after runtime
+  // metadata regeneration (and a restart, if one was asked for). A file
+  // changed in between — tens of seconds of "finalizing" on a real VM, plus
+  // the compile itself — was older than endTime, so the result of a compile
+  // that never saw it came back as current. Older state files without
+  // sourcesAsOf fall back to the current queue entry's startTime: the target
+  // model is compiled last, so that is when its sources were read.
+  const sourcesAt = new Date(state.sourcesAsOf ?? state.startTime).getTime();
+  if (!Number.isFinite(sourcesAt)) return false;
+  return !(await hasSourceChangesSince(path.join(customPackagesPath, targetModel), sourcesAt));
 }
 
 async function readBuildState(targetModel: string, customPackagesPath: string): Promise<BuildJobState | null> {
@@ -1703,7 +1744,7 @@ async function runPostBuildDbSync(
   params: any,
   targetModel: string,
   context: any,
-): Promise<{ section: string; failed: boolean }> {
+): Promise<PostBuildSyncResult> {
   const requested = params?.dbSync;
   const tables = Array.isArray(requested)
     ? requested.filter((t: unknown) => typeof t === 'string' && t.trim().length > 0)
@@ -1740,12 +1781,14 @@ async function runPostBuildDbSync(
     // since trigger_db_sync is no longer published, this is the only sync path
     // a caller has.
     const failed = result?.isError === true;
+    const scope = result?.syncedScope;
+    const synced = !failed && (scope === 'full' || Array.isArray(scope)) ? { synced: scope as 'full' | string[] } : {};
     // Fork: a failure without text is still a failure (it used to read as success).
-    if (!text) return { section: failed ? '\n\nDatabase sync failed without diagnostic text.' : '', failed };
+    if (!text) return { section: failed ? '\n\nDatabase sync failed without diagnostic text.' : '', failed, ...synced };
     const heading = failed
       ? '--- Database sync (dbSync) — FAILED, the build did not ---'
       : '--- Database sync (dbSync) ---';
-    return { section: `\n\n${heading}\n${text}`, failed };
+    return { section: `\n\n${heading}\n${text}`, failed, ...synced };
   } catch (e: any) {
     return { section: `\n\n⚠️ dbSync requested but could not run: ${e?.message ?? e}`, failed: true };
   }
@@ -2092,7 +2135,11 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // collectable until sources change (below) — see activeBuildJobs.
       const fullBuildNeedsFreshRun = existingState.status !== 'running' &&
         (fullBuild || (params.restartAos === true && !existingState.restartWorkflow) ||
-          requestAddsPostBuildActions(params, existingState.restartWorkflow?.request ?? existingState.postBuild?.request));
+          requestAddsPostBuildActions(
+            params,
+            existingState.restartWorkflow?.request ?? existingState.postBuild?.request,
+            existingState.restartWorkflow?.sync ?? existingState.postBuild?.sync,
+          ));
       if (fullBuildNeedsFreshRun) {
         await buildLog('INFO', `discarding finished state for ${targetModel} and recompiling`);
         await clearBuildState(targetModel, customPackagesPath);
@@ -2112,6 +2159,27 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       if (existingState.status === 'running' && alive) {
         if (params.restartAos === true && !existingState.restartWorkflow) {
           return { content: [{ type: 'text', text: '⚠️ AOS restart was not requested when this build started. Wait for it to finish, then start a new build with restartAos:true.' }], isError: true };
+        }
+        // Fork: the same for a BP check or a sync. The close handler runs only the
+        // actions the starting request saved, so these used to get an ordinary
+        // progress line — or, with wait:true, a ✅ result without them — and were
+        // simply never run.
+        const savedRequest = existingState.restartWorkflow?.request ?? existingState.postBuild?.request;
+        if (requestAddsPostBuildActions(params, savedRequest)) {
+          const notRun = [
+            ...((params.bpCheck === true || params.bpCheck === 'true') && !savedRequest?.bpCheck ? ['bpCheck'] : []),
+            ...(requestAddsPostBuildActions({ dbSync: params.dbSync }, savedRequest) ? [`dbSync: ${JSON.stringify(params.dbSync)}`] : []),
+          ];
+          return {
+            content: [{
+              type: 'text',
+              text: `⚠️ ${notRun.join(' and ')} cannot be added to the build that is already running — ` +
+                `it was started with ${savedRequest ? JSON.stringify({ bpCheck: savedRequest.bpCheck, dbSync: savedRequest.dbSync }) : 'no post-build actions'}, ` +
+                'and only those run when it finishes. Nothing was started or changed by this call.\n\n' +
+                'Wait for it to finish (call again without them to follow it), then call again with them: that starts a new build that runs them.',
+            }],
+            isError: true,
+          };
         }
         // The running build is INCREMENTAL but the caller asked for a full
         // recompile: attaching to it would answer a fullBuild:true request with
@@ -2236,7 +2304,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // Build finished. It may be this caller collecting the result they were
       // handed off ("call again to collect"), or a fresh build request that
       // merely arrived after an old state file. Only the disk can tell them
-      // apart: if sources changed since the build ended, the cached result
+      // apart: if sources changed since the build started, the cached result
       // describes a tree that no longer exists and must not be replayed as
       // this call's success.
       const stillCurrent = await finishedResultStillDescribesDisk(
@@ -2252,7 +2320,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
         // mistake a collected result for a fresh one.
         const collected =
           `ℹ️  Collected the result of the build that ended ${existingState.endTime} ` +
-          `(no source changes since — nothing was recompiled by this call).\n\n`;
+          `(no source changes since it started — nothing was recompiled by this call).\n\n`;
         return {
           ...result,
           content: [{ type: 'text', text: collected + (result.content[0]?.text ?? '') }],
@@ -2261,7 +2329,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // Sources moved on — fall through and build for real.
       await buildLog(
         'WARN',
-        `discarding finished build state for ${targetModel}: sources changed after ${existingState.endTime}`,
+        `discarding finished build state for ${targetModel}: sources changed after ${existingState.sourcesAsOf ?? existingState.startTime}`,
       );
       } // end else (buildModeChanged)
     }
@@ -2357,6 +2425,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       projectPath: params.projectPath,
       packagePath: params.packagePath,
     };
+    const jobStartedAt = new Date().toISOString();
     const initState: BuildJobState = {
       jobId,
       ownerPid: process.pid,
@@ -2377,7 +2446,8 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       modelName: firstModel,
       targetModel,
       tool: 'xppc.exe',
-      startTime: new Date().toISOString(),
+      startTime: jobStartedAt,
+      sourcesAsOf: jobStartedAt,
       logFile: firstLogFile,
       status: 'running',
       phase: 'preparing',

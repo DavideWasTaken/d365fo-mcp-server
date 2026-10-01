@@ -83,7 +83,7 @@ describe('labelAssembliesAreStale', () => {
     // labelc had never run. This is the case that must always compile.
     const labelDir = path.join(packageDir, MODEL, 'AxLabelFile');
     await writeAt(path.join(labelDir, 'LabelResources', 'en-US', 'Contoso.en-US.label.txt'), Date.now());
-    expect(await labelAssembliesAreStale([labelDir], path.join(packageDir, 'Resources'), MODEL)).toBe(true);
+    expect(await labelAssembliesAreStale([labelDir], path.join(packageDir, 'Resources'))).toBe(true);
   });
 
   it('is true when a label file was edited after the assembly was built', async () => {
@@ -92,7 +92,7 @@ describe('labelAssembliesAreStale', () => {
     const resourcesDir = path.join(packageDir, 'Resources');
     await writeAt(path.join(resourcesDir, `${MODEL}.dll`), builtAt);
     await writeAt(path.join(labelDir, 'LabelResources', 'en-US', 'Contoso.en-US.label.txt'), builtAt + 30_000);
-    expect(await labelAssembliesAreStale([labelDir], resourcesDir, MODEL)).toBe(true);
+    expect(await labelAssembliesAreStale([labelDir], resourcesDir)).toBe(true);
   });
 
   it('is false when the assembly is newer than every label source', async () => {
@@ -101,7 +101,30 @@ describe('labelAssembliesAreStale', () => {
     const resourcesDir = path.join(packageDir, 'Resources');
     await writeAt(path.join(labelDir, 'LabelResources', 'en-US', 'Contoso.en-US.label.txt'), builtAt - 60_000);
     await writeAt(path.join(resourcesDir, `${MODEL}.dll`), builtAt);
-    expect(await labelAssembliesAreStale([labelDir], resourcesDir, MODEL)).toBe(false);
+    expect(await labelAssembliesAreStale([labelDir], resourcesDir)).toBe(false);
+  });
+
+  // labelc names each assembly after its LABEL FILE. On the VM, model VLTBase
+  // has label file VLTLabel → Resources\VLTLabel.dll; looking for VLTBase.dll
+  // found nothing, so labelc ran — and rewrote Resources — on every build.
+  it('is false when the label file\'s own assembly is current, whatever the module is called', async () => {
+    const builtAt = Date.now();
+    const labelDir = path.join(packageDir, MODEL, 'AxLabelFile');
+    const resourcesDir = path.join(packageDir, 'Resources');
+    await writeAt(path.join(labelDir, 'LabelResources', 'en-US', 'VLTLabel.en-US.label.txt'), builtAt - 60_000);
+    await writeAt(path.join(labelDir, 'LabelResources', 'it', 'VLTLabel.it.label.txt'), builtAt - 60_000);
+    await writeAt(path.join(resourcesDir, 'VLTLabel.dll'), builtAt);
+    expect(await labelAssembliesAreStale([labelDir], resourcesDir)).toBe(false);
+  });
+
+  it('is true when one of several label files has no assembly yet', async () => {
+    const builtAt = Date.now();
+    const labelDir = path.join(packageDir, MODEL, 'AxLabelFile');
+    const resourcesDir = path.join(packageDir, 'Resources');
+    await writeAt(path.join(labelDir, 'LabelResources', 'en-US', 'First.en-US.label.txt'), builtAt - 60_000);
+    await writeAt(path.join(labelDir, 'LabelResources', 'en-US', 'Second.en-US.label.txt'), builtAt - 60_000);
+    await writeAt(path.join(resourcesDir, 'First.dll'), builtAt);
+    expect(await labelAssembliesAreStale([labelDir], resourcesDir)).toBe(true);
   });
 
   it('sees a label file nested several folders deep', async () => {
@@ -110,7 +133,7 @@ describe('labelAssembliesAreStale', () => {
     const resourcesDir = path.join(packageDir, 'Resources');
     await writeAt(path.join(resourcesDir, `${MODEL}.dll`), builtAt);
     await writeAt(path.join(labelDir, 'LabelResources', 'de', 'deep', 'Contoso.de.label.txt'), builtAt + 5_000);
-    expect(await labelAssembliesAreStale([labelDir], resourcesDir, MODEL)).toBe(true);
+    expect(await labelAssembliesAreStale([labelDir], resourcesDir)).toBe(true);
   });
 });
 

@@ -1714,6 +1714,107 @@ describe('rename_label', () => {
     // No CRLF sequences must be present — file must stay pure LF.
     expect(labelWrite!.content).not.toContain('\r\n');
   });
+
+  describe('cross-model guard', () => {
+    afterEach(() => { delete process.env.D365FO_CROSS_MODEL_WRITE_MODELS; });
+
+    // labels(create) refused a label in another model's file, while a rename of a
+    // label in that same file went through and rewrote it.
+    it.each([false, true])('refuses a rename in another model\'s label file (dryRun=%s)', async (dryRun) => {
+      const fsMock = await import('fs');
+      (fsMock.promises.writeFile as any).mockClear();
+      (fsMock.promises.readdir as any).mockClear();
+
+      const result = await renameLabelTool(
+        req('rename_label', {
+          oldLabelId: 'OldName',
+          newLabelId: 'NewName',
+          labelFileId: 'ForeignLabels',
+          model: 'ForeignModel',
+          dryRun,
+        }),
+        ctx,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Refusing to modify "@ForeignLabels:OldName" in model "ForeignModel"');
+      expect(result.content[0].text).toContain('targets model "MyModel"');
+      expect(fsMock.promises.readdir as any).not.toHaveBeenCalled();
+      expect(fsMock.promises.writeFile as any).not.toHaveBeenCalled();
+    });
+
+    it('lets configuration allow it, and says so on the result', async () => {
+      process.env.D365FO_CROSS_MODEL_WRITE_MODELS = 'ForeignModel';
+      const fsMock = await import('fs');
+      (fsMock.promises.readdir as any).mockResolvedValueOnce(['en-US']);
+      (fsMock.promises.readFile as any).mockResolvedValue('﻿OldName=Old text\r\n');
+
+      const result = await renameLabelTool(
+        req('rename_label', {
+          oldLabelId: 'OldName',
+          newLabelId: 'NewName',
+          labelFileId: 'ForeignLabels',
+          model: 'ForeignModel',
+          dryRun: true,
+        }),
+        ctx,
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content[0].text).toContain('DRY RUN');
+      expect(result.content[0].text).toContain('ForeignModel');
+      expect(result.content[0].text).toMatch(/D365FO_CROSS_MODEL_WRITE_MODELS|configuration/);
+    });
+  });
+
+  // A file without a BOM: its first line starts neither with "\n" nor with the
+  // BOM, which is all the existence and collision checks used to look for.
+  it('refuses to rename onto an ID declared on the first line of a file without a BOM', async () => {
+    const fsMock = await import('fs');
+    (fsMock.promises.writeFile as any).mockClear();
+    (fsMock.promises.readdir as any).mockResolvedValueOnce(['en-US']);
+    (fsMock.promises.readFile as any).mockResolvedValue('NewFeatureName=Already here\r\nOldFeatureName=Some text\r\n');
+
+    const result = await renameLabelTool(
+      req('rename_label', {
+        oldLabelId: 'OldFeatureName',
+        newLabelId: 'NewFeatureName',
+        labelFileId: 'MyModel',
+        model: 'MyModel',
+        updateIndex: false,
+      }),
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('"NewFeatureName" already exists');
+    expect(fsMock.promises.writeFile as any).not.toHaveBeenCalled();
+  });
+
+  it('renames an ID declared on the first line of a file without a BOM, and adds no BOM', async () => {
+    const fsMock = await import('fs');
+    const writeCalls: Array<{ path: string; content: string }> = [];
+    (fsMock.promises.writeFile as any).mockImplementation(async (p: string, content: string) => {
+      writeCalls.push({ path: p, content });
+    });
+    (fsMock.promises.readdir as any).mockResolvedValueOnce(['en-US']);
+    (fsMock.promises.readFile as any).mockResolvedValue('OldFeatureName=Some text\r\n ;A comment\r\nZebraLabel=Zebra text\r\n');
+
+    const result = await renameLabelTool(
+      req('rename_label', {
+        oldLabelId: 'OldFeatureName',
+        newLabelId: 'NewFeatureName',
+        labelFileId: 'MyModel',
+        model: 'MyModel',
+        updateIndex: false,
+      }),
+      ctx,
+    );
+
+    if (result.isError) throw new Error(`rename_label failed: ${result.content[0].text}`);
+    const labelWrite = writeCalls.find(c => writeTargets(c.path, '.label.txt'));
+    expect(labelWrite!.content).toBe('NewFeatureName=Some text\r\n ;A comment\r\nZebraLabel=Zebra text\r\n');
+  });
 });
 
 describe('labels dispatcher: action aliases + errors', () => {

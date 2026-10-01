@@ -23,6 +23,8 @@ import { defaultPackagesRoot } from '../../utils/packagesRoot.js';
 import { PackageResolver } from '../../utils/packageResolver.js';
 import { detectEol } from '../../utils/eolUtils.js';
 import { isExtensionLabelFile } from '../../metadata/labelParser.js';
+import { crossModelWriteRefusal, standDownNotice } from '../../utils/crossModelWriteGuard.js';
+import { resolveAnchorModel } from './writeAnchorGuard.js';
 
 const UTF8_BOM = '\uFEFF';
 
@@ -90,32 +92,55 @@ function escapeRegex(s: string): string {
 }
 
 /**
+ * The label ID a .label.txt line declares, or null for a comment (" ;…"), blank
+ * or malformed line. The one reading of a line that the existence check, the
+ * collision check and the rewrite share: when the checks searched the raw text
+ * for "\n<id>=" or "<BOM><id>=", a label on the first line of a file without a
+ * BOM was invisible to them but not to the rewrite, and renaming onto it left
+ * two declarations of the same ID.
+ */
+function labelIdOfLine(line: string): string | null {
+  if (line.startsWith(' ;') || line.startsWith('\t;')) return null;
+  const eqIdx = line.indexOf('=');
+  if (eqIdx <= 0) return null;
+  const id = line.substring(0, eqIdx).trim();
+  return id && !/\s/.test(id) ? id : null;
+}
+
+/** Lines of a .label.txt, without its BOM and line endings. */
+function labelLines(content: string): string[] {
+  return stripBom(content).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+}
+
+/** Whether a .label.txt declares `labelId`. */
+function declaresLabel(content: string, labelId: string): boolean {
+  return labelLines(content).some(line => labelIdOfLine(line) === labelId);
+}
+
+/**
  * Rename a label entry inside a single .label.txt file.
  * Returns the new file content, or null if the label was not found.
  */
 function renameLabelInTxt(content: string, oldId: string, newId: string): string | null {
   // Preserve the original line-ending style — D365FO .label.txt files are CRLF
   // in TFVC/Git, and silently rewriting them as LF makes every line look modified.
+  // The BOM stays as it was for the same reason: adding one to a file that had
+  // none shows up as a change to its first line.
   const eol = detectEol(content);
-  const lines = stripBom(content).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   let found = false;
   const out: string[] = [];
 
-  for (const line of lines) {
-    const eqIdx = line.indexOf('=');
-    if (eqIdx > 0) {
-      const id = line.substring(0, eqIdx).trim();
-      if (id === oldId) {
-        found = true;
-        out.push(newId + line.substring(eqIdx)); // replace only the ID part
-        continue;
-      }
+  for (const line of labelLines(content)) {
+    if (labelIdOfLine(line) === oldId) {
+      found = true;
+      out.push(newId + line.substring(line.indexOf('='))); // replace only the ID part
+      continue;
     }
     out.push(line);
   }
 
   if (!found) return null;
-  return UTF8_BOM + out.join(eol);
+  return (content.startsWith(UTF8_BOM) ? UTF8_BOM : '') + out.join(eol);
 }
 
 /**
@@ -220,6 +245,25 @@ export async function renameLabelTool(request: CallToolRequest, context: XppServ
       resolvedPackageName = model;
     }
 
+    // Cross-model guard, as labels(create) applies it: the rename rewrites the
+    // owning model's label file, and another model's label file is that model's
+    // code. Checked for a dry run too — previewing a rename the real call would
+    // refuse only plans work that cannot be done.
+    const crossModelCheck = {
+      objectName: `@${labelFileId}:${oldLabelId}`,
+      objectType: 'label',
+      owningModel: model,
+      owningPackage: resolvedPackageName,
+      activeModel: await resolveAnchorModel(configManager),
+      toolSwitchedModel: configManager.getToolProjectSwitch()?.forcedModel ?? null,
+      action: 'modify' as const,
+    };
+    const crossModelRefusal = crossModelWriteRefusal(crossModelCheck);
+    if (crossModelRefusal) {
+      return { content: [{ type: 'text', text: crossModelRefusal }], isError: true };
+    }
+    const crossModelNotice = standDownNotice(crossModelCheck);
+
     const modelDir = path.join(resolvedPackagePath, resolvedPackageName, model);
     const labelResourcesDir = path.join(modelDir, 'AxLabelFile', 'LabelResources');
 
@@ -243,7 +287,7 @@ export async function renameLabelTool(request: CallToolRequest, context: XppServ
       const txtPath = path.join(labelResourcesDir, lang, `${labelFileId}.${lang}.label.txt`);
       try {
         const content = await fs.readFile(txtPath, 'utf-8');
-        if (content.includes(`\n${oldLabelId}=`) || content.includes(`${UTF8_BOM}${oldLabelId}=`)) {
+        if (declaresLabel(content, oldLabelId)) {
           foundInAny = true;
           break;
         }
@@ -268,7 +312,7 @@ export async function renameLabelTool(request: CallToolRequest, context: XppServ
       const txtPath = path.join(labelResourcesDir, lang, `${labelFileId}.${lang}.label.txt`);
       try {
         const content = await fs.readFile(txtPath, 'utf-8');
-        if (content.includes(`\n${newLabelId}=`) || content.includes(`${UTF8_BOM}${newLabelId}=`)) {
+        if (declaresLabel(content, newLabelId)) {
           return {
             content: [{
               type: 'text',
@@ -415,6 +459,8 @@ export async function renameLabelTool(request: CallToolRequest, context: XppServ
     if (dryRun && totalFiles > 0) {
       lines.push(`💡 Remove dryRun=true to apply the rename.`);
     }
+
+    if (crossModelNotice) lines.push(crossModelNotice.trim());
 
     return { content: [{ type: 'text', text: lines.join('\n') }] };
   } catch (err: any) {
