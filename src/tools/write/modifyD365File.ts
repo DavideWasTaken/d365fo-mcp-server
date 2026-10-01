@@ -49,6 +49,9 @@ import { ProjectFileFinder, registerFileInActiveProject } from '../../workspace/
 import { heuristicEdtBaseType, resolveEdtBaseType, isEnumName, resolveEdtEnumType, bridgeEdtBaseType } from '../smart/generateSmartTable.js';
 import { normalizeD365Xml } from '../../utils/d365XmlNormalizer.js';
 import {
+  entityAddDataSource, entityAddFieldBindingError, entityAddField, modifyFieldOp, ENTITY_AND_FIELD_ZOD_PARAMS,
+} from './dataEntityOps.js';
+import {
   upsertFormExtensionControlProperty, resolveControlPropertyTarget,
 } from '../../utils/formExtensionControlModifications.js';
 import { enforceGrounding } from '../../utils/provenanceStore.js';
@@ -684,6 +687,7 @@ export const ModifyD365FileArgsSchema = z.object({
   fieldHelpText: z.string().optional().describe('Field help text (modify-field).'),
   fieldEnumType: z.string().optional().describe('Enum name for an enum-typed field. On add-field this replaces fieldType entirely — it writes AxTableFieldEnum + EnumType and needs no EDT. Also settable later with modify-field.'),
   fieldStringSize: z.string().optional().describe('String size to set on the field (modify-field, for string-typed fields).'),
+  ...ENTITY_AND_FIELD_ZOD_PARAMS,
   fields: z.array(z.object({
     name: z.string(),
     edt: z.string().optional(),
@@ -2068,6 +2072,13 @@ export async function modifyD365FileTool(
           }
           break;
         }
+        // A data-entity's own mapped field (the bridge only maps fields on an EXTENSION).
+        if (objectType === 'data-entity' && args.fieldName) {
+          const bindingError = entityAddFieldBindingError(args as any);
+          if (bindingError) return { content: [{ type: 'text', text: bindingError }], isError: true };
+          bridgeResult = await entityAddField(actualFilePath, args as any);
+          break;
+        }
         // Everything else is an AxTableField. `required` on add-field is only fieldName
         // (the mapped-field path above has no fieldType at all), so the type-specific half
         // of the contract is enforced here instead of silently falling through to a null
@@ -2249,22 +2260,7 @@ export async function modifyD365FileTool(
         break;
       }
       case 'modify-field': {
-        if (args.fieldName) {
-          // Map the field-* params onto the bare prop keys the bridge expects.
-          const fieldProps: Record<string, string> = {};
-          if ((args as any).fieldLabel) fieldProps.label = (args as any).fieldLabel;
-          if ((args as any).fieldHelpText) fieldProps.helpText = (args as any).fieldHelpText;
-          if ((args as any).fieldMandatory !== undefined) fieldProps.mandatory = String((args as any).fieldMandatory);
-          if ((args as any).fieldType) fieldProps.edt = (args as any).fieldType;
-          if ((args as any).fieldEnumType) fieldProps.enumType = (args as any).fieldEnumType;
-          if ((args as any).fieldStringSize) fieldProps.stringSize = String((args as any).fieldStringSize);
-          bridgeResult = await bridgeModifyField(
-            context.bridge,
-            objectName,
-            args.fieldName,
-            Object.keys(fieldProps).length > 0 ? fieldProps : undefined,
-          );
-        }
+        if (args.fieldName) bridgeResult = await modifyFieldOp(context.bridge, objectName, actualFilePath, args as any);
         break;
       }
       case 'rename-field': {
@@ -2956,6 +2952,11 @@ export async function modifyD365FileTool(
         break;
       }
       case 'add-data-source': {
+        // An entity's datasource is an embedded QUERY datasource the bridge cannot add.
+        if (objectType === 'data-entity') {
+          bridgeResult = await entityAddDataSource(actualFilePath, args as any);
+          break;
+        }
         if ((args as any).dataSourceName && (args as any).dataSourceTable) {
           bridgeResult = await bridgeAddDataSource(
             context.bridge,
