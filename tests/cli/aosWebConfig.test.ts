@@ -28,6 +28,15 @@ describe('parseAosWebConfig', () => {
     });
   });
 
+  it('proposes the live server and database, not commented-out or reordered copies', () => {
+    const xml = `<appSettings>
+    <!-- <add key="DataAccess.DbServer" value="OLDSQL" /> -->
+    <add key="DataAccess.DbServer" value="." />
+    <add value="AxDB" key="DataAccess.Database" />
+  </appSettings>`;
+    expect(parseAosWebConfig(xml)).toEqual({ hostUrl: undefined, dbServer: '.', database: 'AxDB' });
+  });
+
   it('reduces the host URL to its environment root', () => {
     const xml = '<add key="Infrastructure.HostUrl" value="https://env.cloudax.dynamics.com/namespaces/AXSF/" />';
     expect(parseAosWebConfig(xml).hostUrl).toBe('https://env.cloudax.dynamics.com/');

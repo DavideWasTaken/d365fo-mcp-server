@@ -12,15 +12,7 @@
  */
 import { readFile } from 'fs/promises';
 import path from 'path';
-
-/** One `<add key="…" value="…"/>` out of a .config document, whatever the attribute order. */
-function readAppSetting(xml: string, key: string): string | undefined {
-  for (const [tag] of xml.matchAll(/<add\s[^>]*>/gi)) {
-    const attr = (name: string) => new RegExp(`\\s${name}\\s*=\\s*"([^"]*)"`, 'i').exec(tag)?.[1];
-    if (attr('key')?.toLowerCase() === key.toLowerCase()) return attr('value');
-  }
-  return undefined;
-}
+import { readAppSetting } from '../../utils/appSettings.js';
 
 export interface LocalAosUrl {
   /** Environment root, e.g. https://usnconeboxax1aos.cloud.onebox.dynamics.com/ */
