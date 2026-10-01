@@ -28,6 +28,16 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Fixed
+- **`web.config` / `SysTestConsole.exe.config` settings are read as XML reads
+  them.** A previous `Infrastructure.HostUrl` kept in a `<!-- … -->` comment
+  above the live one was taken as the AOS address by `restartAos` without an
+  `aosUrl`, and the SysTest data-access check read commented-out entries too.
+  That check also missed an entry written `value="…" key="…"` and compared
+  `&amp;` undecoded. Both now go through one reader (`src/utils/appSettings.ts`)
+  that skips comments, accepts any attribute order and quote style, decodes
+  entities and reads only `<appSettings>`.
+
 ## [1.19.1] — 2026-09-30
 
 ### Fixed
