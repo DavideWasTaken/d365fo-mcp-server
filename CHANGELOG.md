@@ -45,6 +45,30 @@ those are called out explicitly below.
   style only applies to CoC classes, since Microsoft's own dot-notation shape
   (`Base.{Infix}Extension`) cannot lead with the infix.
 
+### Fixed
+- **Extension-class names under the `prefix` and `model-name` class styles now
+  match the infix / model token only as a separate PascalCase word. This changes
+  the name existing `prefix`-style users get for some bases.**
+  - A base whose last letters spelled the infix was read as already prefixed and
+    never got one: with prefix `Le`, `SalesTable` was written as
+    `SalesTable_Extension`; it is now `SalesTableLe_Extension` (likewise `Ne` +
+    `SalesLine` → `SalesLineNe_Extension`). Names that really end in the infix
+    (`CustTableCtso_Extension`, `CustTableCTSO_Extension`) are kept as before.
+  - A bare base that begins with the infix as a word was also read as already
+    prefixed: `ProjTable` under prefix `Proj` gave `ProjTable_Extension`, and is
+    now `ProjTableProj_Extension` (also `TaxTrans` + `Tax`, `CRMTable` + `Cr`).
+    A full name you pass already ending in `_Extension` (`ProjTable_Extension`)
+    is still kept as given — from the name alone it cannot be told apart from a
+    prefixed one.
+  - `model-name` style no longer cuts a base whose last letters spell the model
+    token (`SalesTable` under model `Able` was written `SalesT_Able_Extension`).
+  - `validate_object_naming` derives the base by the same rule, so it no longer
+    accepts `SalesTable_Extension` as carrying the infix `Le`.
+  - A class-extension skeleton created without `properties.baseClass` derived its
+    `[ExtensionOf(classStr(…))]` target with a regex that only fit the
+    `model-name` shape — `CustTableCtso_Extension` targeted itself. It now uses
+    the same base derivation for all three class styles.
+
 ## [1.19.1] — 2026-09-30
 
 ### Fixed

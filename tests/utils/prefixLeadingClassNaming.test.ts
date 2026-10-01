@@ -15,7 +15,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { normalizeObjectName } from '../../src/utils/objectNaming.js';
-import { applyObjectPrefix, registerCustomModel } from '../../src/utils/modelClassifier.js';
+import { applyObjectPrefix, extensionClassBaseOf, registerCustomModel } from '../../src/utils/modelClassifier.js';
+import { XmlTemplateGenerator } from '../../src/tools/xml/xmlTemplateGenerator.js';
 import { checkObjectNaming } from '../../src/utils/objectNamingRules.js';
 
 const MODEL = 'ContosoExt';
@@ -187,15 +188,139 @@ describe('a base that itself starts with the infix as a word (ProjTable under "P
     expect(write('ProjTable')).toBe('ProjProjTable_Extension');
   });
 
-  it('"prefix" style: unchanged — pinned, not endorsed (the base is not told apart from the infix)', () => {
-    // The trailing style reads a leading infix at a word boundary as "already
-    // prefixed" (that is what keeps ConDemoRanges_Extension intact), and the
-    // knownBase hint is deliberately ignored outside prefix-leading.
+  it('"prefix" style: a bare base states the base, so the infix is added', () => {
     configure('Proj', 'prefix');
-    expect(write('ProjTable')).toBe('ProjTable_Extension');
-    expect(write('ProjTable_Extension', 'class')).toBe('ProjTable_Extension');
+    expect(write('ProjTable')).toBe('ProjTableProj_Extension');
+    expect(write('ProjTableProj_Extension')).toBe('ProjTableProj_Extension');
     expect(applyObjectPrefix('ProjTable_Extension', 'Proj', MODEL, { knownBase: true }))
-      .toBe('ProjTable_Extension');
+      .toBe('ProjTableProj_Extension');
+  });
+
+  it('"prefix" style: a caller-named ProjTable_Extension stays as given — pinned, ambiguous', () => {
+    // The trailing style reads a leading infix at a word boundary as "already
+    // prefixed" — that is what keeps a model's own ConDemoRanges_Extension intact.
+    configure('Proj', 'prefix');
+    expect(write('ProjTable_Extension', 'class')).toBe('ProjTable_Extension');
+  });
+
+  it.each([
+    ['Tax', 'TaxTrans', 'TaxTransTax_Extension'],
+    ['Cr', 'CRMTable', 'CRMTableCr_Extension'],
+  ])('"prefix" style: bare %s + %s → %s', (prefix, base, expected) => {
+    configure(prefix, 'prefix');
+    expect(write(base)).toBe(expected);
+    expect(write(expected)).toBe(expected);
+  });
+
+  it('"prefix" style: the validator, told the base, recommends what the writer writes', async () => {
+    configure('Proj', 'prefix');
+    const r = await check('ProjTableProj_Extension');
+    expect(r.baseObjectName).toBe('ProjTable');
+    expect(r.errors).toEqual([]);
+    expect(namingWarnings(r.warnings)).toEqual([]);
+    const told = await check('ProjTable_Extension', 'ProjTable');
+    expect(told.warnings.join('\n')).toContain('Recommended: ProjTableProj_Extension');
+  });
+});
+
+/**
+ * The same word-boundary rule, applied to the 'prefix' style's trailing infix. A
+ * bare case-insensitive endsWith read every base whose last letters spell the
+ * infix as already prefixed, so it was never given one.
+ */
+describe('"prefix" style: a trailing match that is not a word is not an infix', () => {
+  it.each([
+    ['Le', 'SalesTable', 'SalesTableLe_Extension'],
+    ['Ne', 'SalesLine', 'SalesLineNe_Extension'],
+    ['Al', 'LedgerJournal', 'LedgerJournalAl_Extension'],
+  ])('prefix %s + %s → %s, from a bare base and from Base_Extension', (prefix, base, expected) => {
+    configure(prefix, 'prefix');
+    expect(write(base)).toBe(expected);
+    expect(write(`${base}_Extension`, 'class')).toBe(expected);
+    expect(write(expected)).toBe(expected);
+  });
+
+  it('a genuinely prefixed name stays as given, in any casing of the infix', () => {
+    configure('Ctso', 'prefix');
+    expect(write('CustTableCtso_Extension', 'class')).toBe('CustTableCtso_Extension');
+    expect(write('CustTableCTSO_Extension', 'class')).toBe('CustTableCTSO_Extension');
+  });
+
+  it('an element-style class name keeps its whole base', () => {
+    configure('Le', 'prefix');
+    expect(write('SalesTableExtension')).toBe('SalesTableLe_Extension');
+    expect(write('SalesTableLeExtension')).toBe('SalesTableLe_Extension');
+  });
+
+  it.each([
+    ['Le', 'SalesTable'],
+    ['Ne', 'SalesLine'],
+  ])('the validator flags %s + %s_Extension as missing its infix, and agrees with the writer', async (prefix, base) => {
+    configure(prefix, 'prefix');
+    const r = await check(`${base}_Extension`);
+    expect(r.baseObjectName).toBe(base);
+    const written = write(`${base}_Extension`, 'class');
+    expect(written).toBe(`${base}${prefix}_Extension`);
+    expect(r.warnings.join('\n')).toContain(`Recommended: ${written}`);
+
+    const clean = await check(written);
+    expect(clean.baseObjectName).toBe(base);
+    expect(clean.errors).toEqual([]);
+    expect(namingWarnings(clean.warnings)).toEqual([]);
+  });
+});
+
+describe('"model-name" class style: a base ending in the model name\'s letters keeps them', () => {
+  it('SalesTable under model "Able" is not SalesT + "able"', () => {
+    configure('Ctso', 'model-name');
+    registerCustomModel('Able');
+    expect(normalizeObjectName('SalesTable', 'class-extension', 'Able')).toBe('SalesTable_Able_Extension');
+    expect(normalizeObjectName('SalesTable_Extension', 'class', 'Able')).toBe('SalesTable_Able_Extension');
+    expect(normalizeObjectName('SalesTable_Able_Extension', 'class', 'Able')).toBe('SalesTable_Able_Extension');
+  });
+
+  it('a stated base ending in the token AS a word keeps it; a legacy name is still converted', () => {
+    configure('Ctso', 'model-name');
+    registerCustomModel('Tax');
+    // Bare base: the caller said SalesTax is the base.
+    expect(normalizeObjectName('SalesTax', 'class-extension', 'Tax')).toBe('SalesTax_Tax_Extension');
+    expect(normalizeObjectName('SalesTax_Tax_Extension', 'class', 'Tax')).toBe('SalesTax_Tax_Extension');
+    // A legacy CustTableTax_Extension carries the token as its own word — converted.
+    expect(normalizeObjectName('CustTableTax_Extension', 'class', 'Tax')).toBe('CustTable_Tax_Extension');
+  });
+
+  it('under the prefix class style, Case B only strips the model token as a word', () => {
+    configure('Ctso', 'prefix');
+    registerCustomModel('Able');
+    expect(normalizeObjectName('SalesTable_Extension', 'class', 'Able')).toBe('SalesTableCtso_Extension');
+    expect(normalizeObjectName('CustTable_Able_Extension', 'class', 'Able')).toBe('CustTableCtso_Extension');
+  });
+});
+
+describe('extensionClassBaseOf: the [ExtensionOf] target of a class-extension skeleton', () => {
+  it.each([
+    ['prefix', 'Ctso', 'CustTableCtso_Extension', 'CustTable'],
+    ['prefix', 'Le', 'SalesTableLe_Extension', 'SalesTable'],
+    ['prefix', 'Le', 'SalesTable_Extension', 'SalesTable'],
+    ['prefix-leading', 'Ctso', 'CtsoCustTable_Extension', 'CustTable'],
+    ['prefix-leading', 'Ctso', 'CustTableCtso_Extension', 'CustTable'],
+    ['model-name', 'Ctso', 'CustTable_ContosoExt_Extension', 'CustTable'],
+  ])('%s style, prefix %s: %s → %s', (style, prefix, name, base) => {
+    configure(prefix, style);
+    expect(extensionClassBaseOf(name, MODEL)).toBe(base);
+  });
+
+  it('XmlTemplateGenerator derives the target through it when no baseClass is given', () => {
+    configure('Ctso', 'prefix');
+    const xml = XmlTemplateGenerator.generate('class-extension', 'CustTableCtso_Extension', undefined, { modelName: MODEL });
+    expect(xml).toContain('[ExtensionOf(classStr(CustTable))]');
+    expect(xml).not.toContain('classStr(CustTableCtso_Extension)');
+  });
+
+  it('…and an explicit baseClass still wins', () => {
+    configure('Ctso', 'prefix');
+    const xml = XmlTemplateGenerator.generate('class-extension', 'CustTableCtso_Extension', undefined, { baseClass: 'SalesTable' });
+    expect(xml).toContain('[ExtensionOf(classStr(SalesTable))]');
   });
 });
 

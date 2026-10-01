@@ -1761,7 +1761,11 @@ export async function handleCreateD365File(
           args.objectType,
           finalObjectName,
           args.sourceCode,
-          effectiveProperties
+          // A class-extension skeleton derives its [ExtensionOf] target from the name
+          // when no baseClass is given — against THIS model's prefix and token.
+          args.objectType === 'class-extension' && !effectiveProperties?.modelName
+            ? { ...effectiveProperties, modelName: actualModelName }
+            : effectiveProperties
         );
 
     // Guard against HTML-entity-escaped xmlContent (e.g. "&lt;?xml..." instead of "<?xml...").

@@ -20,6 +20,7 @@ import {
   getExtensionClassNamingStyle,
   prefixLeadingBaseOf,
   prefixLeadingClassName,
+  endsWithInfix,
   deriveExtensionInfix,
 } from './modelClassifier.js';
 import { normalizeObjectName } from './objectNaming.js';
@@ -298,7 +299,9 @@ export async function checkObjectNaming(
         const candidates = useModelNameForClass ? [modelToken, extensionInfix] : [extensionInfix, modelToken];
         const derived = args.baseObjectName;
         for (const token of candidates) {
-          if (!token || !derived.toLowerCase().endsWith(token.toLowerCase())) continue;
+          // As its own word only, exactly as the writer reads it: SalesTable_Extension
+          // under infix "Le" is base SalesTable missing its infix, not SalesTab + "le".
+          if (!token || !endsWithInfix(derived, token)) continue;
           const stripped = derived.slice(0, derived.length - token.length).replace(/_+$/, '');
           if (stripped) args.baseObjectName = stripped;
           break;
