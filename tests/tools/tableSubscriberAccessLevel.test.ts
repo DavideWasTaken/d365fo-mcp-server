@@ -94,6 +94,47 @@ describe('rendering and placement', () => {
   });
 });
 
+// Cases from a read-only round trip over 3,670 shipped tables (remove the element,
+// write it back): anchoring before the first KNOWN successor misplaced 279.
+describe('placement on real table shapes', () => {
+  const doc = (body: string, indent = '\t') =>
+    `<?xml version="1.0" encoding="utf-8"?>\n<AxTable xmlns:i="http://www.w3.org/2001/XMLSchema-instance">\n${body
+      .split('\n')
+      .map(l => l.replace(/^\t+/, t => indent.repeat(t.length)))
+      .join('\n')}\n</AxTable>`;
+
+  it('goes after its predecessors, ahead of an element the order list does not know', () => {
+    const before = doc('\t<Name>ContosoTmp</Name>\n\t<Label>Tmp</Label>\n\t<Visible>No</Visible>\n\t<TableGroup>Main</TableGroup>\n\t<Fields />');
+    expect(upsertAxTableSubscriberAccessLevel(before, { Read: 'Allow' })).toBe(
+      doc(`\t<Name>ContosoTmp</Name>\n\t<Label>Tmp</Label>\n${READ_ALLOW}\t<Visible>No</Visible>\n\t<TableGroup>Main</TableGroup>\n\t<Fields />`),
+    );
+  });
+
+  it('never lands inside a field, even with no TableGroup to anchor on', () => {
+    // The shape createObject writes: Label, then the collections.
+    const before = doc(
+      '\t<Name>ContosoNote</Name>\n\t<Label>Note</Label>\n\t<DeleteActions />\n\t<Fields>\n\t\t<AxTableField>\n\t\t\t<Name>NoteId</Name>\n\t\t\t<Visible>No</Visible>\n\t\t</AxTableField>\n\t</Fields>',
+    );
+    const after = upsertAxTableSubscriberAccessLevel(before, { Read: 'Allow' })!;
+    expect(after).toContain(`\t<Label>Note</Label>\n${READ_ALLOW}\t<DeleteActions />`);
+    expect(after.match(/SubscriberAccessLevel>/g)).toHaveLength(2);
+  });
+
+  it('follows a multi-line SourceCode when nothing later precedes it', () => {
+    const before = doc('\t<Name>ContosoNote</Name>\n\t<SourceCode>\n\t\t<Methods />\n\t</SourceCode>\n\t<TableGroup>Main</TableGroup>');
+    expect(upsertAxTableSubscriberAccessLevel(before, { Read: 'Allow' })).toContain(
+      `\t</SourceCode>\n${READ_ALLOW}\t<TableGroup>Main</TableGroup>`,
+    );
+  });
+
+  it('keeps a space-indented file\'s indentation, and setting the same level changes nothing', () => {
+    const spaced = doc('\t<Name>ContosoNote</Name>\n\t<Label>Note</Label>\n\t<TableGroup>Main</TableGroup>', '  ');
+    const set = upsertAxTableSubscriberAccessLevel(spaced, { Read: 'Allow' })!;
+    expect(set).toContain('  <Label>Note</Label>\n  <SubscriberAccessLevel>\n    <Read>Allow</Read>\n  </SubscriberAccessLevel>\n  <TableGroup>');
+    expect(upsertAxTableSubscriberAccessLevel(set, readSubscriberAccessLevel(set))).toBe(set);
+  });
+});
+
 describe('new tables get what Visual Studio writes', () => {
   it('Read=Allow on a regular table, none on TempDB/InMemory, the caller\'s value otherwise', () => {
     expect(tableSubscriberAccessLevel(undefined, undefined)).toEqual({ Read: 'Allow' });

@@ -118,8 +118,12 @@ export function subscriberAccessLevelValue(
  * The `<SubscriberAccessLevel>` element at `indent`, children one level deeper.
  * '' for an empty level — the serializer writes nothing for all-Unset.
  */
-export function renderSubscriberAccessLevel(level: SubscriberAccessLevel, indent = '\t'): string {
-  const children = SUBSCRIBER_PERMISSIONS.filter(p => level[p]).map(p => `${indent}\t<${p}>${level[p]}</${p}>`);
+export function renderSubscriberAccessLevel(
+  level: SubscriberAccessLevel,
+  indent = '\t',
+  childIndent = indent + (/^ +$/.test(indent) ? indent : '\t'),
+): string {
+  const children = SUBSCRIBER_PERMISSIONS.filter(p => level[p]).map(p => `${childIndent}<${p}>${level[p]}</${p}>`);
   if (children.length === 0) return '';
   return `${indent}<SubscriberAccessLevel>\n${children.join('\n')}\n${indent}</SubscriberAccessLevel>`;
 }
@@ -180,30 +184,65 @@ export function tableSubscriberAccessLevel(requested: unknown, tableType: unknow
 }
 
 /**
- * Write `level` as the AxTable's access level, replacing any existing one, or
- * remove it when `level` is empty. `insertBefore` names the elements that must
- * follow it, in order; the first one present is the anchor. Null when there is
- * nothing to anchor on (not an AxTable property block).
+ * Table-level elements that come BEFORE SubscriberAccessLevel wherever they
+ * appear. Measured on 3,670 shipped tables: inserting right after the last of
+ * these reproduces the serialized position in all but 30, which carry
+ * AllowRowVersionChangeTracking or DisableLockEscalation (seen on both sides)
+ * ahead of it. Anchoring on the first known SUCCESSOR instead misplaced 279:
+ * elements outside the canonical order list (Visible, Visibility, Extends,
+ * AllowChangeTracking, …) sit between it and the next listed one.
  */
-export function setSubscriberAccessLevel(
-  xml: string,
-  level: SubscriberAccessLevel,
-  insertBefore: readonly string[],
-): string | null {
+const PREDECESSORS = [
+  'Name', 'SourceCode', 'Label', 'DeveloperDocumentation', 'ConfigurationKey', 'OperationalDomain',
+  'FormRef', 'CountryRegionCodes', 'SingularLabel', 'IsObsolete', 'EntityRelationshipType',
+  'ListPageRef', 'CountryRegionContextField', 'ReportRef', 'PreviewPartRef',
+];
+
+/**
+ * Write `level` as the AxTable's access level, replacing any existing one, or
+ * remove it when `level` is empty. A new element goes directly after the last
+ * table-level predecessor (always at least <Name>), at table-level indentation —
+ * never inside a field or the X++ source. Null when the document is not an
+ * AxTable.
+ */
+export function setSubscriberAccessLevel(xml: string, level: SubscriberAccessLevel): string | null {
   if (!/<AxTable[\s>]/.test(xml)) return null;
   const eol = /\r\n/.test(xml) ? '\r\n' : '\n';
-  const existing = TABLE_LEVEL_ELEMENT.exec(xml.slice(0, propertyBlockEnd(xml)));
+  const blockEnd = propertyBlockEnd(xml);
+  const existing = TABLE_LEVEL_ELEMENT.exec(xml.slice(0, blockEnd));
   if (existing) {
-    const rendered = renderSubscriberAccessLevel(level, existing[1] ?? existing[2] ?? '\t');
+    const indent = existing[1] ?? existing[2] ?? '\t';
+    // Keep the file's own child indentation (tabs, or spaces in a hand-edited file).
+    const childIndent = /\n([ \t]+)</.exec(existing[0])?.[1];
+    const rendered = renderSubscriberAccessLevel(level, indent, childIndent);
     const replacement = rendered ? rendered.replace(/\n/g, eol) + eol : '';
     return xml.slice(0, existing.index) + replacement + xml.slice(existing.index + existing[0].length);
   }
   if (!renderSubscriberAccessLevel(level)) return xml;
-  for (const candidate of insertBefore) {
-    const m = new RegExp(`^([ \\t]*)<${candidate}(\\s*/>|[\\s>])`, 'm').exec(xml);
-    if (!m) continue;
-    const rendered = renderSubscriberAccessLevel(level, m[1] || '\t').replace(/\n/g, eol);
-    return xml.slice(0, m.index) + rendered + eol + xml.slice(m.index);
+
+  // Table-level indentation is the table name's: <Name> is the first child.
+  const nameLine = /^([ \t]*)<Name>/m.exec(xml);
+  if (!nameLine) return null;
+  const indent = nameLine[1] || '\t';
+  const head = xml.slice(0, blockEnd);
+  let insertAt = -1;
+  for (const m of head.matchAll(new RegExp(`^${indent}<(${PREDECESSORS.join('|')})(\\s*/>|>)`, 'gm'))) {
+    const start = m.index!;
+    const lineEnd = head.indexOf('\n', start);
+    if (lineEnd === -1) continue;
+    const line = head.slice(start, lineEnd).trimEnd();
+    // One-line element (or self-closing): ends with its line. Otherwise it ends
+    // with its closing tag at the same indentation (<SourceCode> … </SourceCode>).
+    let end = lineEnd;
+    if (!line.endsWith('/>') && !line.endsWith(`</${m[1]}>`)) {
+      const close = new RegExp(`^${indent}</${m[1]}>`, 'm').exec(head.slice(start));
+      if (!close) continue;
+      end = head.indexOf('\n', start + close.index);
+      if (end === -1) continue;
+    }
+    insertAt = Math.max(insertAt, end + 1);
   }
-  return null;
+  if (insertAt === -1) return null;
+  const rendered = renderSubscriberAccessLevel(level, indent).replace(/\n/g, eol);
+  return xml.slice(0, insertAt) + rendered + eol + xml.slice(insertAt);
 }

@@ -150,12 +150,9 @@ export function renderAxTableProperties(
  * upsertAxTableProperty. Null when the document is not an AxTable.
  */
 export function upsertAxTableSubscriberAccessLevel(xml: string, level: SubscriberAccessLevel): string | null {
-  const rank = axTableElementRank('SubscriberAccessLevel');
-  return setSubscriberAccessLevel(
-    xml,
-    level,
-    AX_TABLE_ELEMENT_ORDER.filter(e => axTableElementRank(e) > rank),
-  );
+  // Placed after its predecessors, not before the first known successor: real
+  // tables put elements this order list does not know between it and TableGroup.
+  return setSubscriberAccessLevel(xml, level);
 }
 
 /**
