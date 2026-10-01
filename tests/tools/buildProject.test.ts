@@ -370,6 +370,57 @@ describe('build_d365fo_project', () => {
     vi.restoreAllMocks();
   });
 
+  // Fork: the close handler runs only the post-build actions the starting request
+  // saved. A BP check or sync asked for while the build runs got a progress line
+  // (or, with wait:true, a ✅ result without them) and was never run.
+  describe('post-build actions asked for while the build is running', () => {
+    const running = (postBuild?: Record<string, unknown>) => {
+      const stateJson = JSON.stringify({
+        pid: 777, projectPath: PROJECT_PATH, tool: 'xppc.exe', modelName: MODEL_NAME, targetModel: MODEL_NAME,
+        startTime: new Date().toISOString(), logFile: 'C:\\Temp\\d365build_log_abc.log', status: 'running',
+        ...(postBuild ? { postBuild: { request: postBuild } } : {}),
+      });
+      readFileMock.mockImplementation(async (p: string) => {
+        if (p.includes('d365build_state')) return stateJson;
+        if (p.endsWith('.rnrproj')) return RNRPROJ_XML;
+        if (p.includes('d365build_log')) return 'Compiling...';
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      const origKill = process.kill.bind(process);
+      vi.spyOn(process, 'kill').mockImplementation((pid: any, sig: any) => {
+        if (pid === 777 && sig === 0) return true as any;
+        return origKill(pid, sig);
+      });
+    };
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it.each([false, true])('refuses a BP check the running build was not started with (wait=%s)', async (wait) => {
+      running();
+      const result = await buildProjectTool({ projectPath: PROJECT_PATH, wait, bpCheck: true }, {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('bpCheck cannot be added to the build that is already running');
+      expect(result.content[0].text).not.toContain('dbSync: ');
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(bpMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a sync table the running build was not started with, and names only that', async () => {
+      running({ bpCheck: true, dbSync: ['MyTable'] });
+      const result = await buildProjectTool({ projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['MyTable', 'OtherTable'] }, {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('dbSync: ["MyTable","OtherTable"] cannot be added');
+      expect(result.content[0].text).not.toContain('bpCheck and');
+      expect(syncMock).not.toHaveBeenCalled();
+    });
+
+    it('still follows the build for a call that repeats the starting request', async () => {
+      running({ bpCheck: true, dbSync: ['MyTable'] });
+      const result = await buildProjectTool({ projectPath: PROJECT_PATH, bpCheck: true, dbSync: ['mytable'] }, {});
+      expect(result.isError).toBeFalsy();
+      expect(result.content[0].text).toContain('Call again to refresh');
+    });
+  });
+
   it('returns succeeded result when previous build finished successfully', async () => {
     const stateJson = JSON.stringify({
       pid: 888,

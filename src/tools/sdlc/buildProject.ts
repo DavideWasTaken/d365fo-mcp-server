@@ -2158,6 +2158,27 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
         if (params.restartAos === true && !existingState.restartWorkflow) {
           return { content: [{ type: 'text', text: '⚠️ AOS restart was not requested when this build started. Wait for it to finish, then start a new build with restartAos:true.' }], isError: true };
         }
+        // Fork: the same for a BP check or a sync. The close handler runs only the
+        // actions the starting request saved, so these used to get an ordinary
+        // progress line — or, with wait:true, a ✅ result without them — and were
+        // simply never run.
+        const savedRequest = existingState.restartWorkflow?.request ?? existingState.postBuild?.request;
+        if (requestAddsPostBuildActions(params, savedRequest)) {
+          const notRun = [
+            ...((params.bpCheck === true || params.bpCheck === 'true') && !savedRequest?.bpCheck ? ['bpCheck'] : []),
+            ...(requestAddsPostBuildActions({ dbSync: params.dbSync }, savedRequest) ? [`dbSync: ${JSON.stringify(params.dbSync)}`] : []),
+          ];
+          return {
+            content: [{
+              type: 'text',
+              text: `⚠️ ${notRun.join(' and ')} cannot be added to the build that is already running — ` +
+                `it was started with ${savedRequest ? JSON.stringify({ bpCheck: savedRequest.bpCheck, dbSync: savedRequest.dbSync }) : 'no post-build actions'}, ` +
+                'and only those run when it finishes. Nothing was started or changed by this call.\n\n' +
+                'Wait for it to finish (call again without them to follow it), then call again with them: that starts a new build that runs them.',
+            }],
+            isError: true,
+          };
+        }
         // The running build is INCREMENTAL but the caller asked for a full
         // recompile: attaching to it would answer a fullBuild:true request with
         // something that is not a full build. Say so plainly instead of
