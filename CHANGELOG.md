@@ -91,6 +91,21 @@ those are called out explicitly below.
     `[ExtensionOf(classStr(…))]` target with a regex that only fit the
     `model-name` shape — `CustTableCtso_Extension` targeted itself. It now uses
     the same base derivation for all three class styles.
+- **`labels(action="rename")` is now held to the cross-model write guard.**
+  `labels(action="create")` refused to write a label into another model's
+  label file, but a rename of a label in that same file went through and
+  rewrote it. The rename now gets the same refusal (also for `dryRun:true`),
+  and the same configuration (`D365FO_CROSS_MODEL_WRITE_MODELS`,
+  `D365FO_ALLOW_CROSS_MODEL_WRITE`) allows it, with a note on the result.
+  References the rename finds through `searchPaths` are held to the same
+  guard: a file in another model, or outside every package root, refuses the
+  whole rename before anything is written.
+- **`labels(action="rename")` no longer creates a duplicate label ID.** In a
+  `.label.txt` without a BOM, an ID on the first line was invisible to the
+  "target already exists" check, so renaming another label onto it left two
+  declarations of the same ID (and renaming that first-line label itself
+  answered "not found"). The checks and the rewrite now read the file the same
+  way. The rename also keeps the file's BOM as it was instead of adding one.
 - **`find_references` without the xref database no longer drops calls written
   in a different letter case or with a space before the parenthesis.** X++
   identifiers are case-insensitive, so `this.validatewrite()` and
