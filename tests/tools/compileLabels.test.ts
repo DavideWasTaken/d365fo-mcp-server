@@ -86,6 +86,13 @@ describe('labelAssembliesAreStale', () => {
     expect(await labelAssembliesAreStale([labelDir], path.join(packageDir, 'Resources'))).toBe(true);
   });
 
+  it('is false for an AxLabelFile folder that holds no label sources', async () => {
+    // Nothing to compile, so labelc must not run on every build for it.
+    const labelDir = path.join(packageDir, MODEL, 'AxLabelFile');
+    await fs.mkdir(path.join(labelDir, 'LabelResources', 'en-US'), { recursive: true });
+    expect(await labelAssembliesAreStale([labelDir], path.join(packageDir, 'Resources'))).toBe(false);
+  });
+
   it('is true when a label file was edited after the assembly was built', async () => {
     const builtAt = Date.now() - 60_000;
     const labelDir = path.join(packageDir, MODEL, 'AxLabelFile');

@@ -182,7 +182,10 @@ export async function labelAssembliesAreStale(
   // are older than VLTLabel's latest edit, and measured against the model's
   // newest source they would keep it stale forever.
   const sources = await newestSourcePerLabelFile(labelDirs);
-  if (sources.size === 0) return true;
+  // An AxLabelFile folder with no label sources (its last label file deleted,
+  // or a model scaffolded with the empty folder) has nothing to compile:
+  // answering "stale" ran labelc on every build for no output.
+  if (sources.size === 0) return false;
   for (const [id, newestSource] of sources) {
     try {
       if (newestSource > (await stat(path.join(resourcesDir, `${id}.dll`))).mtimeMs) return true;
