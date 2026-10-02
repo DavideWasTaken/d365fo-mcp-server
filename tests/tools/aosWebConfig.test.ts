@@ -44,6 +44,14 @@ describe('localAosUrl', () => {
     expect((await localAosUrl([packages]))?.url).toBe('https://env.example.test/');
   });
 
+  it('ignores a previous HostUrl kept in a comment above the live one', async () => {
+    const packages = aosService(`<appSettings>
+    <!-- <add key="Infrastructure.HostUrl" value="https://old.example.test/" /> -->
+    <add key="Infrastructure.HostUrl" value="https://env.example.test/" />
+</appSettings>`);
+    expect((await localAosUrl([packages]))?.url).toBe('https://env.example.test/');
+  });
+
   it('reduces a URL with a path to its environment root', async () => {
     const packages = aosService('<add key="Infrastructure.HostUrl" value="https://env.example.test/namespaces/AXSF/" />');
     expect((await localAosUrl([packages]))?.url).toBe('https://env.example.test/');

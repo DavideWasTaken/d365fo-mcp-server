@@ -106,6 +106,51 @@ those are called out explicitly below.
     `[ExtensionOf(classStr(…))]` target with a regex that only fit the
     `model-name` shape — `CustTableCtso_Extension` targeted itself. It now uses
     the same base derivation for all three class styles.
+- **`labels(action="rename")` is now held to the cross-model write guard.**
+  `labels(action="create")` refused to write a label into another model's
+  label file, but a rename of a label in that same file went through and
+  rewrote it. The rename now gets the same refusal (also for `dryRun:true`),
+  and the same configuration (`D365FO_CROSS_MODEL_WRITE_MODELS`,
+  `D365FO_ALLOW_CROSS_MODEL_WRITE`) allows it, with a note on the result.
+  References the rename finds through `searchPaths` are held to the same
+  guard: a file in another model, or outside every package root, refuses the
+  whole rename before anything is written.
+- **`labels(action="rename")` no longer creates a duplicate label ID.** In a
+  `.label.txt` without a BOM, an ID on the first line was invisible to the
+  "target already exists" check, so renaming another label onto it left two
+  declarations of the same ID (and renaming that first-line label itself
+  answered "not found"). The checks and the rewrite now read the file the same
+  way. The rename also keeps the file's BOM as it was instead of adding one.
+- **`find_references` without the xref database no longer drops calls written
+  in a different letter case or with a space before the parenthesis.** X++
+  identifiers are case-insensitive, so `this.validatewrite()` and
+  `this.validateWrite ()` call `validateWrite` — the index lookup matched them,
+  then an exact `validateWrite(` text match threw them away. The same applies
+  to instantiations (`new mycontroller ()`). The match also no longer takes a
+  longer name ending in the target (`revalidateWrite(`) for a call, and a
+  call found both in the index and in the declaring type's file is listed once.
+- **`web.config` / `SysTestConsole.exe.config` settings are read as XML reads
+  them.** A previous `Infrastructure.HostUrl` kept in a `<!-- … -->` comment
+  above the live one was taken as the AOS address by `restartAos` without an
+  `aosUrl`, and the SysTest data-access check read commented-out entries too.
+  That check also missed an entry written `value="…" key="…"` and compared
+  `&amp;` undecoded. Both now go through one reader (`src/utils/appSettings.ts`)
+  that skips comments, accepts any attribute order and quote style, decodes
+  entities and reads only `<appSettings>`.
+- **A source changed while a build was running no longer comes back as
+  compiled.** Whether a finished build result still describes the disk was
+  measured from when the build *ended* — written only after runtime metadata
+  regeneration (and the AOS restart, when asked for). A file edited during
+  the compile or the "finalizing" phase (~40 s on a real VM) was older than
+  that, so the next call collected "✅ Build succeeded" for sources xppc never
+  saw. It is now measured from when the build started; the build's own
+  outputs (`bin`, `XppMetadata`, and labelc's `Resources`) are not counted.
+- **labelc no longer runs on every build of a model whose label file has
+  its own name.** The "are the label assemblies current?" check looked for
+  `Resources\<model>.dll`, but labelc writes one assembly per label file
+  (`Resources\<LabelFile>.dll`). A model such as `VLTBase` with label file
+  `VLTLabel` never had the file it looked for, so every build recompiled
+  its labels and rewrote `Resources`.
 
 ## [1.19.1] — 2026-09-30
 
