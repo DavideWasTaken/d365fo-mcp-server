@@ -15,7 +15,13 @@
  *
  * Visual Studio sets Read=Allow on every new regular table, and that is by far
  * the commonest value in shipped and partner metadata. Data entity staging
- * tables and TempDB/InMemory tables carry none. This server wrote none either,
+ * tables carry none (156 of 4,619 shipped ones have the element).
+ *
+ * TempDB/InMemory tables get none here, but that is a choice, not a measured
+ * rule: of 18,467 shipped tables, 617 of 2,705 TempDB/InMemory tables carry
+ * Read=Allow — about the same share as regular tables, most of which predate
+ * the VS default and carry nothing. On a temporary table the grant has no
+ * effect either way, so leaving it out keeps the file minimal. This server wrote none either,
  * and had no way to set one: the scalar property writer cannot express child
  * elements, and the name was not in the AxTable element order, so it was
  * dropped (issue #1073).

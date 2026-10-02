@@ -70,10 +70,13 @@ those are called out explicitly below.
 - **Tables get "Subscriber access level", as Visual Studio creates them
   (#1073).** A new regular table now carries
   `<SubscriberAccessLevel><Read>Allow</Read></SubscriberAccessLevel>`, which
-  VS writes on every new table; TempDB/InMemory tables get none. The property
+  VS writes on every new table. TempDB/InMemory tables get none — a choice
+  rather than a measured rule, since about a quarter of shipped temporary
+  tables carry the element, the same share as regular ones. The property
   can be set on create (`properties.subscriberAccessLevel`: `"Read=Allow,Create=Deny"`,
   `{ "read": "Allow" }` or `"None"`) and with
-  `modify-property propertyPath="SubscriberAccessLevel"`, and table reads show
+  `modify-property propertyPath="SubscriberAccessLevel"`; an invalid value is
+  refused before anything is written. Table reads show
   it together with `AllowRowVersionChangeTracking`. It holds one child element
   per permission, so the scalar property writer could neither express nor place
   it, and the name was dropped. `AllowRowVersionChangeTracking` stays opt-in:
@@ -109,6 +112,9 @@ those are called out explicitly below.
   rewrote it. The rename now gets the same refusal (also for `dryRun:true`),
   and the same configuration (`D365FO_CROSS_MODEL_WRITE_MODELS`,
   `D365FO_ALLOW_CROSS_MODEL_WRITE`) allows it, with a note on the result.
+  References the rename finds through `searchPaths` are held to the same
+  guard: a file in another model, or outside every package root, refuses the
+  whole rename before anything is written.
 - **`labels(action="rename")` no longer creates a duplicate label ID.** In a
   `.label.txt` without a BOM, an ID on the first line was invisible to the
   "target already exists" check, so renaming another label onto it left two

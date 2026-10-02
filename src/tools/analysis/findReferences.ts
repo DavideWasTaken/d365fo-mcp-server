@@ -499,7 +499,15 @@ export async function findReferencesTool(request: CallToolRequest, context: XppS
           // Same call site already reported from the index. The two paths cut
           // different windows around it (±1 line here, ±2 there), so equal
           // contexts never matched and every call both found was listed twice.
-          r => !references.some(existing => existing.file === r.file && existing.context.includes(r.context)),
+          // Compared by the call line, not the whole window: a call on the first
+          // line of a method body takes its leading line from the FILE here but
+          // has none in the indexed body, so the window is not a substring there.
+          r => {
+            const callLine = r.context.split('\n').find(l => callOf(ftsName).test(l))?.trim();
+            return !references.some(
+              existing => existing.file === r.file && (existing.context.includes(r.context) || (!!callLine && existing.context.includes(callLine))),
+            );
+          },
         )
       : [];
     references.push(...intraTypeRefs);

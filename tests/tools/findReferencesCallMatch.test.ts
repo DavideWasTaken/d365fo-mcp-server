@@ -122,4 +122,35 @@ describe('find_references fallback: one call site, one reference', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('does not list a call twice when it sits on the first line of the indexed body', async () => {
+    // A one-line method: the call is on the body's first line, so the scan of
+    // the file takes its leading context line from outside the body — text the
+    // index's window cannot contain.
+    const dir = mkdtempSync(path.join(tmpdir(), 'fr-dedupe-'));
+    try {
+      const file = path.join(dir, 'MyTable.xml');
+      const body = 'public boolean callLower() { return this.validatewrite(); }';
+      writeFileSync(file, ['<Source><![CDATA[', body, ']]></Source>'].join('\n'));
+      const db = {
+        prepare: (sql: string) => ({
+          all: (..._params: any[]) => {
+            if (/DISTINCT parent_name/.test(sql)) return [{ parent_name: 'MyTable', file_path: file }];
+            if (/symbols_fts/.test(sql)) {
+              return [{ name: 'callLower', parent_name: 'MyTable', file_path: file, model: 'MyModel', source_snippet: body, source: body }];
+            }
+            return [];
+          },
+          get: () => undefined,
+        }),
+      };
+      const text = textOf(await call(
+        { targetName: 'validateWrite', targetType: 'method', includeContext: true },
+        { getReadDb: () => db, searchLabels: () => [] },
+      ));
+      expect(text).toMatch(/Total References Found:\*\* 1\b/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
