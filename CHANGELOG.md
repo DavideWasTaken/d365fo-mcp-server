@@ -91,6 +91,15 @@ those are called out explicitly below.
     `[ExtensionOf(classStr(…))]` target with a regex that only fit the
     `model-name` shape — `CustTableCtso_Extension` targeted itself. It now uses
     the same base derivation for all three class styles.
+- **`labels(action="rename")` is now held to the cross-model write guard.**
+  `labels(action="create")` refused to write a label into another model's
+  label file, but a rename of a label in that same file went through and
+  rewrote it. The rename now gets the same refusal (also for `dryRun:true`),
+  and the same configuration (`D365FO_CROSS_MODEL_WRITE_MODELS`,
+  `D365FO_ALLOW_CROSS_MODEL_WRITE`) allows it, with a note on the result.
+  References the rename finds through `searchPaths` are held to the same
+  guard: a file in another model, or outside every package root, refuses the
+  whole rename before anything is written.
 - **`labels(action="rename")` no longer creates a duplicate label ID.** In a
   `.label.txt` without a BOM, an ID on the first line was invisible to the
   "target already exists" check, so renaming another label onto it left two
