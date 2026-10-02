@@ -134,6 +134,11 @@ export function renderSubscriberAccessLevel(
   return `${indent}<SubscriberAccessLevel>\n${children.join('\n')}\n${indent}</SubscriberAccessLevel>`;
 }
 
+/** `s` as a literal regex fragment. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** The table-level `<SubscriberAccessLevel>` element, with its line. */
 const TABLE_LEVEL_ELEMENT =
   /^([ \t]*)<SubscriberAccessLevel\s*\/>[ \t]*\r?\n?|^([ \t]*)<SubscriberAccessLevel>[\s\S]*?<\/SubscriberAccessLevel>[ \t]*\r?\n?/m;
@@ -232,7 +237,9 @@ export function setSubscriberAccessLevel(xml: string, level: SubscriberAccessLev
   const indent = nameLine[1] || '\t';
   const head = xml.slice(0, blockEnd);
   let insertAt = -1;
-  for (const m of head.matchAll(new RegExp(`^${indent}<(${PREDECESSORS.join('|')})(\\s*/>|>)`, 'gm'))) {
+  // The indent and tag come from the document; escaped before they become a pattern.
+  const indentRe = escapeRegExp(indent);
+  for (const m of head.matchAll(new RegExp(`^${indentRe}<(${PREDECESSORS.join('|')})(\\s*/>|>)`, 'gm'))) {
     const start = m.index!;
     const lineEnd = head.indexOf('\n', start);
     if (lineEnd === -1) continue;
@@ -241,7 +248,7 @@ export function setSubscriberAccessLevel(xml: string, level: SubscriberAccessLev
     // with its closing tag at the same indentation (<SourceCode> … </SourceCode>).
     let end = lineEnd;
     if (!line.endsWith('/>') && !line.endsWith(`</${m[1]}>`)) {
-      const close = new RegExp(`^${indent}</${m[1]}>`, 'm').exec(head.slice(start));
+      const close = new RegExp(`^${indentRe}</${escapeRegExp(m[1])}>`, 'm').exec(head.slice(start));
       if (!close) continue;
       end = head.indexOf('\n', start + close.index);
       if (end === -1) continue;

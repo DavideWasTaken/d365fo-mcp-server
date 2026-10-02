@@ -42,7 +42,10 @@ function attributesOf(tag: string): Map<string, string> {
 
 /** The value of one `<appSettings>` key, or undefined when no live entry sets it. */
 export function readAppSetting(xml: string, key: string): string | undefined {
-  const live = xml.replace(COMMENT_OR_CDATA, '');
+  // Replaced by a space, not removed: deleting a comment joins the text around
+  // it, and "<!" + "<!-- … -->" + "--" would then read as a new "<!--" that the
+  // single pass never sees. A space keeps the two sides apart, as XML does.
+  const live = xml.replace(COMMENT_OR_CDATA, ' ');
   const wanted = key.toLowerCase();
   // A fragment with no <appSettings> wrapper is read whole.
   const sections = [...live.matchAll(APP_SETTINGS_SECTION)].map(m => m[1]);
