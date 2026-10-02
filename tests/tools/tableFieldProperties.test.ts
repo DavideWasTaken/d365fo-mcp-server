@@ -21,6 +21,12 @@ describe('enumType alone means an enum field', () => {
     const [f] = normalizeFieldSpecsForBridge([{ name: 'Note', edt: 'Description' }]);
     expect(f.type).toBeUndefined();
   });
+  it('the template builder takes the ignoreEDTRelation spelling too', () => {
+    // fieldPropertiesFromSpecs (the bridge path) accepts both; the template path
+    // read only ignoreEdtRelation and dropped the other without a word.
+    expect(buildAxTableFieldsXml([{ name: 'Ref', edt: 'Name', ignoreEDTRelation: true } as any]))
+      .toContain('<IgnoreEDTRelation>Yes</IgnoreEDTRelation>');
+  });
   it('XML builder emits AxTableFieldEnum for enumType alone', () => {
     expect(buildAxTableFieldsXml([{ name: 'Status', enumType: 'NoYes' } as any])).toContain('i:type="AxTableFieldEnum"');
   });

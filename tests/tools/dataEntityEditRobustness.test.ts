@@ -89,3 +89,40 @@ describe('dataManagementEnabled spelling', () => {
     expect(xml).toContain('<DataManagementEnabled>Yes</DataManagementEnabled>');
   });
 });
+
+// Release review 1.20.0: X++ names are case-insensitive, and so is the bridge's
+// ModifyField. The XML half matched the field name exactly, so a wrongly cased
+// name failed it AFTER the bridge had written the label — reported as "nothing
+// was written".
+describe('modify-field with a differently cased field name', () => {
+  let dir: string; let file: string;
+  beforeEach(async () => {
+    bridgeModifyField.mockReset();
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'r1-'));
+    file = path.join(dir, 'T.xml');
+    await fs.writeFile(file, TABLE);
+  });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  it('applies the XML half to the field the bridge modified', async () => {
+    bridgeModifyField.mockResolvedValue({ success: true, message: 'ok' });
+    const r = await modifyFieldOp({} as any, 'T', file, { fieldName: 'f', fieldLabel: '@X:L', fieldAllowEdit: false });
+    expect(r?.success).toBe(true);
+    expect(await fs.readFile(file, 'utf-8')).toContain('<AllowEdit>No</AllowEdit>');
+  });
+});
+
+// Shipped entities mix indentation (a tab line in a two-space file). Looking for
+// the property only at the detected unit inserted a second copy of it.
+describe('entity property at a different indentation', () => {
+  it('is replaced, not duplicated', () => {
+    const base = buildAxDataEntityXml('E', { primaryTable: 'T', fields: [{ name: 'A' }] });
+    expect(base).toContain('\t<Label>E</Label>\n');
+    expect(base).not.toContain('<IsObsolete>');
+    const mixed = base.replace('\t<Label>E</Label>\n', '\t<Label>E</Label>\n  <IsObsolete>No</IsObsolete>\n');
+    const r = upsertDataEntityProperty(mixed, 'IsObsolete', 'Yes');
+    expect(r.ok).toBe(true);
+    expect(r.xml!.match(/<IsObsolete>/g)).toHaveLength(1);
+    expect(r.xml).toContain('  <IsObsolete>Yes</IsObsolete>');
+  });
+});
