@@ -33,6 +33,8 @@ export interface AxTableFieldSpec {
   allowEdit?: boolean | string;
   /** IgnoreEDTRelation — true/"Yes" writes <IgnoreEDTRelation>Yes</IgnoreEDTRelation>. */
   ignoreEdtRelation?: boolean | string;
+  /** Same as ignoreEdtRelation — the spelling fieldPropertiesFromSpecs also accepts. */
+  ignoreEDTRelation?: boolean | string;
 }
 
 /** X++ source already split by the caller (see XmlTemplateGenerator.parseSourceForBridge). */
@@ -190,7 +192,7 @@ export function buildAxTableFieldsXml(fieldSpecs: AxTableFieldSpec[]): string {
     const allowEdit = yesNo(f.allowEdit);
     if (allowEdit)   xml += `\t\t\t<AllowEdit>${allowEdit}</AllowEdit>\n`;
     if (f.edt)       xml += `\t\t\t<ExtendedDataType>${f.edt}</ExtendedDataType>\n`;
-    const ignoreRel = yesNo(f.ignoreEdtRelation);
+    const ignoreRel = yesNo(f.ignoreEdtRelation ?? f.ignoreEDTRelation);
     if (ignoreRel)   xml += `\t\t\t<IgnoreEDTRelation>${ignoreRel}</IgnoreEDTRelation>\n`;
     if (f.label)     xml += `\t\t\t<Label>${escapeXml(f.label)}</Label>\n`;
     if (f.mandatory) xml += `\t\t\t<Mandatory>Yes</Mandatory>\n`;

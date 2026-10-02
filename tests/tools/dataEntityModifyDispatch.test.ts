@@ -185,8 +185,6 @@ describe('add-data-source + add-field on a data-entity', () => {
     expect(written()).toBe('');
   });
   it('add-field with dataField+dataSource maps a field onto an entity datasource', async () => {
-    fixture.xml = fixture.xml.replace('<DataSources />\n\t\t\t\t<DerivedDataSources />',
-      '<DataSources />\n\t\t\t\t<DerivedDataSources />');
     const r: any = await modifyD365FileTool(
       req({ ...base, operation: 'add-field', fieldName: 'AssetIdCopy', dataField: 'AssetId', dataSource: 'AssetTrans' }),
       buildContext(),

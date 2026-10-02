@@ -68,7 +68,10 @@ export function upsertTableFieldProperty(
   const u3 = u.repeat(3);
   const field = new RegExp(
     `^(${u2}<AxTableField\\b[^>]*>\\n)((?:${u3}[^\\n]*\\n)*?${u3}<Name>${esc}</Name>\\n(?:${u3}[^\\n]*\\n)*?)(${u2}</AxTableField\\w*>)`,
-    'm',
+    // X++ names are case-insensitive, and so is the bridge's ModifyField: a
+    // case-sensitive match here failed the XML half of a modify-field AFTER the
+    // bridge had already written its half, and reported "nothing was written".
+    'mi',
   ).exec(xml);
   if (!field) return { ok: false, message: `field '${fieldName}' not found in the table` };
 

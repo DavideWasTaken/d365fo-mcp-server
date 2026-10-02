@@ -74,6 +74,22 @@ function topLevelElements(xml: string, u: string): Array<{ name: string; index: 
   return out;
 }
 
+/** Top-level collections: the scalar property block ends at the first of them. */
+const ENTITY_COLLECTIONS = new Set([
+  'DeleteActions', 'FieldGroups', 'Fields', 'Keys', 'Mappings', 'Ranges', 'Relations', 'StateMachines', 'ViewMetadata',
+]);
+
+/**
+ * Where the entity's scalar properties sit: after its <SourceCode> block (whose
+ * X++ may contain anything) and before its first collection.
+ */
+function scalarPropertySpan(xml: string, u: string): { start: number; end: number } {
+  const sourceEnd = new RegExp(`^${u}(?:</SourceCode>|<SourceCode\\s*/>)`, 'm').exec(xml);
+  const start = sourceEnd ? sourceEnd.index + sourceEnd[0].length : 0;
+  const firstCollection = topLevelElements(xml, u).find(e => e.index >= start && ENTITY_COLLECTIONS.has(e.name));
+  return { start, end: firstCollection ? firstCollection.index : start };
+}
+
 /**
  * Set (or insert, in canonical position) one scalar property of an entity.
  * Refuses names that are not entity scalar properties: writing an arbitrary
@@ -109,6 +125,21 @@ export function upsertDataEntityProperty(xml: string, name: string, value: strin
   const existing = new RegExp(`^${u}<${canonical}(?:>[^<]*</${canonical}>|\\s*/>)`, 'm');
   if (existing.test(xml)) {
     return { ok: true, xml: xml.replace(existing, () => `${u}${text}`), message: `${canonical} updated` };
+  }
+  // …or at another indentation. Shipped entities mix them (a tab line in a
+  // two-space file), and looking only at the detected unit inserted a SECOND copy.
+  // Between </SourceCode> and the first collection there are only scalar
+  // properties, so any match in that span is the top-level element.
+  const scalarSpan = scalarPropertySpan(xml, u);
+  const anyIndent = new RegExp(`^([ \\t]*)<${canonical}(?:>[^<]*</${canonical}>|\\s*/>)`, 'm')
+    .exec(xml.slice(scalarSpan.start, scalarSpan.end));
+  if (anyIndent) {
+    const at = scalarSpan.start + anyIndent.index;
+    return {
+      ok: true,
+      xml: `${xml.slice(0, at)}${anyIndent[1]}${text}${xml.slice(at + anyIndent[0].length)}`,
+      message: `${canonical} updated`,
+    };
   }
 
   // Insert before the first top-level element that belongs AFTER this one.
