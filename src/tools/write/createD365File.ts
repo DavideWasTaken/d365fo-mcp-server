@@ -28,6 +28,7 @@ import { xppMethodSourceForXml } from '../../utils/xppFormat.js';
 import { bridgeValidateAfterWrite, canBridgeCreate, bridgeCreateObject, bridgeCreateSmartTable, isBridgeFailure, describeBridgeFailure } from '../../bridge/index.js';
 import type { BridgeFailure } from '../../bridge/index.js';
 import * as debouncedRefresh from '../../bridge/debouncedRefresh.js';
+import { subscriberAccessLevelValue } from '../../utils/subscriberAccessLevel.js';
 import {
   checkObjectIdentity,
   renderIdentityRefusal,
@@ -621,6 +622,18 @@ function extensibleEnumOrderingWarning(objectType: string, properties: unknown, 
 }
 
 /**
+ * `subscriberAccessLevel` in the "Read=Allow,Create=Deny" / "None" text the
+ * bridge's property setter reads, so an object value reaches it too. Any other
+ * key passes through unchanged. An invalid value never gets here:
+ * handleCreateD365File refuses it before the create.
+ */
+function bridgeSubscriberAccessLevel(key: string, value: unknown): unknown {
+  if (key.toLowerCase() !== 'subscriberaccesslevel' || value === null || value === undefined) return value;
+  const v = subscriberAccessLevelValue(value);
+  return v.ok ? v.bridgeText : value;
+}
+
+/**
  * Post-write parameter honesty for a table create (cluster #35).
  *
  * The metadata writer — bridge or template — accepts `properties` it does not know
@@ -635,12 +648,15 @@ async function reconcileCreatedTableProperties(
   filePath: string | undefined,
   properties: unknown,
 ): Promise<string> {
-  if (!filePath || !properties || typeof properties !== 'object') return '';
+  if (!filePath) return '';
   try {
     const onDisk = await fs.readFile(filePath, 'utf-8');
-    const reconciled = reconcileTableCreateProperties(onDisk, properties as Record<string, unknown>);
+    // No properties still reconciles: a regular table gets Visual Studio's
+    // SubscriberAccessLevel, which no bridge create writes.
+    const props = properties && typeof properties === 'object' ? (properties as Record<string, unknown>) : undefined;
+    const reconciled = reconcileTableCreateProperties(onDisk, props);
     // AllowEdit / IgnoreEDTRelation have no key in the bridge's create payload: applied to the XML on top of the reconcile.
-    const fieldSpecs = (properties as Record<string, unknown>).fields;
+    const fieldSpecs = props?.fields;
     const fieldPatches = Array.isArray(fieldSpecs)
       ? fieldPropertiesFromSpecs(fieldSpecs as Array<Record<string, unknown>>)
       : [];
@@ -653,7 +669,7 @@ async function reconcileCreatedTableProperties(
         fieldNote = `\n⚠️ Field properties NOT applied: ${applied.failed.join('; ')}`;
       }
     }
-    if (reconciled.patched.length > 0 || fieldPatches.length > 0) {
+    if (finalXml !== onDisk) {
       await writeFileAtomic(filePath, normalizeD365Xml(finalXml));
     }
     return renderTableCreateHonestyReport(reconciled) + fieldNote;
@@ -879,6 +895,23 @@ export async function handleCreateD365File(
     console.error(
       `[create_d365fo_file] Final ModelName to use: ${actualModelName}${wasAutoExtracted ? ' (auto-extracted ✓)' : ' (as-is, NOT auto-extracted ⚠️)'}`
     );
+
+    // An invalid subscriberAccessLevel is refused before anything is written. Sent
+    // on, it made the bridge's AccessGrant parse throw inside Create(), and the
+    // whole table fell back to the XML template for one bad property value.
+    if (args.objectType === 'table' && args.properties && typeof args.properties === 'object') {
+      const salKey = Object.keys(args.properties).find(k => k.toLowerCase() === 'subscriberaccesslevel');
+      const salValue = salKey ? (args.properties as Record<string, unknown>)[salKey] : undefined;
+      if (salValue !== undefined && salValue !== null) {
+        const parsed = subscriberAccessLevelValue(salValue);
+        if (!parsed.ok) {
+          return {
+            content: [{ type: 'text', text: `❌ ${parsed.error} Nothing was created.` }],
+            isError: true,
+          };
+        }
+      }
+    }
 
     // Guard: refuse to create objects in generic placeholder model names.
     // These are never real D365FO models — if the AI reaches this point with a placeholder,
@@ -1322,6 +1355,7 @@ export async function handleCreateD365File(
         const scalarProperties: Record<string, string> | undefined = args.properties
           ? Object.fromEntries(
               Object.entries(args.properties as Record<string, unknown>)
+                .map(([k, v]): [string, unknown] => [k, bridgeSubscriberAccessLevel(k, v)])
                 .filter(([, v]) => v != null && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
                 .map(([k, v]) => [k, String(v)]),
             )

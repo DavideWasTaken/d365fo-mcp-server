@@ -67,6 +67,21 @@ those are called out explicitly below.
   `fieldIgnoreEdtRelation` (for `BPErrorTablePrimaryKeyEditable` and `BPErrorEDTNotMigrated`).
   A table field given only `enumType` is now an enum field (it became a string field through
   the bridge).
+- **Tables get "Subscriber access level", as Visual Studio creates them
+  (#1073).** A new regular table now carries
+  `<SubscriberAccessLevel><Read>Allow</Read></SubscriberAccessLevel>`, which
+  VS writes on every new table. TempDB/InMemory tables get none — a choice
+  rather than a measured rule, since about a quarter of shipped temporary
+  tables carry the element, the same share as regular ones. The property
+  can be set on create (`properties.subscriberAccessLevel`: `"Read=Allow,Create=Deny"`,
+  `{ "read": "Allow" }` or `"None"`) and with
+  `modify-property propertyPath="SubscriberAccessLevel"`; an invalid value is
+  refused before anything is written. Table reads show
+  it together with `AllowRowVersionChangeTracking`. It holds one child element
+  per permission, so the scalar property writer could neither express nor place
+  it, and the name was dropped. `AllowRowVersionChangeTracking` stays opt-in:
+  it is not a Visual Studio default. The regular-table eval goldens now include
+  the element.
 
 ### Fixed
 - **Extension-class names under the `prefix` and `model-name` class styles now

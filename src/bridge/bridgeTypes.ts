@@ -54,6 +54,10 @@ export interface BridgeTableInfo {
   clusteredIndex?: string;
   primaryIndex?: string;
   saveDataPerCompany?: string;
+  /** "Read=Allow, Create=Deny" — the permissions the AccessGrant sets; absent when none are. */
+  subscriberAccessLevel?: string;
+  /** "Yes" when set; absent from bridges built before it was read. */
+  allowRowVersionChangeTracking?: string;
   extends?: string;
   supportInheritance?: string;
   instanceRelationType?: string;

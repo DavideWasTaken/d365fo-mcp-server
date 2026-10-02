@@ -23,7 +23,8 @@ import { removeFormControl } from '../../utils/formControlRemoval.js';
 import { addSecurityEntryPoint, removeSecurityEntryPoint } from '../xml/securityPrivilegeXml.js';
 import { removeDiagnosticSuppression, addDiagnosticSuppression, emptySuppressionListXml } from '../../utils/ignoreDiagnosticListXml.js';
 import { buildSuppressionXml } from '../../knowledge/bpMonikers/index.js';
-import { upsertAxTableProperty, AX_TABLE_NON_EXISTENT_PROPERTIES } from '../../utils/axTablePropertyOrder.js';
+import { upsertAxTableProperty, upsertAxTableSubscriberAccessLevel, AX_TABLE_NON_EXISTENT_PROPERTIES } from '../../utils/axTablePropertyOrder.js';
+import { describeSubscriberAccessLevel, subscriberAccessLevelValue } from '../../utils/subscriberAccessLevel.js';
 import { upsertAxFormDesignProperty } from '../../utils/axFormDesignProperties.js';
 import { buildAxDataEntityViewFieldXml } from '../xml/dataEntityViewExtensionXml.js';
 import {
@@ -163,6 +164,23 @@ export const directXmlModifyProperty = serializedOnFile(async (
       };
     }
     const tagRe = tagName.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+
+    // AxTable SubscriberAccessLevel holds child elements (one per permission), so
+    // the leaf replacement below would refuse it, and the bridge's setProperty has
+    // no case for it. "Read=Allow,Create=Deny", a JSON object, or "None" (#1073).
+    if (tagName.toLowerCase() === 'subscriberaccesslevel' && /<AxTable[\s>]/.test(content)) {
+      const parsed = subscriberAccessLevelValue(propertyValue);
+      if (!parsed.ok) return { success: false, message: `❌ ${parsed.error} Nothing was written.` };
+      const patched = upsertAxTableSubscriberAccessLevel(content, parsed.level);
+      if (!patched) return null;
+      if (patched !== content) await writeFileAtomic(filePath, normalizeD365Xml(patched));
+      return {
+        success: true,
+        message:
+          `✅ SubscriberAccessLevel set to ${describeSubscriberAccessLevel(parsed.level)} via direct XML ` +
+          `(${patched === content ? 'already in that state, nothing written' : 'in canonical AxTable element order'}). File: ${filePath}`,
+      };
+    }
 
     // Forms first: the bridge refuses modify-property for AxForm entirely, and the
     // generic path below cannot serve Design properties either — Caption/Style also
