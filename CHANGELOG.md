@@ -70,10 +70,13 @@ those are called out explicitly below.
 - **Tables get "Subscriber access level", as Visual Studio creates them
   (#1073).** A new regular table now carries
   `<SubscriberAccessLevel><Read>Allow</Read></SubscriberAccessLevel>`, which
-  VS writes on every new table; TempDB/InMemory tables get none. The property
+  VS writes on every new table. TempDB/InMemory tables get none — a choice
+  rather than a measured rule, since about a quarter of shipped temporary
+  tables carry the element, the same share as regular ones. The property
   can be set on create (`properties.subscriberAccessLevel`: `"Read=Allow,Create=Deny"`,
   `{ "read": "Allow" }` or `"None"`) and with
-  `modify-property propertyPath="SubscriberAccessLevel"`, and table reads show
+  `modify-property propertyPath="SubscriberAccessLevel"`; an invalid value is
+  refused before anything is written. Table reads show
   it together with `AllowRowVersionChangeTracking`. It holds one child element
   per permission, so the scalar property writer could neither express nor place
   it, and the name was dropped. `AllowRowVersionChangeTracking` stays opt-in:

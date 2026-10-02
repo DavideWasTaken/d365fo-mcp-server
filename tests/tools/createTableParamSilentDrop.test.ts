@@ -428,4 +428,16 @@ describe('create table: SubscriberAccessLevel as Visual Studio writes it', () =>
     expect(onDisk).toContain('\t<SubscriberAccessLevel>\n\t\t<Read>Allow</Read>\n\t\t<Update>Deny</Update>\n\t</SubscriberAccessLevel>');
     expect(result.content[0].text).toContain('SubscriberAccessLevel');
   });
+
+  it('refuses an invalid access level before the bridge or the template writes anything', async () => {
+    // Sent on, the bridge's AccessGrant parse threw inside Create() and the whole
+    // table fell back to the XML template for one bad property value.
+    const { bridge, createSmartTable } = legacyBridge();
+    const result = await createVia(bridge, { label: 'Gated setting', subscriberAccessLevel: 'Read=Maybe' });
+    expect((result as any).isError).toBe(true);
+    expect(result.content[0].text).toContain('Nothing was created');
+    expect(createSmartTable).not.toHaveBeenCalled();
+    expect(bridge.createObject).not.toHaveBeenCalled();
+    expect(files.has(TABLE_PATH)).toBe(false);
+  });
 });

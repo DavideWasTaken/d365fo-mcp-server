@@ -21,6 +21,7 @@ import { lookupSymbolNocase } from '../../utils/symbolLookup.js';
 import { scaffoldWriteRefusalResult } from '../write/writeAnchorGuard.js';
 import { upsertWrittenFileIntoIndex } from '../write/inlineIndexUpsert.js';
 import { reconcileTableCreateProperties } from '../xml/createTablePropertyHonesty.js';
+import { writeFileAtomic } from '../../utils/atomicFileWrite.js';
 import * as debouncedRefresh from '../../bridge/debouncedRefresh.js';
 
 interface GenerateSmartTableArgs {
@@ -937,7 +938,7 @@ export async function handleGenerateSmartTable(
         const onDisk = await fs.promises.readFile(bridgeResult.filePath, 'utf-8');
         const reconciled = reconcileTableCreateProperties(onDisk, undefined);
         if (reconciled.xml !== onDisk) {
-          await fs.promises.writeFile(bridgeResult.filePath, normalizeD365Xml(reconciled.xml), 'utf-8');
+          await writeFileAtomic(bridgeResult.filePath, normalizeD365Xml(reconciled.xml));
           void debouncedRefresh.refresh(bridge);
         }
       } catch (e) {

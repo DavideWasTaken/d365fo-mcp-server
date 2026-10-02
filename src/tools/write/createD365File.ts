@@ -624,8 +624,8 @@ function extensibleEnumOrderingWarning(objectType: string, properties: unknown, 
 /**
  * `subscriberAccessLevel` in the "Read=Allow,Create=Deny" / "None" text the
  * bridge's property setter reads, so an object value reaches it too. Any other
- * key, and an invalid value, pass through unchanged: the create reconcile
- * writes or reports what the bridge did not.
+ * key passes through unchanged. An invalid value never gets here:
+ * handleCreateD365File refuses it before the create.
  */
 function bridgeSubscriberAccessLevel(key: string, value: unknown): unknown {
   if (key.toLowerCase() !== 'subscriberaccesslevel' || value === null || value === undefined) return value;
@@ -895,6 +895,23 @@ export async function handleCreateD365File(
     console.error(
       `[create_d365fo_file] Final ModelName to use: ${actualModelName}${wasAutoExtracted ? ' (auto-extracted ✓)' : ' (as-is, NOT auto-extracted ⚠️)'}`
     );
+
+    // An invalid subscriberAccessLevel is refused before anything is written. Sent
+    // on, it made the bridge's AccessGrant parse throw inside Create(), and the
+    // whole table fell back to the XML template for one bad property value.
+    if (args.objectType === 'table' && args.properties && typeof args.properties === 'object') {
+      const salKey = Object.keys(args.properties).find(k => k.toLowerCase() === 'subscriberaccesslevel');
+      const salValue = salKey ? (args.properties as Record<string, unknown>)[salKey] : undefined;
+      if (salValue !== undefined && salValue !== null) {
+        const parsed = subscriberAccessLevelValue(salValue);
+        if (!parsed.ok) {
+          return {
+            content: [{ type: 'text', text: `❌ ${parsed.error} Nothing was created.` }],
+            isError: true,
+          };
+        }
+      }
+    }
 
     // Guard: refuse to create objects in generic placeholder model names.
     // These are never real D365FO models — if the AI reaches this point with a placeholder,
