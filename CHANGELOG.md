@@ -130,6 +130,12 @@ those are called out explicitly below.
   that, so the next call collected "✅ Build succeeded" for sources xppc never
   saw. It is now measured from when the build started; the build's own
   outputs (`bin`, `XppMetadata`, and labelc's `Resources`) are not counted.
+- **labelc no longer runs on every build of a model whose label file has
+  its own name.** The "are the label assemblies current?" check looked for
+  `Resources\<model>.dll`, but labelc writes one assembly per label file
+  (`Resources\<LabelFile>.dll`). A model such as `VLTBase` with label file
+  `VLTLabel` never had the file it looked for, so every build recompiled
+  its labels and rewrote `Resources`.
 
 ## [1.19.1] — 2026-09-30
 
