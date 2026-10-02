@@ -97,6 +97,9 @@ those are called out explicitly below.
   rewrote it. The rename now gets the same refusal (also for `dryRun:true`),
   and the same configuration (`D365FO_CROSS_MODEL_WRITE_MODELS`,
   `D365FO_ALLOW_CROSS_MODEL_WRITE`) allows it, with a note on the result.
+  References the rename finds through `searchPaths` are held to the same
+  guard: a file in another model, or outside every package root, refuses the
+  whole rename before anything is written.
 
 ## [1.19.1] — 2026-09-30
 
