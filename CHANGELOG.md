@@ -28,6 +28,8 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+## [1.20.0] — 2026-10-02
+
 ### Added
 - **`naming.extensionClassStyle` / `EXTENSION_CLASS_NAMING_STYLE` accepts a new
   value, `prefix-leading`.** `prefix` and `model-name` both put the token right
@@ -151,6 +153,15 @@ those are called out explicitly below.
   (`Resources\<LabelFile>.dll`). A model such as `VLTBase` with label file
   `VLTLabel` never had the file it looked for, so every build recompiled
   its labels and rewrote `Resources`.
+- **Table info without the C# bridge no longer answers "not found" for
+  standard tables.** The symbol-index fallback rejected every row whose
+  recorded file path did not exist on this machine, but the index records the
+  path it was built at: a CI build agent for the shipped index, or an older
+  UDE version folder after an upgrade. So `CustTable` and every other standard
+  table came back "not found" although the index held the full field list. A
+  row now counts as stale only when the table's folder is present here and the
+  file is not, which is the rolled-back object the check was written for. Table
+  names also resolve case-insensitively (#1071).
 
 ## [1.19.1] — 2026-09-30
 
