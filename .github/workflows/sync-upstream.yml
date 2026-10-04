@@ -1,0 +1,71 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '0 20 * * *'
+      timezone: Europe/Rome
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'DavideWasTaken/d365fo-mcp-server' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out fork main with full history
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          # For upstream workflow edits, use a token limited to this fork with
+          # Contents and Workflows write permissions; otherwise fail safely.
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+
+      - name: Merge upstream main while preserving fork commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          if ! git fetch --no-tags --no-recurse-submodules \
+            https://github.com/dynamics365ninja/d365fo-mcp-server.git \
+            refs/heads/main:refs/remotes/upstream/main; then
+            echo '::error::Could not fetch upstream main. No changes were pushed.'
+            echo 'Upstream fetch failed; no changes were pushed.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          upstream_sha=$(git rev-parse refs/remotes/upstream/main)
+          if git merge-base --is-ancestor "$upstream_sha" HEAD; then
+            echo 'Fork main already contains all upstream commits.'
+            echo 'Already up to date with upstream; personal fork commits preserved.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # A normal merge preserves both histories, including personal changes.
+          # Conflicts require manual resolution; never choose ours/theirs globally.
+          if ! git merge --no-edit "$upstream_sha"; then
+            if git rev-parse -q --verify MERGE_HEAD > /dev/null; then
+              git merge --abort
+            fi
+            echo '::error::Upstream merge failed or has conflicts. Fork main was not changed; resolve manually.'
+            echo 'Merge failed or has conflicts; no changes were pushed to main. Resolve manually.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # A normal push also rejects concurrent fork changes; never force it.
+          if ! git push origin HEAD:refs/heads/main; then
+            echo '::error::Push failed or main changed concurrently. No forced update was attempted; check main and rerun.'
+            echo 'Push failed; no forced update was attempted. Check main and rerun.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "Merged upstream commit $upstream_sha into main, preserving fork history." >> "$GITHUB_STEP_SUMMARY"
