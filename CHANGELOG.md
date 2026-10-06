@@ -28,6 +28,17 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Fixed
+- **Creates into a model whose package has a different name reported failure
+  (#1086).** The C# bridge built the reported path as `{Model}\{Model}\Ax…`, so
+  for package `Enhancements` holding model `Sales Integration` it named a folder
+  that does not exist. The object itself was written correctly, but the server
+  checks, indexes and adds to the `.rnrproj` the *reported* path, so the create
+  came back as "the file is NOT on disk after a reported success". The bridge now
+  looks up the package from the model descriptor. The on-disk fallback that
+  finds which model an existing object belongs to had the same `{pkg}\{pkg}`
+  assumption and now walks the model folders.
+
 ## [1.20.0] — 2026-10-02
 
 ### Added
