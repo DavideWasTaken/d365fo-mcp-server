@@ -26,6 +26,11 @@ namespace D365MetadataBridge.Services
         // _modelCache in UpdateProvider for the same reason: it is read off the provider.
         private readonly Dictionary<string, bool> _microsoftModelCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
+        // Cache the package (top-level PackagesLocalDirectory folder) each model lives in —
+        // see ResolvePackageName. Cleared in UpdateProvider: a model deployed or created
+        // since the last refresh may be the one that finally resolves.
+        private readonly Dictionary<string, string> _packageNameCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         public MetadataWriteService(IMetadataProvider provider, string packagesPath)
         {
             _provider = provider;
@@ -70,6 +75,7 @@ namespace D365MetadataBridge.Services
             _modelCache.Clear();
             _microsoftModelCache.Clear();
             _objectModelCache.Clear();
+            _packageNameCache.Clear();
         }
 
         // ========================
@@ -4864,7 +4870,10 @@ namespace D365MetadataBridge.Services
             }
 
             // Strategy 3: infer model from on-disk file path
-            //   Files live at {packagesPath}/{ModelName}/{ModelName}/Ax{Type}/{Name}.xml
+            //   Files live at {packagesPath}/{PackageName}/{ModelName}/Ax{Type}/{Name}.xml.
+            //   The package and the model are NOT always the same name (#1086: package
+            //   "Enhancements" holding model "Sales Integration"), so every model folder
+            //   of every package is probed and the model is taken from the folder name.
             //   We scan common AOT folders for the object name. A union scan, not a
             //   type mapping: every folder is tried, so AxClass already covers class
             //   extensions ([ExtensionOf(...)] AxClass files) and an AxClassExtension
@@ -4880,17 +4889,19 @@ namespace D365MetadataBridge.Services
             {
                 foreach (var packageDir in Directory.GetDirectories(_packagesPath))
                 {
-                    var packageName = Path.GetFileName(packageDir);
-                    foreach (var aotFolder in aotFolders)
+                    foreach (var modelDir in Directory.GetDirectories(packageDir))
                     {
-                        var filePath = Path.Combine(packageDir, packageName, aotFolder, objectName + ".xml");
-                        if (File.Exists(filePath))
+                        var modelName = Path.GetFileName(modelDir);
+                        foreach (var aotFolder in aotFolders)
                         {
-                            // Found the file — resolve model from this package name
-                            var msi = ResolveModelSaveInfo(packageName);
+                            var filePath = Path.Combine(modelDir, aotFolder, objectName + ".xml");
+                            if (!File.Exists(filePath)) continue;
+
+                            // Found the file — the folder it sits in names the model.
+                            var msi = ResolveModelSaveInfo(modelName);
                             if (msi != null)
                             {
-                                Console.Error.WriteLine($"[WriteService] GetModelSaveInfoForObject: resolved '{objectName}' via file path → model '{packageName}'");
+                                Console.Error.WriteLine($"[WriteService] GetModelSaveInfoForObject: resolved '{objectName}' via file path → model '{modelName}'");
                                 return msi;
                             }
                         }
@@ -4930,9 +4941,85 @@ namespace D365MetadataBridge.Services
         // HELPERS: Path + Parse
         // ========================
 
+        /// <summary>
+        /// Where the SDK's Create() put the object: {packages}/{Package}/{Model}/{AxFolder}/{Name}.xml.
+        /// This path is what the TS side verifies on disk, adds to the .rnrproj and indexes,
+        /// so it must name the package the model really lives in — not assume the two names
+        /// match (#1086).
+        /// </summary>
         private string GetExpectedPath(string aotFolder, string objectName, string modelName)
         {
-            return Path.Combine(_packagesPath, modelName, modelName, aotFolder, objectName + ".xml");
+            return Path.Combine(_packagesPath, ResolvePackageName(modelName), modelName, aotFolder, objectName + ".xml");
+        }
+
+        /// <summary>
+        /// The package a model belongs to: the folder whose Descriptor/ declares a model of
+        /// that name. Most models live in a package of the same name, so that is probed
+        /// first; otherwise every package's descriptors are read. Falls back to the model
+        /// name when nothing declares it (the historical behaviour) and does not cache the
+        /// miss, so a model deployed later still resolves.
+        /// </summary>
+        private string ResolvePackageName(string modelName)
+        {
+            if (_packageNameCache.TryGetValue(modelName, out var cached))
+                return cached;
+
+            string? found = null;
+            try
+            {
+                if (DescriptorDeclaresModel(Path.Combine(_packagesPath, modelName, "Descriptor", modelName + ".xml"), modelName))
+                {
+                    found = modelName;
+                }
+                else
+                {
+                    var packageDirs = Directory.GetDirectories(_packagesPath);
+
+                    // Cheap pass: a descriptor file named after the model, in any package.
+                    foreach (var packageDir in packageDirs)
+                    {
+                        if (DescriptorDeclaresModel(Path.Combine(packageDir, "Descriptor", modelName + ".xml"), modelName))
+                        { found = Path.GetFileName(packageDir); break; }
+                    }
+
+                    // Full pass: the descriptor's <Name>, whatever the file is called.
+                    if (found == null)
+                    {
+                        foreach (var packageDir in packageDirs)
+                        {
+                            var descDir = Path.Combine(packageDir, "Descriptor");
+                            if (!Directory.Exists(descDir)) continue;
+                            if (Directory.GetFiles(descDir, "*.xml").Any(f => DescriptorDeclaresModel(f, modelName)))
+                            { found = Path.GetFileName(packageDir); break; }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[WriteService] Package lookup failed for model '{modelName}': {ex.Message}");
+            }
+
+            if (found == null) return modelName;
+            _packageNameCache[modelName] = found;
+            return found;
+        }
+
+        private static bool DescriptorDeclaresModel(string xmlPath, string modelName)
+        {
+            if (!File.Exists(xmlPath)) return false;
+            try
+            {
+                var root = XDocument.Load(xmlPath).Root;
+                if (root == null) return false;
+                var ns = root.GetDefaultNamespace();
+                var nameEl = root.Element(ns + "Name") ?? root.Element("Name");
+                return nameEl != null && string.Equals(nameEl.Value.Trim(), modelName, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool ParseBool(string value)
