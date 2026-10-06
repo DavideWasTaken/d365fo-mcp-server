@@ -2,7 +2,8 @@ name: Sync upstream
 
 on:
   schedule:
-    - cron: '0 20 * * *'
+    # Off the top of the hour, when GitHub delays scheduled runs the most.
+    - cron: '17 20 * * *'
       timezone: Europe/Rome
   workflow_dispatch:
 
@@ -15,7 +16,8 @@ concurrency:
 
 jobs:
   sync:
-    if: github.repository == 'DavideWasTaken/d365fo-mcp-server' && github.ref == 'refs/heads/main'
+    # Any repository except upstream itself, so renaming the fork keeps the sync running.
+    if: github.repository != 'dynamics365ninja/d365fo-mcp-server' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

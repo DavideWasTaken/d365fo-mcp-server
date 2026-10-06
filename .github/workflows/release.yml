@@ -92,6 +92,8 @@ jobs:
   # https://github.blog/changelog/2026-07-08-npm-install-time-security-and-gat-bypass2fa-deprecation/
   publish-npm:
     name: Publish to npm
+    # Trusted publishing is bound to upstream; a tag pushed on a fork must not attempt it.
+    if: github.repository == 'dynamics365ninja/d365fo-mcp-server'
     runs-on: ubuntu-latest
     permissions:
       contents: read
