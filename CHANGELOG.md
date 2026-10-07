@@ -28,6 +28,19 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Added
+- **`modify-property` sets properties on a form's own controls.** With
+  `controlName` (or a dotted `propertyPath`, `"PostButton.NeedsRecord"`), it now
+  reaches a control of an `objectType="form"` and a control a form extension
+  ADDS — before, it stopped at `<Design>` and at base-form controls through
+  `<ControlModifications>`, so setting MenuItemName, MultiSelect or NeedsRecord
+  on such a button meant rewriting the whole form XML. The property is written
+  on that control in the element order shipped metadata uses for its type (the
+  census in `formControlElementOrder.generated.ts`), since the deserializer
+  drops an out-of-order element silently (#979); a property the type never
+  carries (MenuItemName on a plain Button) is refused, an empty value removes
+  the element, and an ambiguous or unknown control name writes nothing.
+
 ### Fixed
 - **Creates into a model whose package has a different name reported failure
   (#1086).** The C# bridge built the reported path as `{Model}\{Model}\Ax…`, so
