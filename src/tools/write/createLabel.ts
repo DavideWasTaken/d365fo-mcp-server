@@ -90,7 +90,9 @@ export const CreateLabelArgsSchema = z.object({
     .min(1)
     .describe(
       'Label text for each language. At minimum provide en-US. ' +
-        'For languages without a translation the en-US text is used as fallback.',
+        'Matches locales case-insensitively, then uses the nearest supplied parent locale ' +
+        '(e.g. it for it-IT). Otherwise uses en-US, or the first supplied translation. ' +
+        'Every fallback reports its source and target locale.',
     ),
   languages: z
     .array(z.string())
@@ -922,7 +924,35 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
     for (const tr of translations) {
       translationMap.set(tr.language, { text: tr.text, comment: tr.comment ?? defaultComment ?? effectiveDescription });
     }
-    const enUsText = translationMap.get('en-US')?.text ?? translations[0].text;
+    const translationsByLocale = new Map(
+      [...translationMap].map(([language, entry]) => [language.toLowerCase(), { language, entry }]),
+    );
+    const resolveTranslation = (language: string) => {
+      const locale = language.toLowerCase();
+      const exact = translationsByLocale.get(locale);
+      if (exact) return { ...exact, fallback: '' };
+
+      // Walk only the target's parent chain: zh-Hant-TW → zh-Hant → zh.
+      // Never choose a sibling such as it-CH for it-IT. Strip dangling BCP-47
+      // extension singletons along with their final subtag during truncation.
+      const parts = locale.split('-');
+      while (parts.length > 1) {
+        parts.pop();
+        if (parts[parts.length - 1].length === 1) parts.pop();
+        const parent = translationsByLocale.get(parts.join('-'));
+        if (parent) return { ...parent, fallback: 'parent locale' };
+      }
+
+      const english = translationsByLocale.get('en-us');
+      const source = english ?? { language: translations[0].language, entry: translations[0] };
+      return {
+        language: source.language,
+        // Preserve the existing last-resort comment behavior: use the target's
+        // default description rather than a comment specific to another locale.
+        entry: { text: source.entry.text, comment: defaultComment ?? effectiveDescription },
+        fallback: english ? 'en-US' : 'first supplied locale',
+      };
+    };
 
     // 2. Discover the language folders that already exist in the model.
     //    NOTE: LabelResources/ is shared by EVERY label file in the model, so this lists
@@ -1051,6 +1081,8 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
 
     // 4. Process each existing language
     const written: string[] = [];
+    const writtenDetails: string[] = [];
+    const translationWarnings: string[] = [];
     const skipped: string[] = [];
     type LabelEntry = Parameters<XppSymbolIndex['bulkAddLabels']>[0][number];
     const indexEntries: LabelEntry[] = [];
@@ -1078,7 +1110,8 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
       }
 
       // Determine text for this language
-      const entry = translationMap.get(lang) ?? { text: enUsText, comment: defaultComment ?? effectiveDescription };
+      const resolved = resolveTranslation(lang);
+      const { entry } = resolved;
       labelMap.set(labelId, entry);
 
       // Ensure the directory exists
@@ -1088,6 +1121,12 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
       const newContent = serializeLabelMap(labelMap, shouldSort, eol);
       await writeFileWithBom(txtPath, newContent);
       written.push(lang);
+      writtenDetails.push(`  ✔ ${lang}  → ${entry.text}`);
+      if (resolved.fallback) {
+        translationWarnings.push(
+          `  ⚠ Translation fallback (${resolved.fallback}): ${resolved.language} → ${lang}; wrote "${entry.text}".`,
+        );
+      }
 
       // Prepare index update
       if (updateIndex) {
@@ -1236,7 +1275,8 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
       `Location   : ${labelResourcesDir}`,
       '',
       'Written to languages:',
-      ...written.map(l => `  ✔ ${l}  → ${translationMap.get(l)?.text ?? enUsText}`),
+      ...writtenDetails,
+      ...translationWarnings,
     ];
     if (skipped.length > 0) {
       lines.push('');

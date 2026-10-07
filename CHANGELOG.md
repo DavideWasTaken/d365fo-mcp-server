@@ -29,6 +29,17 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Fixed
+- **A label created for `it` landed in `it-IT` in English, without a word.**
+  `labels(action="create")` looked up each existing language folder's
+  translation by exact, case-sensitive name, and fell back to the en-US text
+  for anything else. A model with an `it-IT` folder therefore got English when
+  the agent supplied `it` (or `it-it`), and the response listed the English
+  text as written without saying it was a substitute. Locales now match
+  case-insensitively, then fall back along the target's own parent chain
+  (`it-IT` → `it`; `zh-Hant-TW` → `zh-Hant` → `zh`, never a sibling such as
+  `it-CH`), and only then to en-US or the first supplied translation. Every
+  fallback is reported with its source and target locale, and the written
+  lines show the text actually written.
 - **Creates into a model whose package has a different name reported failure
   (#1086).** The C# bridge built the reported path as `{Model}\{Model}\Ax…`, so
   for package `Enhancements` holding model `Sales Integration` it named a folder
