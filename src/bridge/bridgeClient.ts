@@ -1020,7 +1020,7 @@ export class BridgeClient extends EventEmitter {
 
     throw new Error(
       `Bridge executable not found. Searched:\n${candidates.map(c => `  - ${c}`).join('\n')}\n` +
-      `Build it with: cd bridge/D365MetadataBridge && dotnet build -c Release`
+      `Build it from the repository root with: dotnet build bridge/D365MetadataBridge/D365MetadataBridge.csproj -c Release`
     );
   }
 

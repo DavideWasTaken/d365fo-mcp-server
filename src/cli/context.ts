@@ -172,6 +172,7 @@ export const paths = {
   // Code — always in the package, never in the data directory.
   distEntry: resolve(repoRoot, 'dist', 'index.js'),
   bridgeDir: resolve(repoRoot, 'bridge', 'D365MetadataBridge'),
+  bridgeProject: resolve(repoRoot, 'bridge', 'D365MetadataBridge', 'D365MetadataBridge.csproj'),
   get bridgeExe(): string {
     return installMode === 'git'
       ? resolve(repoRoot, 'bridge', 'D365MetadataBridge', 'bin', 'Release', 'D365MetadataBridge.exe')
@@ -214,8 +215,11 @@ export const DOTNET_MISSING =
   '   then run `d365fo-mcp setup` again. Reads and search work without it.';
 
 export function bridgeBuildCommand(): string {
+  // One invocation on the project's absolute path, never `cd … && …`: Windows
+  // PowerShell 5.1 — the default shell on D365FO VMs — rejects `&&` as a
+  // statement separator, so the old form failed exactly where it is printed.
   const out = paths.bridgeOutDir ? ` -o "${paths.bridgeOutDir}"` : '';
-  return `cd "${paths.bridgeDir}" && dotnet build -c Release${out}`;
+  return `dotnet build "${paths.bridgeProject}" -c Release${out}`;
 }
 
 /**
