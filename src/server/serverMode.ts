@@ -34,7 +34,6 @@ import { isAxDbConfigured } from '../config/axdbSql.js';
 export const LOCAL_TOOLS = new Set([
   'axdb_sql',
   'verify_d365fo_project',
-  'verify_ui_customization',
   'update_symbol_index',
   'build_d365fo_project',
   'run_bp_check',
@@ -176,7 +175,6 @@ export function isToolAllowedInMode(mode: ServerMode, toolName: string): boolean
  * because a table change is not finished until the DB is synchronised.
  */
 export const CORE_TOOLS = new Set([
-  'axdb_sql',
   // ground + discover
   'prepare',
   'search',
@@ -195,7 +193,7 @@ export const CORE_TOOLS = new Set([
   'build_d365fo_project',
   'run_bp_check',
   'verify_d365fo_project',
-  'verify_ui_customization',
+  'axdb_sql',
 ]);
 
 /**
@@ -248,6 +246,7 @@ export function isToolEnabled(
   profile: ToolProfile = TOOL_PROFILE,
   extras: ReadonlySet<string> = EXTRA_TOOLS,
 ): boolean {
+  // axdb_sql is published only once SQL is configured: an unconfigured install pays nothing for it.
   return (toolName !== 'axdb_sql' || isAxDbConfigured())
     && isToolAllowedInMode(mode, toolName) && isToolInProfile(profile, toolName, extras);
 }

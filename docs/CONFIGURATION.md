@@ -40,30 +40,12 @@ a single value from a launcher or a container, not something you need to set by 
 
 ## Settings
 
-### AxDB SQL (optional)
-
-Windows-authenticated SQL access for development debugging and targeted data changes.
-
-| Key | Asked | Env var | Default | Description |
-| --- | --- | --- | --- | --- |
-| `sql.enabled` | advanced | `D365FO_SQL_ENABLED` | `false` | Enable the optional SQL tool after configuring its server. Blank server always disables SQL. |
-| `sql.server` | setup | `D365FO_SQL_SERVER` | — | Optional server or named instance; enter localhost for a local developer SQL Server. Leaving it empty skips SQL setup. |
-| `sql.database` | setup | `D365FO_SQL_DATABASE` | `AxDB` | Database to query on this server. This is separate from the metadata index and cross-reference database. |
-| `sql.allowWrites` | setup | `D365FO_SQL_ALLOW_WRITES` | `false` | Enable direct SQL changes for debugging and targeted test data work. These do not execute X++ validation, CoC or business logic. |
-| `sql.trustServerCertificate` | setup | `D365FO_SQL_TRUST_CERTIFICATE` | `false` | Use for a developer SQL Server with a self-signed certificate. The connection remains encrypted. |
-| `sql.commandTimeoutSeconds` | advanced | `D365FO_SQL_TIMEOUT` | `30` | Maximum time for each SQL command; a batch also has a total time budget. |
-| `sql.maxRows` | advanced | `D365FO_SQL_MAX_ROWS` | `100` | Default returned row limit. Large results are explicitly marked truncated. |
-
 ### D365FO environment
 
 Which developer box this is and where its X++ packages live.
 
 | Key | Asked | Env var | Default | Description |
 | --- | --- | --- | --- | --- |
-| `environment.uiTestUrl` | setup | `D365FO_UI_TEST_URL` | — | Optional D365FO test environment URL used by verify_ui_customization. Leave empty to be asked only when requesting a UI test. Not needed if you do not test. A saved Playwright login is also required (docs/UI_CUSTOMIZATION_TESTING.md). |
-| `environment.uiBrowserChannel` | advanced | `D365FO_UI_BROWSER_CHANNEL` | `auto` | Auto prefers Playwright Chromium and tries installed Microsoft Edge if Chromium cannot launch. Explicit Chromium or Edge never switches browsers. Applies to normal setup; explicit UI profiles keep their own browser choice. Values: `auto` — Chromium, then installed Edge on launch failure; `chromium` — Playwright Chromium only; `msedge` — Installed Microsoft Edge only. |
-| `environment.uiStorageState` | advanced | `D365FO_UI_STORAGE_STATE` | `.d365fo-ui/auth.json` | Local Playwright storage-state JSON. Relative paths resolve from the installation or instance directory. Keep this file private. |
-| `environment.uiOutputDir` | advanced | `D365FO_UI_OUTPUT_DIR` | `.d365fo-ui/reports` | Local reports and error screenshots. Relative paths resolve from the installation or instance directory. |
 | `environment.type` | setup | `D365FO_DEV_ENVIRONMENT_TYPE` | — | Classic AOSService VM ("traditional") or Unified Developer Experience / Power Platform Tools ("ude"). The wizard preselects the one it detects — UDE when XPP config files exist in %LOCALAPPDATA%\\Microsoft\\Dynamics365\\XPPConfig. Left unset, the server falls back to that same detection. Values: `traditional` — classic AOSService VM with PackagesLocalDirectory; `ude` — Unified Developer Experience / Power Platform Tools. |
 | `environment.packagePath` | setup | `D365FO_PACKAGE_PATH` | — | AOT packages folder (PackagesLocalDirectory) used as the read-only source for indexing. Machine-wide on a traditional VM; UDE resolves it from the XPP config instead. Left empty, the server scans the machine's drives for AosService\\PackagesLocalDirectory — which volume that is depends on the VM image (K:, C:, J:, …). |
 | `environment.scanDrives` | advanced | `D365FO_SCAN_DRIVES` | — | Comma-separated letters the packages-root scan probes when no packagePath is configured, e.g. "C,K". Empty probes C: to Z: — the letters that have ever held AosService first, the rest inside a 2 s budget. Set it on a machine with a disconnected mapped network drive: one stat on such a drive stalls for the SMB timeout, and the scan runs on the first tool call of a session. |
@@ -123,7 +105,7 @@ Transport, timeouts and logging of the MCP server process.
 | Key | Asked | Env var | Default | Description |
 | --- | --- | --- | --- | --- |
 | `server.mode` | advanced | `MCP_SERVER_MODE` | `full` | Which half of the toolset this process exposes. "full" is a single local server; the hybrid deployment splits into an Azure "read-only" instance plus a local "write-only" companion that owns the C# bridge. Values: `full` — all tools — single local server; `read-only` — search/inspect only — Azure-hosted shared index; `write-only` — create/modify/build only — local companion. |
-| `server.toolProfile` | advanced | `MCP_TOOL_PROFILE` | `full` | How many tools this server advertises. "full" publishes up to 22 tools (SQL only when configured). "core" publishes only the plan → discover → write → build → verify loop (17 tools) and leaves out the specialist ones (extension_info, analyze_code, validate_code, security_info, run_systest_class). Worth switching when the workspace runs several MCP servers at once: hosts stop sending the tool catalogue inline past a limit (VS Code: ~100 tools) and make the model search for tools first, which costs a round trip per tool. Values: `full` — all 22 tools; `core` — 17-tool create-build-and-verify loop. |
+| `server.toolProfile` | advanced | `MCP_TOOL_PROFILE` | `full` | How many tools this server advertises. "full" publishes all 21 (axdb_sql only once SQL is configured). "core" publishes only the plan → discover → write → build → verify loop (16 tools) and leaves out the specialist ones (extension_info, analyze_code, validate_code, security_info, run_systest_class). Worth switching when the workspace runs several MCP servers at once: hosts stop sending the tool catalogue inline past a limit (VS Code: ~100 tools) and make the model search for tools first, which costs a round trip per tool. Values: `full` — all 21 tools; `core` — 16-tool create-and-build loop. |
 | `server.extraTools` | advanced | `MCP_EXTRA_TOOLS` | — | Tool names to publish in addition to the core profile, e.g. security_info,run_systest_class. Ignored when the tool profile is "full". |
 | `server.port` | setup | `PORT` | `8080` | Port for the HTTP transport. Only relevant when clients connect over http://localhost:<port>/mcp/ — an IDE that spawns the server itself uses stdio and ignores this. |
 | `server.host` | advanced | `HOST` | `0.0.0.0` | Interface the HTTP transport binds to. Left unset it follows the API key: 0.0.0.0 once a key (or ALLOW_UNAUTHENTICATED) is configured, which is what a container or App Service needs, and 127.0.0.1 when neither is, so an unauthenticated server stays off the network. Setting it to a public interface without a key is refused at startup. |
@@ -161,6 +143,20 @@ The metadata-provider child process — the only write path to the AOT.
 | `bridge.fsScanTimeoutMs` | advanced | `D365FO_FS_SCAN_TIMEOUT_MS` | `3000` | Budget for the filesystem scan used when the bridge cannot answer an extension lookup (minimum 500). |
 | `bridge.disableFsFallback` | advanced | `D365FO_DISABLE_FS_FALLBACK` | `false` | Makes extension lookups bridge-only. Turn on to diagnose stale-index issues — results get stricter, not faster. |
 
+### AxDB SQL (optional)
+
+Windows-authenticated SQL access to AxDB on a development VM, for debugging.
+
+| Key | Asked | Env var | Default | Description |
+| --- | --- | --- | --- | --- |
+| `sql.enabled` | advanced | `D365FO_SQL_ENABLED` | `false` | Enable the optional SQL tool after configuring its server. Blank server always disables SQL. |
+| `sql.server` | setup | `D365FO_SQL_SERVER` | — | Optional server or named instance; enter localhost for a local developer SQL Server. Leaving it empty skips SQL setup. |
+| `sql.database` | setup | `D365FO_SQL_DATABASE` | `AxDB` | Database to query on this server. This is separate from the metadata index and cross-reference database. |
+| `sql.allowWrites` | setup | `D365FO_SQL_ALLOW_WRITES` | `false` | Enable direct SQL changes for debugging and targeted test data work. These do not execute X++ validation, CoC or business logic. |
+| `sql.trustServerCertificate` | setup | `D365FO_SQL_TRUST_CERTIFICATE` | `false` | Use for a developer SQL Server with a self-signed certificate. The connection remains encrypted. |
+| `sql.commandTimeoutSeconds` | advanced | `D365FO_SQL_TIMEOUT` | `30` | Maximum time for each SQL command; a batch also has a total time budget. |
+| `sql.maxRows` | advanced | `D365FO_SQL_MAX_ROWS` | `100` | Default returned row limit. Large results are explicitly marked truncated. |
+
 ### Quality gates
 
 Rules that block writes when generated code is not grounded or violates a pattern.
@@ -188,20 +184,7 @@ Downloading a pre-built index from blob storage instead of building it locally.
 ```json
 {
   "version": 1,
-  "sql": {
-    "enabled": false,
-    "server": "localhost or localhost\\INSTANCE",
-    "database": "AxDB",
-    "allowWrites": false,
-    "trustServerCertificate": false,
-    "commandTimeoutSeconds": 30,
-    "maxRows": 100
-  },
   "environment": {
-    "uiTestUrl": "https://your-test-env.operations.dynamics.com",
-    "uiBrowserChannel": "auto",
-    "uiStorageState": ".d365fo-ui/auth.json",
-    "uiOutputDir": ".d365fo-ui/reports",
     "type": "traditional",
     "packagePath": "C:\\AOSService\\PackagesLocalDirectory",
     "scanDrives": "C,K",
@@ -279,6 +262,15 @@ Downloading a pre-built index from blob storage instead of building it locally.
   "azure": {
     "blobContainer": "xpp-metadata",
     "blobDatabase": "databases/xpp-metadata-latest.db"
+  },
+  "sql": {
+    "enabled": false,
+    "server": "localhost or localhost\\INSTANCE",
+    "database": "AxDB",
+    "allowWrites": false,
+    "trustServerCertificate": false,
+    "commandTimeoutSeconds": 30,
+    "maxRows": 100
   }
 }
 ```

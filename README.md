@@ -2,13 +2,11 @@
 
 <div align="center">
 
-**Up to 22 AI tools for grounded X++ development, browser verification and optional AxDB SQL debugging**
+**21 AI tools that know every X++ class, table, form, and EDT in your D365FO codebase — plus optional live AxDB SQL for debugging**
 
-> **Both additional tools are included on this fork's `main`: `verify_ui_customization` and optional `axdb_sql`.** Use AI-guided browser discovery or reusable deterministic plans after deployment (two cases recommended, one to five supported); use live SQL independently for debugging and targeted development data changes. SQL setup can be left blank and never replaces a UI creation/validation path under test. See [UI setup](docs/UI_CUSTOMIZATION_TESTING.md) and [SQL setup](docs/AXDB_SQL.md). Guided verification uses the AI already in your client; the server makes no LLM calls. Install or update this fork from `main` using [Quick Start](#quick-start); no feature branch is needed. The maintainer confirmed successful end-to-end use on the D365FO development VM on 2026-09-26; see [validation status](docs/TESTING.md#fork-validation-status).
+> **This fork adds optional `axdb_sql`** — live, Windows-authenticated SQL against AxDB on the development VM, to inspect what your code actually wrote. It is off by default and invisible until configured; setup offers it only on a classic AOSService VM whose `web.config` names the AOS database. Writes are a separate opt-in. See [SQL setup](docs/AXDB_SQL.md). Install or update this fork from `main` using [Quick Start](#quick-start).
 
-Fork capabilities: builds return in the background with a log path and a retrievable result. Use `restartAos:true` to reload the matching local IIS `AOSService` pool or IIS Express instance after successful build/sync, before testing new objects. Runtime restart and readiness outcomes are saved with the build result. UI verification now independently reports recognized D365 system-error dialogs, even when a declared criterion passes; `validate_code` advisory `UI001` and the `menu-item-guards` knowledge topic cover expected negative guards in action menu entry points. Guided UI tests allow 30 calls per case and measured grid counts with explicit rendered/total semantics. Label translations use case-insensitive exact locale, then a supplied parent (`it` for `it-IT`), then a disclosed fallback. SQL supports read-only collation/database-property functions. Rebuild the C# bridge for SQL changes; see [build behavior](docs/BUILD_FEEDBACK.md), [UI checks and system errors](docs/UI_CUSTOMIZATION_TESTING.md) and [SQL setup](docs/AXDB_SQL.md).
-
-> **This fork also extends the existing build tool, not only UI and SQL.** In the development VM's previous workflow, a successful MCP compilation could leave new objects unavailable in the running UI until a manual AOS restart or a Visual Studio build/runtime refresh. With `restartAos:true`, `build_d365fo_project` now completes compilation, runtime metadata generation and any requested database sync, then restarts the matching IIS/IIS Express host and checks readiness. This removes that manual refresh step when successful; it does not require a second compilation in Visual Studio. If restart/readiness cannot be confirmed, the tool explicitly tells the client AI to notify the user before UI testing. [Build changes and usage](docs/BUILD_FEEDBACK.md#why-this-fork-changes-the-build-workflow)
+> **This fork also extends the existing build tool.** Builds run in the background and return a log path plus a result you collect later. With `restartAos:true`, `build_d365fo_project` completes compilation, runtime metadata generation and any requested database sync, then restarts the matching local IIS/IIS Express AOS and checks readiness, so new objects are loaded without a manual refresh or a second Visual Studio build. If restart/readiness cannot be confirmed, the tool tells the client AI to notify the user. Label translations use the exact locale, then a supplied parent (`it` for `it-IT`), then a disclosed fallback. [Build changes and usage](docs/BUILD_FEEDBACK.md#why-this-fork-changes-the-build-workflow)
 
 [![npm](https://img.shields.io/npm/v/d365fo-mcp.svg?logo=npm&color=cb3837)](https://www.npmjs.com/package/d365fo-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -35,7 +33,7 @@ Fork capabilities: builds return in the background with a log path and a retriev
 
 AI assistants excel at C#, Python, and JavaScript. X++ is different: your D365FO codebase is private, deeply customized, and invisible to every model — so AI confidently generates code that doesn't compile.
 
-This server pre-indexes your entire D365FO installation (580 000+ symbols across standard, ISV, and custom models) and exposes up to 22 specialized MCP tools (21 when SQL is disabled). Every signature, every CoC wrapper, every label, every form pattern — verified against your real metadata **before** the AI writes a single line.
+This server pre-indexes your entire D365FO installation (580 000+ symbols across standard, ISV, and custom models) and exposes 21 specialized MCP tools (`axdb_sql` only once SQL is configured). Every signature, every CoC wrapper, every label, every form pattern — verified against your real metadata **before** the AI writes a single line.
 
 ![Solution Architecture](docs/img/solution-architecture-diagram.svg)
 
@@ -58,26 +56,21 @@ This server pre-indexes your entire D365FO installation (580 000+ symbols across
 | 🛡️ **Grounded generation** | Fail-closed gates: `prepare` issues grounding tokens, `validate_code(mode="references")` proves every identifier, `validate_code(mode="syntax")` enforces best practices — hallucinated code never reaches disk |
 | 🧩 **Form pattern engine** | Complete catalog of Microsoft form patterns and sub-patterns: recommends the right pattern, clones reference forms with datasource re-binding, **deterministically expands** patterns that have no reference form, **auto-repairs** a form's missing required controls, validates structure and blocks invalid writes |
 | ✍️ **Safe metadata writes** | C# bridge uses Microsoft's own `IMetadataProvider` wherever it can express the object; the few types and ops it cannot go through structured XML writers with ambiguity guards — never blind string replacement. Automatic `.rnrproj` registration, one-call undo |
-| 🏗️ **SDLC integration** | Background X++ compilation with `xppc.exe`, structured diagnostics, DB sync, xppbp best practices and SysTestRunner. The existing build tool also supports `restartAos:true` to reload the local IIS/IIS Express runtime before UI testing, with an explicit user warning if readiness cannot be confirmed. [Build workflow](docs/BUILD_FEEDBACK.md) · [Runtime restart](docs/AOS_RUNTIME_RESTART.md) |
-| 🧪 **Browser customization tests — `verify_ui_customization`** | Guided sessions let your existing client AI observe controls, choose actions and check immutable requirement criteria. Deterministic saved plans remain supported. Both produce evidence and PASS / FAIL / NOT_VERIFIED for one to five cases. Human login works in owned Chromium/Edge; local HTTP and stdio are supported, with no embedded model. [Setup](docs/UI_CUSTOMIZATION_TESTING.md) |
-| 🗄️ **Optional AxDB SQL — `axdb_sql`** | Live queries, table columns/keys/defaults and transactional INSERT/UPDATE/DELETE for development debugging. No result cache or automatic write retry. Independent of browser tests: use UI/X++ when creation, validation or CoC is under test. [Setup](docs/AXDB_SQL.md) |
+| 🏗️ **SDLC integration** | Background X++ compilation with `xppc.exe`, structured diagnostics, DB sync, xppbp best practices and SysTestRunner. `restartAos:true` reloads the local IIS/IIS Express runtime after a successful build and requested sync, with an explicit user warning if readiness cannot be confirmed. [Build workflow](docs/BUILD_FEEDBACK.md) · [Runtime restart](docs/AOS_RUNTIME_RESTART.md) |
+| 🗄️ **Optional AxDB SQL — `axdb_sql`** | Live parameterized queries and table columns/keys/defaults on the development VM's AxDB, with transactional INSERT/UPDATE/DELETE as a separate opt-in. No result cache, no automatic write retry, statements checked on the parsed T-SQL tree. Records that code should create are still created through the application or X++. [Setup](docs/AXDB_SQL.md) |
 | 📐 **X++ knowledge base** | Queryable rules: select grammar, CoC authoring, financial dimensions, the posting engine (`LedgerVoucher`), number sequences, `SysExtension`, Electronic Reporting, AX2012→D365FO migration — prevents deprecated APIs |
 
-### Configure this fork's additional tools
+### Configure optional AxDB SQL
 
-The UI tool needs the Dynamics environment URL; a missing URL is requested when a test starts. Guided mode opens a visible browser for human login and company discovery. Keep your local MCP endpoint, such as `http://localhost:8080/mcp`: it is separate from the Dynamics URL. Fetch `action="contract", topic="guided"` for the guided protocol; existing `run` plans retain their deterministic behavior. SQL is separately optional: leave the SQL server blank in setup to hide the tool and skip the remaining SQL questions.
+On a classic AOSService VM, setup reads the server and database the AOS itself uses from `WebRoot\web.config` and asks whether to enable SQL on them (default: no). It then asks whether to allow writes (default: no) and whether to trust a self-signed SQL certificate (yes by default for a local server). On UDE, or with no local AOS, setup does not ask. Authentication uses the Windows account running MCP; no SQL password is collected. The updated C# bridge must be built on the D365FO VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
 
-**Browser for UI tests** is an advanced setting (`config environment`), not a setup question: choose `msedge` when your dev login requires Edge, `chromium` to require Playwright Chromium, or `auto` (default) to try installed Edge only if Chromium cannot launch. The selected browser is reported. Native input fields expose `value` with a check hint; an incompatible `text` assertion is `NOT_VERIFIED`, never a functional `FAIL`. Browser errors identify the phase and safe cause, including a blocked origin. See the [UI troubleshooting guide](docs/UI_CUSTOMIZATION_TESTING.md#troubleshooting).
-
-For SQL on a developer VM, the wizard asks for the server/instance (for example `localhost`), database (normally `AxDB`), whether to allow writes, and whether to trust a self-signed SQL certificate (yes by default for a local server). On a classic AOSService VM it reads the server and database the AOS itself uses from `WebRoot\web.config` and offers them after a yes/no; on UDE it skips SQL. Authentication uses the Windows account running MCP; it needs the corresponding database permissions. SQL username/password authentication is not implemented. The updated C# bridge must be built and deployed on the D365FO VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge). The SQL workflow has been validated on the maintainer's development VM.
-
-From this checkout, revisit SQL setup with:
+Configure or change SQL later from this checkout with:
 
 ```powershell
 npx tsx src/cli/index.ts config sql
 ```
 
-Restart MCP after saving. The upstream npm package does not include this fork's additional tools.
+Restart MCP after saving. The upstream npm package does not include this fork's additions.
 
 ### Pattern-grounded form development
 
@@ -102,7 +95,7 @@ Structural violations (wrong order, missing container, disallowed control) **blo
 
 ### Install this fork from main
 
-On your D365FO developer VM, use Node.js 24+, Git and a .NET SDK compatible with the bridge. The bridge requires the installed D365FO development assemblies; see [setup prerequisites](docs/SETUP.md). Both additional tools are in this repository's `main` branch.
+On your D365FO developer VM, use Node.js 24+, Git and a .NET SDK compatible with the bridge. The bridge requires the installed D365FO development assemblies; see [setup prerequisites](docs/SETUP.md). The fork's additions are in this repository's `main` branch.
 
 ```powershell
 git clone --branch main https://github.com/DavideWasTaken/d365fo-mcp-server.git
@@ -110,11 +103,10 @@ cd d365fo-mcp-server
 npm ci
 npm run build
 dotnet build bridge/D365MetadataBridge -c Release
-npx playwright install chromium
 npm run setup
 ```
 
-After the environment type, setup asks for the optional UI environment URL and SQL connection settings; on a classic VM it offers the values from the AOS's own `web.config`. For deterministic browser tests, also [save an authenticated session](docs/UI_CUSTOMIZATION_TESTING.md#save-a-local-browser-login); [guided mode](docs/UI_CUSTOMIZATION_TESTING.md#ai-guided-first-verification) handles human login in its owned visible browser. Microsoft Edge can be selected through the browser profile. Point your editor's local MCP configuration at **this checkout's `dist/index.js`**, following [setup scenarios](docs/SETUP.md).
+On a classic VM whose AOS `web.config` names its database, setup offers optional AxDB SQL after the environment type. Point your editor's local MCP configuration at **this checkout's `dist/index.js`**, following [setup scenarios](docs/SETUP.md).
 
 ### Update an existing checkout of this fork
 
@@ -125,7 +117,6 @@ git pull --ff-only origin main
 npm ci
 npm run build
 dotnet build bridge/D365MetadataBridge -c Release
-npx playwright install chromium
 ```
 
 Restart MCP after updating. Every bridge build writes `D365MetadataBridge.sources.json` next to the binary, so `npx tsx src/cli/index.ts doctor` and `update` report a bridge that is older than its sources — including after a hand-run `git pull` — and `update` then requires the rebuild. Existing configuration is retained; use `npx tsx src/cli/index.ts config sql` when you want to enable or change SQL. Building the bridge and validating live AxDB access must be done on your developer VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
@@ -140,7 +131,7 @@ If upstream is already installed with `npm install -g d365fo-mcp`, its configura
 
    ```powershell
    $old = "$env:LOCALAPPDATA\d365fo-mcp\installation"
-   foreach ($d in 'config', 'data', 'extracted-metadata', 'instances', '.d365fo-ui') {
+   foreach ($d in 'config', 'data', 'extracted-metadata', 'instances') {
      if (Test-Path "$old\$d") { robocopy "$old\$d" ".\$d" /E /NFL /NDL /NJH /NJS }
    }
    ```
@@ -154,7 +145,7 @@ A `d365fo-mcp` command on `PATH` is still the upstream npm CLI and still manages
 
 ### Upstream package and shared servers
 
-The npm package `d365fo-mcp`, the original project's installer and its hosted server do **not** include these fork additions. Use the checkout above for UI verification and AxDB SQL.
+The npm package `d365fo-mcp`, the original project's installer and its hosted server do **not** include these fork additions. Use the checkout above for AxDB SQL and the build changes.
 
 **Your team already runs a shared server?** Then you install nothing — point your editor at it:
 
@@ -180,8 +171,8 @@ Deployment guide: [docs/SETUP_AZURE.md](docs/SETUP_AZURE.md) — includes CI/CD 
 
 | Getting started | Reference | Operations |
 |-----------------|-----------|------------|
-| [Install/update this fork](#quick-start) | [Tool catalog (up to 22)](docs/MCP_TOOLS.md) | [Azure deployment](docs/SETUP_AZURE.md) |
-| [Browser test setup](docs/UI_CUSTOMIZATION_TESTING.md) | [Optional AxDB SQL](docs/AXDB_SQL.md) | [Upstream setup guide](docs/QUICK_START.md) |
+| [Install/update this fork](#quick-start) | [All 21 tools](docs/MCP_TOOLS.md) | [Azure deployment](docs/SETUP_AZURE.md) |
+| [Upstream setup guide](docs/QUICK_START.md) | [Optional AxDB SQL](docs/AXDB_SQL.md) | [Build workflow](docs/BUILD_FEEDBACK.md) |
 | [Setup scenarios A–F](docs/SETUP.md) | [`.mcp.json` reference](docs/MCP_CONFIG.md) | [DevOps pipelines](docs/SETUP_AZURE.md#azure-devops-pipelines) |
 | [Claude Code setup](docs/SETUP.md#claude-code-cli) | [Configuration](docs/CONFIGURATION.md) | [Testing](docs/TESTING.md) |
 | [Usage examples](docs/USAGE_EXAMPLES.md) — real tool chains | [Architecture](docs/ARCHITECTURE.md) | [Custom / ISV models](docs/CUSTOM_EXTENSIONS.md) |

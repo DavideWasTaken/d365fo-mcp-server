@@ -11,7 +11,6 @@ import { apiRateLimiter } from '../middleware/rateLimiter.js';
 import type { XppServerContext } from '../types/context.js';
 import { getConfigManager } from '../utils/configManager.js';
 import { buildProgressMessage } from '../utils/toolProgressMessage.js';
-import { isLocalUiRequest, withUiRequest } from './uiRequestContext.js';
 
 /**
  * Per-request timeout for the HTTP transport (ms). Default 120s stays well below
@@ -218,10 +217,6 @@ export class CustomHttpTransport implements Transport {
       // tagged with an id it never sent cannot correlate it, so it waits out its
       // own timeout instead of failing fast.
       const clientRequestId = (req.body as any)?.id ?? null;
-      const uiRequest = req.body?.params?.name === 'verify_ui_customization';
-      const uiAbort = new AbortController();
-      const disconnected = () => { if (!res.writableEnded) uiAbort.abort(); };
-      if (uiRequest) res.on('close', disconnected);
       try {
         // Set response headers (keep-alive enabled for performance)
         res.setHeader('Content-Type', 'application/json');
@@ -315,7 +310,6 @@ export class CustomHttpTransport implements Transport {
             const timeoutId = setTimeout(() => {
               if (this.pendingRequests.has(internalId!)) {
                 this.pendingRequests.delete(internalId!);
-                if (uiRequest) uiAbort.abort();
                 (request as any).id = originalId; // restore on timeout
                 process.stderr.write(`← ${tag} ⏱️ ${toolName} timed out after ${perToolTimeoutMs / 1000}s\n`);
                 reject(new Error(`Request timeout: ${toolName} did not complete within ${perToolTimeoutMs / 1000}s`));
@@ -342,7 +336,7 @@ export class CustomHttpTransport implements Transport {
           // per-request AsyncLocalStorage context so tool handlers see the correct
           // workspacePath for this specific user's request.
           const response = await getConfigManager().runWithRequestContext(requestCtx, async () => {
-            withUiRequest({ local: isLocalUiRequest(req), signal: uiAbort.signal }, () => this.onmessage!(request));
+            this.onmessage!(request);
             return await responsePromise;
           });
           
@@ -350,7 +344,7 @@ export class CustomHttpTransport implements Transport {
           // (request-response only — no SSE). As a workaround we prepend the same
           // progress description as the first line of the tool result so the user
           // can see what was processed when expanding the "ran <tool>" detail in VS2026.
-          if (!isSilentProbe && !uiRequest && 'result' in response) {
+          if (!isSilentProbe && 'result' in response) {
             const progressText = buildProgressMessage(toolName, args);
             const result = (response as any).result;
             const resultContent = result?.content;
@@ -373,8 +367,7 @@ export class CustomHttpTransport implements Transport {
           }
 
           // Log response (skip silent probes)
-          if (!isSilentProbe && uiRequest) process.stdout.write(`← ${tag} UI response (details omitted)\n`);
-          if (!isSilentProbe && !uiRequest) {
+          if (!isSilentProbe) {
             if ('result' in response) {
               const content = (response as any).result?.content?.[0]?.text;
               const isError = (response as any).result?.isError === true;
@@ -418,7 +411,7 @@ export class CustomHttpTransport implements Transport {
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`← Transport error: ${uiRequest ? 'UI request failed (details omitted)' : errorMsg}\n`);
+        process.stderr.write(`← Transport error: ${errorMsg}\n`);
         
         // Clean up the pending request using internalId (the Map key after the id swap)
         if (internalId) {
@@ -438,8 +431,6 @@ export class CustomHttpTransport implements Transport {
             id: clientRequestId,
           });
         }
-      } finally {
-        if (uiRequest) res.removeListener('close', disconnected);
       }
     });
 
@@ -463,3 +454,4 @@ export function createStreamableHttpTransport(
 ): CustomHttpTransport {
   return new CustomHttpTransport(server, app, context);
 }
+

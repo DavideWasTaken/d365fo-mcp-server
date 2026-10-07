@@ -34,10 +34,7 @@ import { updateSymbolIndexTool } from './sdlc/updateSymbolIndex.js';
 import { buildProjectTool } from './sdlc/buildProject.js';
 import { dbSyncTool } from './sdlc/dbSync.js';
 import { runBpCheckTool } from './sdlc/runBpCheck.js';
-import { verifyUiCustomizationTool } from './sdlc/verifyUiCustomization.js';
-import { uiTelemetryArgs } from '../server/uiRequestContext.js';
 import { axdbSqlTool } from './sdlc/axdbSql.js';
-import { isAxDbConfigured } from '../config/axdbSql.js';
 import { sysTestRunnerTool } from './sdlc/sysTestRunner.js';
 import { reviewWorkspaceChangesTool } from './sdlc/reviewWorkspaceChanges.js';
 import { undoLastModificationTool } from './sdlc/undoLastModification.js';
@@ -62,6 +59,7 @@ const WRITE_CAPABLE_TOOLS = new Set(['d365fo_file', 'labels']);
 import { buildProgressMessage } from '../utils/toolProgressMessage.js';
 import { createProgressReporter, startProgressHeartbeat } from '../utils/progressReporter.js';
 import { describeDbWait } from '../utils/startupProgress.js';
+
 
 /**
  * Extract workspace path from GitHub Copilot _meta.
@@ -148,9 +146,13 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
       configManager.setRuntimeContext({ workspacePath });
     }
 
-    // Overlap bridge startup with DB readiness; SQL contract/disabled calls need neither.
+    // The C# bridge starts out-of-band, so the tool list can be live while
+    // `context.bridge` is still undefined. Wait for a startup that is in flight
+    // before the tool decides anything — otherwise a 2-second cold-start race is
+    // reported as "the object does not exist" / "check your config" (issue #826).
+    // Started here, awaited after the dbReady block, so the two waits overlap and
+    // a cold start costs max(db, bridge) rather than their sum.
     const bridgeWait = BRIDGE_BACKED_TOOLS.has(toolName)
-      && (toolName !== 'axdb_sql' || (isAxDbConfigured() && request.params.arguments?.action !== 'contract'))
       ? { t0: Date.now(), outcome: awaitBridgeReady(context) }
       : null;
 
@@ -249,9 +251,10 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
     }
 
     // Loop detection + duplicate-call dedup
-    const telemetryArgs = toolName === 'verify_ui_customization' ? uiTelemetryArgs(request.params.arguments) : request.params.arguments;
-    const callKey = dedupKey(toolName, telemetryArgs);
-    // Tag before dispatch so the advisory distinguishes loops from reads following a write.
+    const callKey = dedupKey(toolName, request.params.arguments);
+    // Captured HERE, not after the tool runs: it tags this occurrence in the
+    // sequence buffer, so the loop advisory below can tell a genuine loop from a
+    // legitimate re-read that follows a write.
     const epochAtStart = currentWriteEpoch();
     // Side effect: records this occurrence (and the duplicate-call metric) in the
     // sequence buffer, tagged with the epoch. The raw repeat count is deliberately
@@ -370,10 +373,8 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
         return await buildProjectTool(request.params.arguments as any, context, reportProgress);
       case 'trigger_db_sync':
         return await dbSyncTool(request.params.arguments as any, context);
-      case 'run_bp_check':
-        return await runBpCheckTool(request.params.arguments as any, context);
-      case 'verify_ui_customization': return await verifyUiCustomizationTool(request.params.arguments, { signal: extra.signal, guidedManager: context.uiGuidedManager, transport: context.uiTransport });
-      case 'axdb_sql': return await axdbSqlTool(request.params.arguments, context);
+      case 'run_bp_check':          return await runBpCheckTool(request.params.arguments as any, context);
+      case 'axdb_sql':              return await axdbSqlTool(request.params.arguments, context);
       case 'run_systest_class':
         return await sysTestRunnerTool(request.params.arguments as any, context);
       case 'review_workspace_changes':
@@ -448,7 +449,7 @@ export function registerToolHandler(server: Server, context: XppServerContext): 
       const firstText = capped?.content?.[0]?.text;
       const isEmpty = !firstText || firstText.trim().length === 0 || firstText === 'No results returned';
       finishMetrics(isEmpty);
-      reportSlowCall(toolName, Date.now() - callStartedAt, telemetryArgs);
+      reportSlowCall(toolName, Date.now() - callStartedAt, request.params.arguments);
 
       if (!DEDUP_EXCLUDED_TOOLS.has(toolName)) {
         storeDedupResult(callKey, capped, epochAtStart);

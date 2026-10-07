@@ -109,9 +109,9 @@ it('publishes background default and explicit blocking semantics', () => {
   expect(buildD365foProjectTool.inputSchema.properties.wait.description).toContain('wait:true');
 });
 
-it('publishes the actual restart option required for build-before-UI verification', () => {
-  expect(buildD365foProjectTool.inputSchema.properties.restartAos.description).toContain('UI');
-  expect(buildD365foProjectTool.inputSchema.properties.aosUrl.description).toContain('D365FO_UI_TEST_URL');
+it('publishes the AOS restart option and where its default root comes from', () => {
+  expect(buildD365foProjectTool.inputSchema.properties.restartAos.description).toContain('readiness');
+  expect(buildD365foProjectTool.inputSchema.properties.aosUrl.description).toContain('web.config');
 });
 
 describe('trimSucceededLog', () => {
@@ -975,7 +975,7 @@ describe('build_d365fo_project', () => {
     expect(result.isError).toBe(true);
     expect(text).toContain('USER ACTION REQUIRED');
     expect(text).toContain('Inform the user');
-    expect(text).toContain('Do not start UI tests');
+    expect(text).toContain('Do not start testing in the application');
     expect(text).toContain('Specific runtime failure reason');
     expect(text).not.toMatch(/✅ Build (?:succeeded|complete)/);
     expect(restartMock).not.toHaveBeenCalled();
@@ -1304,8 +1304,7 @@ describe('build_d365fo_project', () => {
       return (await buildProjectTool({ projectPath: PROJECT_PATH }, {})).content[0].text as string;
     }
 
-    it('falls back to the local AOS web.config when aosUrl and D365FO_UI_TEST_URL are unset', async () => {
-      vi.stubEnv('D365FO_UI_TEST_URL', '');
+    it('falls back to the local AOS web.config when aosUrl is unset', async () => {
       withWebConfig(true);
       restartMock.mockResolvedValue({ status: 'ready', host: 'iis-express AOSService/Dynamics365 PID 33604', replacementPid: 31520, message: 'Actual runtime restarted and verified' });
       const text = await buildAndCollect({ restartAos: true });
@@ -1316,29 +1315,19 @@ describe('build_d365fo_project', () => {
       expect(text).toContain('Status: ready');
     });
 
-    it('keeps D365FO_UI_TEST_URL ahead of the web.config, so UI tests and the restart target one environment', async () => {
-      vi.stubEnv('D365FO_UI_TEST_URL', 'https://ui.example.test/');
-      withWebConfig(true);
-      const text = await buildAndCollect({ restartAos: true });
-      expect(restartMock).toHaveBeenCalledExactlyOnceWith('https://ui.example.test/');
-      expect(text).toContain('Environment root: https://ui.example.test/ (from D365FO_UI_TEST_URL)');
-    });
-
-    it('lets an explicit aosUrl win over both', async () => {
-      vi.stubEnv('D365FO_UI_TEST_URL', 'https://ui.example.test/');
+    it('lets an explicit aosUrl win over the web.config', async () => {
       withWebConfig(true);
       const text = await buildAndCollect({ restartAos: true, aosUrl: 'https://dev.test/' });
       expect(restartMock).toHaveBeenCalledExactlyOnceWith('https://dev.test/');
       expect(text).toContain('Environment root: https://dev.test/ (from aosUrl)');
     });
 
-    it('refuses before compiling, naming every source, when no root is found (UDE)', async () => {
-      vi.stubEnv('D365FO_UI_TEST_URL', '');
+    it('refuses before compiling, naming the source it tried, when no root is found (UDE)', async () => {
       withWebConfig(false);
       allowPaths([PROJECT_PATH, XPPC, PKG]);
       const result = await buildProjectTool({ projectPath: PROJECT_PATH, restartAos: true }, {});
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain('D365FO_UI_TEST_URL');
+      expect(result.content[0].text).toContain('aosUrl');
       expect(result.content[0].text).toContain('web.config');
       expect(spawnMock).not.toHaveBeenCalled();
       expect(restartMock).not.toHaveBeenCalled();

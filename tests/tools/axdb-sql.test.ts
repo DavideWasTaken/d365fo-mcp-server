@@ -5,10 +5,10 @@ const context = (call = vi.fn()) => ({ bridge: { isReady: true, axdbSqlAvailable
 afterEach(() => vi.unstubAllEnvs());
 const enable = () => { vi.stubEnv('D365FO_SQL_ENABLED', 'true'); vi.stubEnv('D365FO_SQL_SERVER', 'localhost'); };
 describe('AxDB SQL tool', () => {
-  it('returns contract without requiring configured SQL and preserves the UI path under test', async () => {
+  it('returns contract without requiring configured SQL and keeps business logic out of SQL', async () => {
     const result = await axdbSqlTool({ action: 'contract' }, {});
     const text = result.content[0].text;
-    expect(text).toContain('UI');
+    expect(text).toContain('X++');
     expect(text).toContain('CoC');
     expect(text).toContain('No result caching');
   });
@@ -76,3 +76,4 @@ describe('AxDB SQL tool', () => {
     expect(data.nextAction).toContain('COUNT');
   });
 });
+

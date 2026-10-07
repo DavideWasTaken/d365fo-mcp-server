@@ -1,6 +1,6 @@
 # Optional AOS restart after a build
 
-> **In this fork** builds start in the background by default (`wait: true` blocks), `aosUrl` defaults to `D365FO_UI_TEST_URL` before `web.config`, and a finished result — with or without a restart — stays collectable by later status calls until sources change, `fullBuild` or `force`. The fork's build-before-UI-test workflow is described in [BUILD_FEEDBACK.md](BUILD_FEEDBACK.md). The rest of this page is upstream's.
+> **In this fork** builds start in the background by default (`wait: true` blocks), and a finished result — with or without a restart — stays collectable by later status calls until sources change, `fullBuild` or `force`. The fork's build workflow is described in [BUILD_FEEDBACK.md](BUILD_FEEDBACK.md). The rest of this page is upstream's.
 
 On a Windows development environment, successful compilation and runtime metadata generation do not guarantee that the running AOS has loaded the new objects. A newly compiled menu item can remain unavailable in the browser until the runtime is refreshed. `build_d365fo_project` can perform that refresh when explicitly requested, avoiding a separate manual IIS/IIS Express restart.
 

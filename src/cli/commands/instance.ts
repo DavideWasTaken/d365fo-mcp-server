@@ -12,7 +12,7 @@ import { maybePrepareCopilotInstructions } from '../copilotFiles.js';
 import { createInstance, getInstance, listInstances, normalizeInstanceLayout, suggestPort } from '../instances.js';
 import { mcpJsonNote, placementNote, stdioServer } from '../mcpJson.js';
 import { selectXppConfig } from './config.js';
-import { configureVerification } from '../verificationSetup.js';
+import { configureSqlForEnvironment } from '../sqlEnvironmentSetup.js';
 import { askAdvanced, askSetting, askSettings } from '../settingsPrompt.js';
 import { openInstanceStore, readPath, readSetting, saveStore, writeSetting } from '../settingsStore.js';
 import { instanceTarget } from '../target.js';
@@ -100,14 +100,14 @@ export async function instanceAddCommand(name: string | undefined, portArg: stri
   }));
   if (envType === 'ude') {
     await selectXppConfig(store);
-    await configureVerification(store, 'ude');
+    await configureSqlForEnvironment(store, 'ude');
   } else {
     const packagesRoot = await askSetting(store, settingByPath('environment.packagePath')!, {
       required: true,
       initial: findPackagesRoot() ?? undefined,
     });
     await askSetting(store, settingByPath('environment.customModels')!, { required: true });
-    await configureVerification(store, 'traditional', typeof packagesRoot === 'string' ? packagesRoot : undefined);
+    await configureSqlForEnvironment(store, 'traditional', typeof packagesRoot === 'string' ? packagesRoot : undefined);
   }
   p.log.step('Workspace and naming');
   await askSetting(store, settingByPath('workspace.modelName')!);

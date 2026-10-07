@@ -7,8 +7,6 @@
 export function buildProgressMessage(toolName: string, args: Record<string, any> | undefined): string {
   const a = args ?? {};
   switch (toolName) {
-    case 'verify_ui_customization':
-      return a.action === 'contract' ? 'Reading UI verification contract' : 'Verifying two UI customization cases';
     case 'search':
       if (Array.isArray(a.queries)) {
         return `🔍 Batch search: ${a.queries.map((q: any) => `"${q.query ?? q}"`).join(', ')}`;

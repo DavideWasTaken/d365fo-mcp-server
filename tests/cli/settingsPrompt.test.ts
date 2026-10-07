@@ -41,18 +41,18 @@ beforeEach(() => {
   text.mockReset();
 });
 
-it('prefills the saved UI URL and validates it in the normal text prompt', async () => {
+it('prefills the saved SQL server and validates it in the normal text prompt', async () => {
   const target = store();
-  const setting = settingByPath('environment.uiTestUrl')!;
-  writeSetting(target, setting, 'https://existing.example');
+  const setting = settingByPath('sql.server')!;
+  writeSetting(target, setting, 'localhost');
   text.mockImplementationOnce(async (opts: any) => {
-    expect(opts.initialValue).toBe('https://existing.example');
-    expect(opts.validate('ftp://wrong.example')).toBeTruthy();
+    expect(opts.initialValue).toBe('localhost');
+    expect(opts.validate('Server=x;Database=y')).toBeTruthy();
     expect(opts.validate('')).toBeUndefined();
     return opts.initialValue;
   });
   await askSetting(target, setting);
-  expect(readSetting(target, setting)).toBe('https://existing.example');
+  expect(readSetting(target, setting)).toBe('localhost');
 });
 
 describe('askSetting — detected suggestions', () => {

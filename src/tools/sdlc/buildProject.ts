@@ -451,23 +451,6 @@ function requestAddsPostBuildActions(
   return askedTables.some((t: string) => !synced.has(t.trim().toLowerCase()));
 }
 
-/**
- * Fork: the environment root of D365FO_UI_TEST_URL, which may carry a path or a
- * query for the UI tests; the restart needs only its origin. Undefined when it
- * is unset or not an HTTP(S) URL without credentials.
- */
-function environmentRootOf(value: string | undefined): string | undefined {
-  const text = value?.trim();
-  if (!text) return undefined;
-  try {
-    const url = new URL(text);
-    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return `${url.origin}/`;
-  } catch {
-    // not a URL
-  }
-  return undefined;
-}
-
 function supersededInThisProcess(state: BuildJobState, packagesPath: string): boolean {
   const current = activeBuildJobs.get(stateFilePath(state.targetModel, packagesPath));
   return !!state.jobId && current !== undefined && current !== state.jobId;
@@ -1530,12 +1513,11 @@ async function renderFinishedBuildResult(
     ? '\nThis collects the saved result; its post-build actions ran once and are not repeated. ' +
       'A request that adds an action (bpCheck, a dbSync table, restartAos) starts a new build.\n'
     : '';
-  // Fork: the build-before-UI-test workflow. A result the caller must not treat
-  // as deployed says so first; a green build without restartAos says a runtime
-  // refresh is still needed before UI tests.
+  // Fork: a result the caller must not treat as deployed says so first; a green
+  // build without restartAos says a runtime refresh is still needed before testing.
   const userAction = runtimeWarning
     ? '⚠️ USER ACTION REQUIRED: AOS restart/readiness was not confirmed. Inform the user of the cause below. ' +
-      'Do not start UI tests or declare the deployed build ready. Ask the user to inspect the actual IIS/IIS Express host, ' +
+      'Do not start testing in the application or declare the deployed build ready. Ask the user to inspect the actual IIS/IIS Express host, ' +
       'restart it manually if needed, and confirm readiness before continuing. Do not automatically retry an uncertain restart.\n\n'
     : '';
   const restartAdvice = succeeded && !workflow ? runtimeRestartGuidance() : '';
@@ -1621,12 +1603,12 @@ async function renderFinishedBuildResult(
 
 /**
  * Fork: printed with a green build that did not restart the AOS. A compile does
- * not prove the running AOS loaded the new objects, and UI tests against it
- * would test the old ones.
+ * not prove the running AOS loaded the new objects, and testing against it
+ * would exercise the old ones.
  */
 function runtimeRestartGuidance(): string {
   return '\nRuntime refresh required: Restart/reload the actual AOS host before testing new or changed objects. ' +
-    'Use restartAos:true on the initial build for the build-before-UI-test workflow and collect a runtime ready result before UI tests. ' +
+    'Use restartAos:true on the initial build and collect a runtime ready result before testing. ' +
     'For full IIS, recycle the AOSService application pool; for IIS Express, restart the specific ' +
     'IIS Express instance hosting this environment through its normal launcher. A stopped W3SVC ' +
     'does not identify or restart an IIS Express host. Compilation does not prove deployment or runtime availability; ' +
@@ -2057,10 +2039,8 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       };
     }
 
-    // restartAos without aosUrl: the fork's UI test URL first, so UI tests and
-    // the restart target the same environment; then the root the local AOS
-    // itself serves, from the web.config beside its PackagesLocalDirectory.
-    // UDE has no such file — there it has to be one of the first two.
+    // restartAos without aosUrl: the root the local AOS itself serves, from the
+    // web.config beside its PackagesLocalDirectory. UDE has none — explicit only.
     // Resolved here, required only when a NEW build starts (below): a call that
     // collects an earlier restart build's result must not fail for want of a
     // root it will not use.
@@ -2068,18 +2048,14 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
     let aosUrlSource = 'aosUrl';
     let aosUrlMissing: string | undefined;
     if (params.restartAos === true && aosUrl === undefined) {
-      const uiTestRoot = environmentRootOf(process.env.D365FO_UI_TEST_URL);
-      const local = uiTestRoot ? null : await localAosUrl([microsoftPackagesPath, customPackagesPath]);
-      if (uiTestRoot) {
-        aosUrl = uiTestRoot;
-        aosUrlSource = 'D365FO_UI_TEST_URL';
-      } else if (local) {
+      const local = await localAosUrl([microsoftPackagesPath, customPackagesPath]);
+      if (local) {
         aosUrl = local.url;
         aosUrlSource = local.source;
       } else {
         aosUrlMissing =
-          'restartAos requires aosUrl: D365FO_UI_TEST_URL is not set and no AosService\\WebRoot\\web.config beside the packages folder ' +
-          'names the local AOS (a UDE machine has none). Pass the environment root explicitly.';
+          'restartAos requires aosUrl: no AosService\\WebRoot\\web.config beside the packages folder names the local AOS ' +
+          '(a UDE machine has none). Pass the environment root explicitly.';
       }
     }
 
@@ -2515,7 +2491,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
     releaseAdmission();
     // An immediate launch provides its PID; a slow preparation gets one turn of
     // the event loop before the caller receives the log path.
-    const pid = await Promise.race([launch, new Promise<undefined>(resolve => setTimeout(resolve, 0))]);
+    const pid = await Promise.race([launch, new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 0))]);
 
     // ------------------------------------------------------------------
     // Return "build started" message OR wait for completion

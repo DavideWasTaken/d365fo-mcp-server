@@ -46,7 +46,6 @@
     "start": "node dist/index.js",
     "test": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:ui": "vitest run --config vitest.integration.config.ts tests/tools/ui-verification.integration.test.ts tests/tools/ui-system-errors.integration.test.ts tests/tools/ui-authentication.integration.test.ts tests/tools/ui-guided tests/server/ui-guided --maxWorkers=1",
     "extract-metadata": "tsx scripts/extract-metadata.ts",
     "build-database": "node --max-old-space-size=6144 --import tsx/esm scripts/build-database.ts",
     "build-fts": "node --max-old-space-size=6144 --import tsx/esm scripts/build-fts.ts",
@@ -94,7 +93,6 @@
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
     "express-rate-limit": "^8.4.1",
-    "playwright": "^1.63.0",
     "xml2js": "^0.6.2",
     "zod": "^4.3.6"
   },

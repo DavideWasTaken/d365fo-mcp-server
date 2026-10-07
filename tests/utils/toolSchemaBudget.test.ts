@@ -196,11 +196,7 @@ const CHARS_PER_TOKEN = 4;
 // 85 chars under it are what the index/field-group targetTypes need next.
 // They took 63 of them (#1067): the two enum values and the "Table.Name" form in
 // targetType's description. Measured payload after: 45_078.
-// UI verification adds 738 chars including its comma: 44,822 -> 45,560.
-// Full 7,492-char contract is returned only on demand, outside tools/list.
-// In this fork, after the find_references targetTypes above: 45,227 chars with 21 tools,
-// 45,566 with the optional SQL tool (22). The fork's ceiling covers both.
-const TOTAL_BUDGET = 45_650;
+const TOTAL_BUDGET = 45_100;
 const LARGEST_TOOL_BUDGET = 5_780;
 
 async function getTools(): Promise<Array<{ name: string }>> {
@@ -213,15 +209,21 @@ async function getTools(): Promise<Array<{ name: string }>> {
 }
 
 describe('tool schema token budget', () => {
-  it('keeps the optional SQL catalogue within the same total budget', async () => {
+  // axdb_sql is published only once SQL is configured, so the default payload
+  // above does not carry it. A configured install does, under the same ceiling.
+  it('keeps the payload within the same budget once AxDB SQL is configured', async () => {
     vi.stubEnv('D365FO_SQL_ENABLED', 'true');
     vi.stubEnv('D365FO_SQL_SERVER', 'localhost');
     try {
       const tools = await getTools();
-      expect(tools.length).toBe(22);
+      expect(tools.map(t => t.name)).toContain('axdb_sql');
+      expect(tools.length).toBe(21);
       expect(JSON.stringify(tools).length).toBeLessThan(TOTAL_BUDGET);
-    } finally { vi.unstubAllEnvs(); }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
+
   it('total ListTools payload stays within the token budget', async () => {
     const tools = await getTools();
     const chars = JSON.stringify(tools).length;
@@ -230,7 +232,7 @@ describe('tool schema token budget', () => {
       `[tool-budget] ${tools.length} tools · ${chars} chars ≈ ${Math.round(chars / CHARS_PER_TOKEN)} tokens ` +
       `(budget ${TOTAL_BUDGET} chars)`,
     );
-    expect(tools.length).toBe(21);
+    expect(tools.length).toBe(20);
     expect(chars).toBeLessThan(TOTAL_BUDGET);
   });
 

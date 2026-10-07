@@ -41,8 +41,6 @@ extracted-metadata/
 tmp/
 
 # Test artifacts
-.d365fo-ui/
-playwright/.auth/
 test-workspace/
 test-model-tags*/
 

@@ -1,10 +1,6 @@
-# Tool Reference — 22 tools
+# Tool Reference — 21 tools
 
-This is the maximum catalogue. The optional `axdb_sql` is omitted when SQL setup is blank/disabled (including from the core profile).
-
-## Optional AxDB SQL (this fork)
-
-`axdb_sql`: `contract` for the strict schema, `status` for connectivity, `schema` for physical columns, `query` for live SELECT, `execute` for transactional INSERT/UPDATE/DELETE. Configure through `d365fo-mcp config sql`; blank server disables SQL. Use for debugging and extra persisted-data checks, not to bypass UI creation/validation paths under test. [Setup and examples](AXDB_SQL.md).
+The optional `axdb_sql` counts toward that total but is published only once SQL is configured — see SDLC & Build below.
 
 Every tool the server exposes, grouped by purpose. The AI agent picks tools automatically — the *example prompts* show what to ask to trigger them; you never name tools yourself.
 
@@ -12,13 +8,11 @@ Every tool the server exposes, grouped by purpose. The AI agent picks tools auto
 
 > **C# bridge first:** on Windows D365FO VMs, the bridge-backed read tools (marked †) query the live `IMetadataProvider` (always-fresh metadata) and `DYNAMICSXREFDB` (compiler-resolved cross-references), falling back to SQLite transparently on Azure/Linux. All AOT metadata writes go exclusively through the bridge. See [ARCHITECTURE.md](ARCHITECTURE.md).
 >
-> **Server modes:** `full` = all 22 tools · `read-only` (Azure) = everything except the eight local build/verify tools · `write-only` (hybrid companion) = those eight local tools plus the three always-on ones (`get_object_info`, `labels`, `d365fo_file`). Independently, **`MCP_TOOL_PROFILE=core`** publishes only the 17-tool create-build-and-verify loop, for workspaces that already run other MCP servers. See [MCP_CONFIG.md](MCP_CONFIG.md).
+> **Server modes:** `full` = all 21 tools · `read-only` (Azure) = everything except the seven local build/verify tools · `write-only` (hybrid companion) = those seven local tools plus the three always-on ones (`get_object_info`, `labels`, `d365fo_file`). Independently, **`MCP_TOOL_PROFILE=core`** publishes only the 16-tool create-and-build loop, for workspaces that already run other MCP servers. See [MCP_CONFIG.md](MCP_CONFIG.md).
 
 ---
 
 ## Recommended workflows
-
-**Browser verification in this fork:** generate code → build/sync/deploy → derive cases from the original requirement (two recommended, one to five supported). For AI-guided first verification, fetch `action="contract", topic="guided"`, then use `start` → `case(prepare/begin)` → `observe`/`act`/`check` → `case(end)` → `finish`. Your client AI chooses observed controls; the server embeds no model. Keep local HTTP (for example `http://localhost:8080/mcp`) or stdio; configure the Dynamics URL separately. Deterministic `run(plan|planPath)` and separate human `authenticate` remain supported. See [UI customization testing](UI_CUSTOMIZATION_TESTING.md).
 
 The grounding chain is what makes generated code compile on the first try:
 
@@ -169,16 +163,16 @@ Two things shared by `create` and `modify`:
 
 ## 🏗️ SDLC & Build (5)
 
-`build_d365fo_project` also accepts `restartAos: true`, with the local environment root in `aosUrl` — optional: it defaults to `D365FO_UI_TEST_URL`, then on a classic AOSService VM to `Infrastructure.HostUrl` from `AosService\WebRoot\web.config`. After successful compilation, runtime metadata generation and requested database synchronization, it restarts the matching IIS/IIS Express AOS and checks host readiness. This is opt-in; builds still start in the background by default (`wait: true` blocks). Collecting a completed result does not repeat the restart, and a blocked or unsuccessful restart is reported explicitly. See [Optional AOS restart](AOS_RUNTIME_RESTART.md) for requirements and limitations.
+`build_d365fo_project` also accepts `restartAos: true`, with the local environment root in `aosUrl` — optional on a classic AOSService VM, where it defaults to `Infrastructure.HostUrl` from `AosService\WebRoot\web.config`. After successful compilation, runtime metadata generation and requested database synchronization, it restarts the matching IIS/IIS Express AOS and checks host readiness. This is opt-in; builds still start in the background by default (`wait: true` blocks). Collecting a completed result does not repeat the restart, and a blocked or unsuccessful restart is reported explicitly. See [Optional AOS restart](AOS_RUNTIME_RESTART.md) for requirements and limitations.
 
-> Local-only — excluded from the Azure `read-only` mode. Build/SysTest operations require a Windows D365FO VM; browser verification requires a local Playwright installation and access to the deployed test environment.
+> Local-only — require a Windows D365FO VM; excluded from the Azure `read-only` mode.
 
 | Tool | What it does | Example prompt |
 |------|--------------|----------------|
-| `build_d365fo_project` | Compiles with `xppc.exe` in the background by default; returns a log path, then saved status/results on follow-up. `wait:true` opts into waiting. Structured diagnostics include severity, object, line and fix hints. `bpCheck:true` appends advisory best-practice findings. `dbSync:true` synchronizes the project's syncable objects (full-model if none); `dbSync:["CustTable"]` selects exact tables/views. `restartAos:true` restarts the matching local IIS/IIS Express AOS after successful compilation, runtime metadata generation and requested sync, so new objects can be loaded for UI tests without a separate Visual Studio build/manual refresh. Requested sync/restart failures are reported as errors with user guidance. Status calls never repeat post-build actions. [Build changes and usage](BUILD_FEEDBACK.md#why-this-fork-changes-the-build-workflow) | *"Build the project and show the errors"* · *"Build, sync and restart AOS before testing the customization in the UI"* |
+| `build_d365fo_project` | Compiles with `xppc.exe` in the background by default; returns a log path, then saved status/results on follow-up. `wait:true` opts into waiting. Structured diagnostics include severity, object, line and fix hints. `bpCheck:true` appends advisory best-practice findings. `dbSync:true` synchronizes the project's syncable objects (full-model if none); `dbSync:["CustTable"]` selects exact tables/views. `restartAos:true` restarts the matching local IIS/IIS Express AOS after successful compilation, runtime metadata generation and requested sync, so new objects are loaded without a separate Visual Studio build or manual refresh. Requested sync/restart failures are reported as errors with user guidance. Status calls never repeat post-build actions. [Build changes and usage](BUILD_FEEDBACK.md#why-this-fork-changes-the-build-workflow) | *"Build the project and show the errors"* · *"Build, sync and restart the AOS so I can test it"* |
 | `run_bp_check` | Microsoft Best Practices (xppbp.exe) analysis — `objects: [{objectType, objectName}]` checks several objects in one call (shared preamble once, findings grouped per object) | *"Run a BP check on my model"* · *"BP check the table, its extension class and the enum"* |
 | `run_systest_class` | Execute SysTest unit tests via SysTestConsole.exe, run with `/unattended` and reported per method. Reads the red-first phase off the results rather than asking for a flag: while the scaffold's `this.fail(...)` lines are still there it reports **Red phase confirmed**, and if every method passes on a class created in this session it warns that a test passing on its first run has proven nothing about its assertion. When the runner cannot start at all, it names the assembly-binding fault behind it instead of blaming the test model | *"Run the MyServiceTest class"* |
-| `verify_ui_customization` | `contract(topic="guided")` describes `start`, `observe`, `case`, `act`, `check` and `finish`: persistent local HTTP/stdio sessions, human login, observed references, immutable criteria and bounded local evidence reports. The client AI guides the journey; the server makes no model calls. Default `contract`, `authenticate` and deterministic `run(plan or planPath)` remain available for reusable plans, same-origin redirects, scoping and text `contains`. Both workflows return PASS / FAIL / NOT_VERIFIED for 1–5 cases. UI actions can modify test records. The workflow has been validated on the maintainer's D365FO development VM. [Setup and complete example](UI_CUSTOMIZATION_TESTING.md) | *"Explore the deployed customization, verify one positive and one negative case from my requirement, and report what happened."* |
+| `axdb_sql` | **Optional, published only once SQL is configured.** Live SQL against AxDB on the development VM, through the bridge with Windows authentication: `contract` (strict schema and rules), `status`, `schema` (physical columns, keys, defaults), `query` (one parameterized SELECT, bounded rows), `execute` (up to 20 INSERT/UPDATE/DELETE in one transaction, only when writes were enabled in setup). For debugging persisted data — not a replacement for creating records through the application or X++. [Setup and policy](AXDB_SQL.md) | *"What did my posting class write to CUSTTRANS for USMF?"* |
 | `update_symbol_index` | Re-index file(s) changed **outside** this server, without a restart — `d365fo_file` create/modify already refresh the index themselves, so no follow-up call is needed after a write | *"I edited that table in Visual Studio — re-index it"* |
 
 ## ✅ Quality & Grounding (2)

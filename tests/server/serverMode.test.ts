@@ -76,11 +76,12 @@ describe('tool profile', () => {
   it('core publishes exactly the create-and-build loop', () => {
     const core = published.filter(name => isToolInProfile('core', name, NONE));
     expect(core.sort()).toEqual([...CORE_TOOLS].sort());
-    // 16 with UI verification added to the former 15-tool core: undo_last_modification, review_workspace_changes and
+    // 15, not 18: undo_last_modification, review_workspace_changes and
     // trigger_db_sync were folded into d365fo_file(action="undo"),
     // get_workspace_info(changes=true) and build_d365fo_project(dbSync), all
     // three of which are already core. The loop lost no capability.
-    expect(core).toHaveLength(17);
+    // 16 with axdb_sql, which only appears once SQL is configured.
+    expect(core).toHaveLength(16);
   });
 
   it('every CORE_TOOLS entry is a published tool (no ghosts after a rename)', () => {

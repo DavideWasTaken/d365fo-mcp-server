@@ -30,15 +30,16 @@ describe('tool inventory contract', () => {
   });
 
   it('exposes the expected total tool count', () => {
-    // 21 after adding local UI verification. Previously 20 since the 2026-08-25 audit's Phase C folded three more tools into the
+    // 20 since the 2026-08-25 audit's Phase C folded three more tools into the
     // tools that already owned their subject: undo_last_modification ->
     // d365fo_file(action="undo"), review_workspace_changes ->
     // get_workspace_info(changes=true), trigger_db_sync ->
     // build_d365fo_project(dbSync). Before that, get_method and suggest_edt were
     // unpublished into get_object_info(options.method) and prepare(fieldsHint).
     // Every one of those handlers stays routable under its old name.
-    expect(mcpServerToolNames).toHaveLength(22);
-    expect(startupCatalogToolNames).toHaveLength(22);
+    // 21 with axdb_sql, which is published only once SQL is configured.
+    expect(mcpServerToolNames).toHaveLength(21);
+    expect(startupCatalogToolNames).toHaveLength(21);
   });
 
   it('never states a tool count that disagrees with the published inventory', () => {
@@ -162,8 +163,9 @@ describe('tool inventory contract', () => {
     // 6, not 9: review_workspace_changes and undo_last_modification and
     // trigger_db_sync left the published surface, and each fold landed in a tool
     // whose locality already covered it (get_workspace_info and
-    // build_d365fo_project are LOCAL; d365fo_file is in ALWAYS_TOOLS).
-    expect(LOCAL_TOOLS.size).toBe(8);
+    // build_d365fo_project are LOCAL; d365fo_file is in ALWAYS_TOOLS). 7 with
+    // axdb_sql, which needs the local bridge.
+    expect(LOCAL_TOOLS.size).toBe(7);
     expect(mcpServerToolNames.filter(name => !LOCAL_TOOLS.has(name))).toHaveLength(14);
   });
 
@@ -256,7 +258,7 @@ describe('tool inventory contract', () => {
       // read tool CLAIMS to be read-only; a write tool simply must not.
       expect([true, undefined], `'${toolName}' readOnlyHint must be true or absent`)
         .toContain(a.readOnlyHint);
-      expect(a.openWorldHint).toBe(['verify_ui_customization', 'axdb_sql'].includes(toolName));
+      expect(a.openWorldHint).toBe(false);
     }
     // No orphan annotations for tools that no longer exist
     const published = new Set(mcpServerToolNames);
@@ -269,7 +271,7 @@ describe('tool inventory contract', () => {
     const writeTools = [
       'd365fo_file', 'labels', 'generate_object',
       'update_symbol_index', 'build_d365fo_project',
-      'run_systest_class', 'verify_ui_customization',
+      'run_systest_class', 'axdb_sql',
     ];
     for (const toolName of writeTools) {
       // `false` and absent both mean "not read-only" — absent because that IS
@@ -373,7 +375,7 @@ describe('tool inventory contract', () => {
       'update_symbol_index',
       'build_d365fo_project',
       'run_bp_check',
-      'run_systest_class', 'verify_ui_customization',
+      'run_systest_class',
     ];
 
     for (const toolName of criticalTools) {

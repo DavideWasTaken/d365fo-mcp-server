@@ -32,7 +32,7 @@ import { fileURLToPath } from 'url';
 import { defaultPathEnv, resolveConfigFiles, toEnvRecord } from '../config/configFile.js';
 
 /** Env vars whose relative paths should resolve from the .env file directory. */
-const PATH_VARS = ['DB_PATH', 'LABELS_DB_PATH', 'METADATA_PATH', 'BP_CATALOG_PATH', 'D365FO_UI_STORAGE_STATE', 'D365FO_UI_OUTPUT_DIR'] as const;
+const PATH_VARS = ['DB_PATH', 'LABELS_DB_PATH', 'METADATA_PATH', 'BP_CATALOG_PATH'] as const;
 
 /**
  * The settings that decide whether a write may cross into another model. They
@@ -181,12 +181,11 @@ export function loadEnv(callerImportMetaUrl: string): void {
     : new Set<string>();
 
   const files = resolveConfigFiles(envDir);
-  // UI tests must not borrow an installation's browser login or URL when an
-  // explicit config selects a different instance. Deliberate shell/ENV_FILE
-  // overrides still apply; only the other installation's ambient fallback is dropped.
+  // SQL must not borrow another installation's database when an explicit config
+  // selects a different instance. Deliberate shell/ENV_FILE overrides still
+  // apply; only the other installation's ambient fallback is dropped.
   if (!process.env.ENV_FILE && resolve(files.baseDir) !== resolve(envDir)) {
-    for (const key of ['D365FO_UI_TEST_URL', 'D365FO_UI_STORAGE_STATE', 'D365FO_UI_OUTPUT_DIR', 'D365FO_UI_BROWSER_CHANNEL',
-      ...Object.keys(process.env).filter(key => key.startsWith('D365FO_SQL_'))]) {
+    for (const key of Object.keys(process.env).filter(key => key.startsWith('D365FO_SQL_'))) {
       if (!fromRealEnv.has(key)) delete process.env[key];
     }
   }

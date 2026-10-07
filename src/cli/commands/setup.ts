@@ -26,7 +26,7 @@ import { findPackagesRoot } from '../../utils/packagesRoot.js';
 import { rootTarget } from '../target.js';
 import { askConfirm, askSelect, askText, p, requireFullInstall } from '../ui.js';
 import { listXppConfigs } from '../xppConfig.js';
-import { configureVerification } from '../verificationSetup.js';
+import { configureSqlForEnvironment } from '../sqlEnvironmentSetup.js';
 import { rebuildIndex } from './indexCmd.js';
 import { instanceAddCommand } from './instance.js';
 
@@ -199,7 +199,7 @@ async function configureEnvironment(store: SettingsStore, scenario: Scenario): P
     } else {
       p.log.info('No XPP configs found — the server will auto-detect at runtime.');
     }
-    await configureVerification(store, 'ude');
+    await configureSqlForEnvironment(store, 'ude');
     return 'ude';
   }
 
@@ -210,7 +210,7 @@ async function configureEnvironment(store: SettingsStore, scenario: Scenario): P
   if (detected) p.log.success(`Found PackagesLocalDirectory at ${detected}`);
   const packagesRoot = await askSetting(store, setting('environment.packagePath'), { required: true, initial: detected ?? undefined });
   await askSetting(store, setting('environment.customModels'), { required: true });
-  await configureVerification(store, 'traditional', typeof packagesRoot === 'string' ? packagesRoot : undefined);
+  await configureSqlForEnvironment(store, 'traditional', typeof packagesRoot === 'string' ? packagesRoot : undefined);
   return 'traditional';
 }
 

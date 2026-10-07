@@ -12,7 +12,6 @@ import { dirname, resolve } from 'path';
 import express from 'express';
 import compression from 'compression';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { GuidedSessionManager } from './tools/sdlc/uiVerification/guided/sessionManager.js';
 import { createXppMcpServer } from './server/mcpServer.js';
 import { createStreamableHttpTransport } from './server/transport.js';
 import { XppSymbolIndex } from './metadata/symbolIndex.js';
@@ -218,8 +217,6 @@ const shutdownCoordinator = createShutdownCoordinator({
   deadlineMs: Math.max(1_000, parseInt(process.env.SHUTDOWN_TIMEOUT_MS || '5000', 10) || 5_000),
 });
 const onShutdown = shutdownCoordinator.onShutdown;
-const uiGuidedManager = new GuidedSessionManager();
-onShutdown('guided UI browsers', () => uiGuidedManager.dispose());
 
 async function initializeServices() {
   // Attribution for "the first call took seconds" — off unless DEBUG_LOGGING is
@@ -257,7 +254,7 @@ async function initializeServices() {
     serverState.symbolIndex = symbolIndex;
     serverState.parser = parser;
 
-    const context: import('./types/context.js').XppServerContext = { symbolIndex, parser, workspaceScanner, hybridSearch, uiGuidedManager, uiTransport: isStdioMode ? 'stdio' : 'http' };
+    const context: import('./types/context.js').XppServerContext = { symbolIndex, parser, workspaceScanner, hybridSearch };
     const mcpServer = createXppMcpServer(context);
     log.ok('MCP Server initialized (write-only mode)');
     return { mcpServer, symbolIndex, parser, workspaceScanner, hybridSearch, context };
@@ -455,8 +452,6 @@ async function initializeServices() {
       parser,
       workspaceScanner,
       hybridSearch,
-      uiGuidedManager,
-      uiTransport: isStdioMode ? 'stdio' : 'http',
     };
     const mcpServer = createXppMcpServer(context);
 
@@ -735,8 +730,6 @@ async function main() {
       workspaceScanner: stubScanner,
       hybridSearch: stubHybrid,
       dbReady: dbReadyPromise,
-      uiGuidedManager,
-      uiTransport: 'stdio',
     };
     const mcpServer = createXppMcpServer(stubContext);
 
@@ -792,7 +785,7 @@ async function main() {
     const toolDesc = SERVER_MODE === 'write-only' ? `(${Array.from(LOCAL_TOOLS).join(', ')})` :
                     SERVER_MODE === 'read-only' ? '(all except local tools)' :
                     TOOL_PROFILE === 'core' ? `(core profile${EXTRA_TOOLS.size ? ` + ${EXTRA_TOOLS.size} extra` : ''}; MCP_TOOL_PROFILE=full for all ${Object.keys(TOOL_ANNOTATIONS).length})` :
-                    '(1 discovery + 1 labels + 2 object-info + 2 intelligent + 1 smart-gen + 1 file-ops + 1 pattern-analysis + 5 security-ext + 5 sdlc-build + 2 code-quality)';
+                    '(1 discovery + 1 labels + 3 object-info + 2 intelligent + 2 smart-gen + 1 file-ops + 1 pattern-analysis + 5 security-ext + 5 sdlc-build + 2 code-review + 2 code-quality)';
     log.ok(`Registered ${toolCount} X++ MCP tools ${toolDesc}`);
     serverState.isReady = true;
     serverState.isHealthy = true;
@@ -965,8 +958,7 @@ async function main() {
           { name: 'update_symbol_index',          desc: 'Re-index a file changed outside this server (create/modify refresh it themselves)' },
           { name: 'build_d365fo_project',         desc: 'Compile the model locally; bpCheck/dbSync fold the BP check and the database sync into the same call' },
           { name: 'run_bp_check',                 desc: 'Run Microsoft Best Practices (xppbp.exe) analysis' },
-          { name: 'verify_ui_customization',     desc: 'Verify two requirement-based UI cases in a local browser' },
-          { name: 'axdb_sql',                    desc: 'Optional live SQL for AxDB debugging and targeted data changes' },
+          { name: 'axdb_sql',                     desc: 'Optional: query AxDB on the dev VM (shown only when SQL is configured)' },
           { name: 'run_systest_class',            desc: 'Execute unit tests using SysTestConsole.exe' },
         ]},
         { icon: '🧪', category: 'Code Quality & Grounding', tools: [

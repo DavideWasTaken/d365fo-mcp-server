@@ -1,6 +1,6 @@
 export const axdbSqlTool = {
   name: 'axdb_sql',
-  description: 'Live AxDB SQL; may write. Fetch contract. Preserve UI flows under test.',
+  description: 'Live AxDB SQL on the dev VM; writes only if enabled. Fetch contract first.',
   inputSchema: {
     type: 'object',
     properties: {

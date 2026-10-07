@@ -28,13 +28,13 @@ export type SettingType = 'string' | 'path' | 'boolean' | 'int' | 'list' | 'enum
 export type SettingTier = 'basic' | 'advanced' | 'secret' | 'env-only';
 
 export type SectionId =
-  | 'sql'
   | 'environment'
   | 'workspace'
   | 'naming'
   | 'index'
   | 'server'
   | 'bridge'
+  | 'sql'
   | 'behavior'
   | 'azure';
 
@@ -90,7 +90,6 @@ export interface Section {
 }
 
 export const SECTIONS: Section[] = [
-  { id: 'sql', title: 'AxDB SQL (optional)', description: 'Windows-authenticated SQL access for development debugging and targeted data changes.' },
   {
     id: 'environment',
     title: 'D365FO environment',
@@ -122,6 +121,11 @@ export const SECTIONS: Section[] = [
     description: 'The metadata-provider child process — the only write path to the AOT.',
   },
   {
+    id: 'sql',
+    title: 'AxDB SQL (optional)',
+    description: 'Windows-authenticated SQL access to AxDB on a development VM, for debugging.',
+  },
+  {
     id: 'behavior',
     title: 'Quality gates',
     description: 'Rules that block writes when generated code is not grounded or violates a pattern.',
@@ -134,61 +138,7 @@ export const SECTIONS: Section[] = [
 ];
 
 export const SETTINGS: Setting[] = [
-  ...SQL_SETTINGS,
   // ── environment ──────────────────────────────────────────────────────────
-  {
-    path: 'environment.uiTestUrl',
-    env: 'D365FO_UI_TEST_URL',
-    section: 'environment',
-    tier: 'basic',
-    type: 'string',
-    label: 'Environment URL for UI tests',
-    description: 'Optional D365FO test environment URL used by verify_ui_customization. Leave empty to be asked only when requesting a UI test. Not needed if you do not test. A saved Playwright login is also required (docs/UI_CUSTOMIZATION_TESTING.md).',
-    placeholder: 'https://your-test-env.operations.dynamics.com',
-    validate: value => {
-      if (!value.trim()) return undefined;
-      try {
-        const url = new URL(value);
-        if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) return undefined;
-      } catch { /* invalid URL */ }
-      return 'Enter an HTTP(S) environment URL without embedded credentials, or leave empty.';
-    },
-  },
-  {
-    path: 'environment.uiBrowserChannel',
-    env: 'D365FO_UI_BROWSER_CHANNEL',
-    section: 'environment',
-    tier: 'advanced',
-    type: 'enum',
-    label: 'Browser for UI tests',
-    description: 'Auto prefers Playwright Chromium and tries installed Microsoft Edge if Chromium cannot launch. Explicit Chromium or Edge never switches browsers. Applies to normal setup; explicit UI profiles keep their own browser choice.',
-    default: 'auto',
-    choices: [
-      { value: 'auto', hint: 'Chromium, then installed Edge on launch failure' },
-      { value: 'chromium', hint: 'Playwright Chromium only' },
-      { value: 'msedge', hint: 'Installed Microsoft Edge only' },
-    ],
-  },
-  {
-    path: 'environment.uiStorageState',
-    env: 'D365FO_UI_STORAGE_STATE',
-    section: 'environment',
-    tier: 'advanced',
-    type: 'path',
-    label: 'Saved UI test login',
-    description: 'Local Playwright storage-state JSON. Relative paths resolve from the installation or instance directory. Keep this file private.',
-    default: '.d365fo-ui/auth.json',
-  },
-  {
-    path: 'environment.uiOutputDir',
-    env: 'D365FO_UI_OUTPUT_DIR',
-    section: 'environment',
-    tier: 'advanced',
-    type: 'path',
-    label: 'UI test reports directory',
-    description: 'Local reports and error screenshots. Relative paths resolve from the installation or instance directory.',
-    default: '.d365fo-ui/reports',
-  },
   {
     path: 'environment.type',
     env: 'D365FO_DEV_ENVIRONMENT_TYPE',
@@ -593,15 +543,15 @@ export const SETTINGS: Setting[] = [
     type: 'enum',
     label: 'Tool profile',
     description:
-      'How many tools this server advertises. "full" publishes up to 22 tools (SQL only when configured). "core" publishes only the plan → discover → ' +
-      'write → build → verify loop (17 tools) and leaves out the specialist ones (extension_info, analyze_code, ' +
+      'How many tools this server advertises. "full" publishes all 21 (axdb_sql only once SQL is configured). "core" publishes only the plan → discover → ' +
+      'write → build → verify loop (16 tools) and leaves out the specialist ones (extension_info, analyze_code, ' +
       'validate_code, security_info, run_systest_class). Worth switching ' +
       'when the workspace runs several MCP servers at once: hosts stop sending the tool catalogue inline past a ' +
       'limit (VS Code: ~100 tools) and make the model search for tools first, which costs a round trip per tool.',
     default: 'full',
     choices: [
-      { value: 'full', hint: 'all 22 tools' },
-      { value: 'core', hint: '17-tool create-build-and-verify loop' },
+      { value: 'full', hint: 'all 21 tools' },
+      { value: 'core', hint: '16-tool create-and-build loop' },
     ],
   },
   {
@@ -1033,6 +983,8 @@ export const SETTINGS: Setting[] = [
       'Set the SAME random string on both halves of a hybrid deployment (and on every scaled-out App Service ' +
       'instance) so tokens issued by one process validate in another. Without it, tokens are memory-local.',
   },
+  // ── sql ──────────────────────────────────────────────────────────────────
+  ...SQL_SETTINGS,
 ];
 
 const BY_PATH = new Map(SETTINGS.flatMap(s => (s.path ? [[s.path, s] as const] : [])));

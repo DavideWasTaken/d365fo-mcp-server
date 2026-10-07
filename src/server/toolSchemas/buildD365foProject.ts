@@ -43,11 +43,11 @@ export const buildD365foProjectTool = {
         },
         restartAos: {
           type: 'boolean',
-          description: 'Required true for build-before-UI tests: restart the matched local AOS host once after metadata/sync success, then verify host/HTTP readiness. Status calls never replay restart.',
+          description: 'Restart the matched local AOS host once after metadata/sync success, then verify host/HTTP readiness. Status calls never replay restart.',
         },
         aosUrl: {
           type: 'string',
-          description: 'Environment root for restartAos. Defaults to D365FO_UI_TEST_URL, then Infrastructure.HostUrl from the local AosService\\WebRoot\\web.config (none on UDE). Must uniquely match a local IIS/IIS Express host.',
+          description: 'Environment root for restartAos. Defaults to Infrastructure.HostUrl from the local AosService\\WebRoot\\web.config (none on UDE). Must uniquely match a local IIS/IIS Express host.',
         },
         wait: {
           type: 'boolean',
