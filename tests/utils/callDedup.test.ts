@@ -274,6 +274,7 @@ describe('dedup cache — invalidation on write', () => {
     // A new write surface that is not here reopens the defect, so the set is
     // asserted rather than merely spot-checked.
     expect([...MUTATING_TOOLS].sort()).toEqual([
+      'axdb_sql',
       'd365fo_file', 'generate_object', 'labels',
       'trigger_db_sync', 'undo_last_modification', 'update_symbol_index',
     ]);

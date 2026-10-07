@@ -99,6 +99,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotations> = {
   d365fo_file:                      write('D365FO file (create/project/modify/delete/undo/generate)', { destructive: true }),
   labels:                           write('Label operations', { destructive: true }),
   generate_object:                         write('Generate code (pattern/scaffold)'),
+  axdb_sql:                         write('Query AxDB (SQL)', { destructive: true }),
 
   // SDLC operations
   update_symbol_index:              write('Update symbol index', { idempotent: true }),
