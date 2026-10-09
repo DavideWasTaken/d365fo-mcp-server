@@ -42,17 +42,21 @@ those are called out explicitly below.
   the element, and an ambiguous or unknown control name writes nothing.
 
 ### Fixed
-- **A label created for `it` landed in `it-IT` in English, without a word.**
+- **A label could land in English in a language folder, without a word.**
   `labels(action="create")` looked up each existing language folder's
   translation by exact, case-sensitive name, and fell back to the en-US text
-  for anything else. A model with an `it-IT` folder therefore got English when
-  the agent supplied `it` (or `it-it`), and the response listed the English
-  text as written without saying it was a substitute. Locales now match
-  case-insensitively, then fall back along the target's own parent chain
-  (`it-IT` → `it`; `zh-Hant-TW` → `zh-Hant` → `zh`, never a sibling such as
-  `it-CH`), and only then to en-US or the first supplied translation. Every
-  fallback is reported with its source and target locale, and the written
-  lines show the text actually written.
+  for anything else — so `it` for an `it-IT` folder, `it-it`, and above all
+  `de-DE` for the bare `de` folders Microsoft's own models use all wrote
+  English, listed as written with nothing saying it was a substitute. Locales
+  now match case-insensitively (`it_IT` reads as `it-IT`; the exact spelling,
+  then the first case variant, wins), then fall back along the target's parent
+  chain (`it-IT` → `it`; `zh-Hant-TW` → `zh-Hant` → `zh`), then — for a
+  bare-language folder — to the one supplied regional translation of that
+  language (`de-DE` → `de`; two candidates such as `de-AT` and `de-CH` fall
+  through, and a sibling region is never used), and only then to en-US or the
+  first supplied translation. Each parent or regional fallback is reported on
+  its own line, the last-resort ones in one line per source, and bulk mode
+  (`labels[]`) forwards those lines instead of dropping them.
 - **The form element-order check no longer reports an empty element as unknown
   (#1093).** Microsoft's own `CustInvoiceJournal.ApplicationSuite_Extension`
   (ApplicationSuite 10.36) writes an empty `<Items />` on a string control, so
