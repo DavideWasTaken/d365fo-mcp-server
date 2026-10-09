@@ -162,7 +162,7 @@ describe('upsertFormControlProperty — refusals write nothing', () => {
   });
 
   it('refuses structural children', () => {
-    for (const property of ['Name', 'Controls']) {
+    for (const property of ['Name', 'Type', 'Controls']) {
       const r = upsertFormControlProperty(FORM, 'ActionPane', property, 'X');
       expect(r?.ok, property).toBe(false);
     }

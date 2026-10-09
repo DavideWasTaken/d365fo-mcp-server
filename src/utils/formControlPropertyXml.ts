@@ -52,10 +52,12 @@ const CONTROL_ELEMENTS = new Set(['AxFormControl', 'FormControl']);
 
 /**
  * Children that are structure, not properties: renaming the control or replacing
- * its child collection through a text value would break the form, so these stay
- * with the operations built for them (rename, add-control / remove-control).
+ * its child collection through a text value would break the form, and a <Type>
+ * that disagrees with i:type describes a control the file does not contain — so
+ * these stay with the operations built for them (rename, add-control /
+ * remove-control; a different type is a different control).
  */
-const STRUCTURAL = new Set(['name', 'controls', 'formcontrolextension']);
+const STRUCTURAL = new Set(['name', 'type', 'controls', 'formcontrolextension']);
 
 const ITYPE = /\bi:type\s*=\s*"([^"]+)"/;
 
