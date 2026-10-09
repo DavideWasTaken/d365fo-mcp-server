@@ -29,6 +29,15 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Fixed
+- **The bridge build command the CLI prints failed in Windows PowerShell 5.1.**
+  `doctor` and `update` suggested `cd "…\D365MetadataBridge" && dotnet build -c
+  Release`, and the bridge's "executable not found" error a relative
+  `cd … && …`. PowerShell 5.1 — the default shell on D365FO VMs — rejects `&&`
+  as a statement separator, so the suggested fix failed exactly where it is
+  printed. Both now name the project in a single `dotnet build` invocation
+  (`dotnet build "<repo>\bridge\D365MetadataBridge\D365MetadataBridge.csproj"
+  -c Release`, plus `-o` for an npm install), which runs from any directory in
+  any shell.
 - **Creates into a model whose package has a different name reported failure
   (#1086).** The C# bridge built the reported path as `{Model}\{Model}\Ax…`, so
   for package `Enhancements` holding model `Sales Integration` it named a folder
