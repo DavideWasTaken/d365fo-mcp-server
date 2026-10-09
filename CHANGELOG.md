@@ -42,6 +42,13 @@ those are called out explicitly below.
   the element, and an ambiguous or unknown control name writes nothing.
 
 ### Fixed
+- **The form element-order check no longer reports an empty element as unknown
+  (#1093).** Microsoft's own `CustInvoiceJournal.ApplicationSuite_Extension`
+  (ApplicationSuite 10.36) writes an empty `<Items />` on a string control, so
+  the shipped-metadata census failed on that VM, and a form write carrying the
+  same element got a warning about a value the platform would ignore. An empty
+  element carries no value, so it is no longer an `unknown` finding; one with
+  content still is, and the blocking `order` check is unchanged.
 - **The bridge build command the CLI prints failed in Windows PowerShell 5.1.**
   `doctor` and `update` suggested `cd "…\D365MetadataBridge" && dotnet build -c
   Release`, and the bridge's "executable not found" error a relative
