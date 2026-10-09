@@ -196,12 +196,6 @@ export const paths = {
 };
 
 /**
- * The exact command that builds the bridge for this installation, for every
- * message that tells a user to run it by hand. An npm install needs the `-o`
- * that puts the output outside the package; printing the bare command would
- * put the binary somewhere the next update deletes.
- */
-/**
  * What to say when the bridge cannot be built because the .NET SDK is absent.
  *
  * Deliberately does not mention the .NET Framework 4.8 Developer Pack, which
@@ -235,7 +229,16 @@ export function cliCommand(args: string): string {
     : `d365fo-mcp ${args}`;
 }
 
+/**
+ * The exact command that builds the bridge for this installation, for every
+ * message that tells a user to run it by hand. An npm install needs the `-o`
+ * that puts the output outside the package; printing the bare command would
+ * put the binary somewhere the next update deletes.
+ */
 export function bridgeBuildCommand(): string {
+  // One invocation on the project's absolute path, never `cd … && …`: Windows
+  // PowerShell 5.1 — the default shell on D365FO VMs — rejects `&&` as a
+  // statement separator, so the old form failed exactly where it is printed.
   const out = paths.bridgeOutDir ? ` -o "${paths.bridgeOutDir}"` : '';
   return `dotnet build "${paths.bridgeProject}" -c Release${out}`;
 }

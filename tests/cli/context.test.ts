@@ -15,7 +15,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { join, resolve } from 'node:path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   bridgeBuildCommand,
   cliCommand,
@@ -71,14 +71,46 @@ describe('data root in a checkout', () => {
     expect(bridgeBuildCommand()).toBe(`dotnet build "${paths.bridgeProject}" -c Release`);
   });
 
-  it('suggests commands that run in Windows PowerShell 5.1 from any directory', () => {
-    // 5.1 — the default shell on D365FO VMs — rejects `&&`, and a `cd` first
-    // only worked when chained. One invocation with absolute paths needs neither.
-    for (const command of [bridgeBuildCommand(), cliCommand('update')]) {
-      expect(command).not.toContain('&&');
-      expect(command).not.toMatch(/^cd /);
-    }
-    expect(cliCommand('update')).toBe(`node "${paths.cliEntry}" update`);
+  it('suggests a bridge build that runs in Windows PowerShell 5.1 from any directory', () => {
+    // 5.1 — the default shell on D365FO VMs — rejects `&&`, and a leading `cd`
+    // only worked when chained. One invocation on an absolute path needs neither.
+    const command = bridgeBuildCommand();
+    expect(command).not.toContain('&&');
+    expect(command).not.toMatch(/^cd /);
+    expect(command).toContain(paths.bridgeProject);
+  });
+  it('suggests the CLI of this checkout in a form Windows PowerShell 5.1 runs', () => {
+    const command = cliCommand('update');
+    expect(command).not.toContain('&&');
+    expect(command).not.toMatch(/^cd /);
+    expect(command).toBe(`node "${paths.cliEntry}" update`);
+  });
+});
+
+describe('bridge build command in an npm install', () => {
+  afterEach(() => {
+    vi.doUnmock('node:fs');
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('builds the project by absolute path into the data directory', async () => {
+    // Re-import context.ts as an npm install sees it: no .git beside the
+    // package, data root from D365FO_MCP_HOME. The -o is what keeps the binary
+    // out of the package an update replaces.
+    vi.stubEnv('D365FO_MCP_HOME', tmp);
+    vi.resetModules();
+    vi.doMock('node:fs', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs')>();
+      return { ...actual, existsSync: (p: fs.PathLike) => !String(p).endsWith('.git') && actual.existsSync(p) };
+    });
+    const npm = await import('../../src/cli/context.js');
+
+    expect(npm.installMode).toBe('npm');
+    expect(npm.bridgeBuildCommand()).toBe(
+      `dotnet build "${npm.paths.bridgeProject}" -c Release -o "${resolve(tmp, 'bridge')}"`,
+    );
+    expect(npm.paths.bridgeExe).toBe(resolve(tmp, 'bridge', 'D365MetadataBridge.exe'));
   });
 });
 
