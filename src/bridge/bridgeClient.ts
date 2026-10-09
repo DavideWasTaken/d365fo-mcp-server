@@ -277,7 +277,6 @@ export class BridgeClient extends EventEmitter {
     if (sql) {
       args.push('--axdb-server', sql.server, '--axdb-database', sql.database,
         '--axdb-timeout', String(sql.commandTimeoutSeconds), '--axdb-max-rows', String(sql.maxRows));
-      if (sql.allowWrites) args.push('--axdb-allow-writes');
       if (sql.trustServerCertificate) args.push('--axdb-trust-certificate');
     }
 

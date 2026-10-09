@@ -90,6 +90,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotations> = {
 
   // Diagnostics
   get_workspace_info:               read('Read workspace configuration'),
+  axdb_sql:                         read('Query AxDB (SQL)'),
   verify_d365fo_project:            read('Verify D365FO project'),
   run_bp_check:                     read('Run Best Practices check'),
 
@@ -99,7 +100,6 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotations> = {
   d365fo_file:                      write('D365FO file (create/project/modify/delete/undo/generate)', { destructive: true }),
   labels:                           write('Label operations', { destructive: true }),
   generate_object:                         write('Generate code (pattern/scaffold)'),
-  axdb_sql:                         write('Query AxDB (SQL)', { destructive: true }),
 
   // SDLC operations
   update_symbol_index:              write('Update symbol index', { idempotent: true }),

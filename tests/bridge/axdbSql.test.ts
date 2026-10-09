@@ -5,7 +5,7 @@ describe('AxDB bridge calls', () => {
     const client = new BridgeClient({ packagesPath: 'C:\\Missing', maxRetries: 3 });
     const send = vi.fn().mockRejectedValue(new Error('timed out'));
     (client as any).callOnce = send;
-    for (const method of ['axdbQuery', 'axdbExecute'] as const) {
+    for (const method of ['axdbQuery', 'axdbSchema'] as const) {
       await expect(client.callAxDb(method, {})).rejects.toThrow('timed out');
     }
     expect(send).toHaveBeenCalledTimes(2);

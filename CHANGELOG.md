@@ -40,23 +40,21 @@ those are called out explicitly below.
   drops an out-of-order element silently (#979); a property the type never
   carries (MenuItemName on a plain Button) is refused, an empty value removes
   the element, and an ambiguous or unknown control name writes nothing.
-- **Optional `axdb_sql`: live SQL against AxDB on the development VM, for
-  debugging.** Off by default, and not published at all until a SQL server is
-  configured, so a default install's tool list is unchanged. Setup offers it
+- **Optional `axdb_sql`: read-only, live SQL against AxDB on the development VM,
+  for debugging.** Off by default, and not published at all until a SQL server
+  is configured, so a default install's tool list is unchanged. Setup offers it
   only on a classic AOSService VM whose `AosService\WebRoot\web.config` names
   the AOS database (`DataAccess.DbServer` / `DataAccess.Database`), proposing
   those values; UDE skips it, and `d365fo-mcp config sql` configures it by hand.
   The bridge runs it with Windows authentication over an encrypted connection,
   opened on demand. Actions: `contract`, `status`, `schema` (columns, keys,
-  defaults of a physical table), `query` (one parameterized SELECT, bounded rows
-  and bytes) and `execute` (up to 20 INSERT/UPDATE/DELETE in one transaction,
-  rolled back on an `expectedRows` mismatch) — `execute` only when writes were
-  enabled in setup, which defaults to no. Statements are checked on the T-SQL
-  syntax tree (ScriptDom): no DDL, EXEC, dynamic SQL, transaction control,
-  cross-database names, SELECT INTO, hints or user-defined functions. No result
-  cache, no duplicate-call replay, no automatic write retry: an interrupted
-  write reports `UNKNOWN`. Excluded from `read-only` mode. See
-  [docs/AXDB_SQL.md](docs/AXDB_SQL.md).
+  defaults of a physical table) and `query` (one parameterized SELECT, bounded
+  rows and bytes). Two guards, because the dev-VM account is normally sysadmin:
+  the statement must be exactly one SELECT on the ScriptDom syntax tree, and
+  every operation runs in a transaction that is always rolled back. Catalog
+  reads are limited to database-scoped sys views (no `sys.sql_logins`,
+  server principals or DMVs). No result cache, no replay, no retry. Excluded
+  from `read-only` mode. See [docs/AXDB_SQL.md](docs/AXDB_SQL.md).
 
 ### Fixed
 - **The form element-order check no longer reports an empty element as unknown

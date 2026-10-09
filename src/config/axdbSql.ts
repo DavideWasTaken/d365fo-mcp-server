@@ -2,7 +2,6 @@
 export interface AxDbConfig {
   server: string;
   database: string;
-  allowWrites: boolean;
   trustServerCertificate: boolean;
   commandTimeoutSeconds: number;
   maxRows: number;
@@ -22,7 +21,7 @@ export function resolveAxDbConfig(env: NodeJS.ProcessEnv = process.env): AxDbCon
   const database = env.D365FO_SQL_DATABASE?.trim() || 'AxDB';
   if (/[;\r\n]/.test(server) || server.includes('\0') || server.length > 256 || database.length > 128 || /[\r\n]/.test(database) || database.includes('\0'))
     throw new Error('Invalid SQL server/database name; use setup values, not a connection string.');
-  return { server, database, allowWrites: yes(env.D365FO_SQL_ALLOW_WRITES),
+  return { server, database,
     trustServerCertificate: yes(env.D365FO_SQL_TRUST_CERTIFICATE),
     commandTimeoutSeconds: integer('D365FO_SQL_TIMEOUT', 30, 30), maxRows: integer('D365FO_SQL_MAX_ROWS', 100, 1000) };
 }

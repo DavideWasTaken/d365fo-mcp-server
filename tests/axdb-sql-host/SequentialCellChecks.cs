@@ -22,7 +22,19 @@ internal static class SequentialCellChecks
                 Equal(AxDbSqlService.Cell(reader, 1), 42, "column after text");
             }
         }
-        foreach (var type in new[] { "varbinary", "binary", "image", "timestamp", "rowversion" })
+        // SqlClient refuses GetStream on timestamp/rowversion ("Invalid attempt to GetStream on column
+        // 'SYSROWVERSION'"), which every AxDB table carries; the double refuses it the same way.
+        foreach (var type in new[] { "timestamp", "rowversion" })
+        {
+            var version = new byte[] { 0, 0, 0, 0, 0, 1, 2, 3 };
+            using (var reader = new ForwardReader(new[] { "int", type, "nvarchar" }, new object[] { 1, version, "after" }))
+            {
+                Equal(AxDbSqlService.Cell(reader, 0), 1, "column before " + type);
+                Equal(AxDbSqlService.Cell(reader, 1), Convert.ToBase64String(version), type + " read as 8 bytes");
+                Equal(AxDbSqlService.Cell(reader, 2), "after", "column after " + type);
+            }
+        }
+        foreach (var type in new[] { "varbinary", "binary", "image" })
         foreach (var length in new[] { 0, 8, 9000, AxDbSqlService.ResponseByteLimit / 2 })
         {
             var data = Enumerable.Range(0, length).Select(i => (byte)(i % 256)).ToArray();
@@ -55,7 +67,7 @@ internal static class SequentialCellChecks
                 if (reader.UnitsRead > 997) throw new Exception("Read continued after cancellation");
             }
         }
-        Console.WriteLine("PASS: forward-only text/binary cells, short chunks, empty/NULL, mixed ordinals, exact numerics and cell limits");
+        Console.WriteLine("PASS: forward-only text/binary/rowversion cells, short chunks, empty/NULL, mixed ordinals, exact numerics and cell limits");
     }
 
     private static void Equal(object? actual, object? expected, string message)
@@ -112,7 +124,13 @@ internal static class SequentialCellChecks
             return count;
         }
         public override TextReader GetTextReader(int ordinal) { Enter(ordinal); return new ForwardText(this, ordinal); }
-        public override Stream GetStream(int ordinal) { Enter(ordinal); return new ForwardBinary(this, ordinal); }
+        public override Stream GetStream(int ordinal)
+        {
+            if (types[ordinal] == "timestamp" || types[ordinal] == "rowversion")
+                throw new InvalidOperationException("Invalid attempt to GetStream on column 'c" + ordinal + "'.");
+            Enter(ordinal);
+            return new ForwardBinary(this, ordinal);
+        }
         private sealed class ForwardText : TextReader
         {
             private readonly ForwardReader owner; private readonly int ordinal; private long offset;

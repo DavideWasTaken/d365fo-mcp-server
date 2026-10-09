@@ -35,11 +35,10 @@ namespace D365MetadataBridge.Protocol
                     case "ping":
                         return Task.FromResult(BridgeResponse.CreateSuccess(request.Id, "pong"));
 
-                    // Standalone SQL debug operations; never part of UI verification or metadata writes.
+                    // Standalone, read-only AxDB SQL debug operations; they never touch the metadata provider.
                     case "axdbstatus":
                     case "axdbschema":
                     case "axdbquery":
-                    case "axdbexecute":
                         return HandleAxDb(request);
 
                     // === Metadata Read ===
@@ -292,7 +291,7 @@ namespace D365MetadataBridge.Protocol
                                 "setProperty", "replaceCode",
                                 "getCapabilities", "discoverFormPatterns",
                                 "findExtensionClasses", "findEventSubscribers", "findApiUsageCallers"
-                            }.Concat(_axdbService.Enabled ? new[] { "axdbSql", "axdbStatus", "axdbSchema", "axdbQuery", "axdbExecute" } : Array.Empty<string>()).ToArray()
+                            }.Concat(_axdbService.Enabled ? new[] { "axdbSql", "axdbStatus", "axdbSchema", "axdbQuery" } : Array.Empty<string>()).ToArray()
                         }));
 
                     // === Write-support (validate / resolve / refresh) ===
@@ -861,6 +860,9 @@ namespace D365MetadataBridge.Protocol
                 // Cross-reference queries
                 "findreferences", "findeventsubscribers", "findextensionclasses",
                 "findapiusagecallers", "samplexrefrows",
+                // AxDB SQL: its own connection per call, no metadata provider, read-only. A query may
+                // run up to its 45 s budget; exclusive, it would hold every metadata call behind it.
+                "axdbstatus", "axdbschema", "axdbquery",
             };
 
         /// <summary>True when <paramref name="method"/> may run alongside other reads.</summary>

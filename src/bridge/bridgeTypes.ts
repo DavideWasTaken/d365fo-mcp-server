@@ -7,7 +7,7 @@
 // Protocol types
 // ===========================
 
-export type AxDbMethod = 'axdbStatus' | 'axdbSchema' | 'axdbQuery' | 'axdbExecute';
+export type AxDbMethod = 'axdbStatus' | 'axdbSchema' | 'axdbQuery';
 
 export interface BridgeRequest {
   id: string;

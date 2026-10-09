@@ -199,10 +199,10 @@ const CHARS_PER_TOKEN = 4;
 const TOTAL_BUDGET = 45_100;
 // axdb_sql is published only once SQL is configured, so TOTAL_BUDGET above —
 // the payload every default install sends — does not carry it. A configured
-// install does: measured 351 chars for the tool (its schema, description and
-// annotations), 45,078 -> 45,429. That is an allowance for an opt-in surface,
+// install does: measured 324 chars for the tool (its schema, description and
+// annotations), 45,078 -> 45,402. That is an allowance for an opt-in surface,
 // not headroom for the default one: it is asserted separately below.
-const SQL_CONFIGURED_ALLOWANCE = 360;
+const SQL_CONFIGURED_ALLOWANCE = 330;
 const LARGEST_TOOL_BUDGET = 5_780;
 
 async function getTools(): Promise<Array<{ name: string }>> {

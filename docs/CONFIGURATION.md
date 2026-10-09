@@ -149,10 +149,9 @@ Windows-authenticated SQL access to AxDB on a development VM, for debugging.
 
 | Key | Asked | Env var | Default | Description |
 | --- | --- | --- | --- | --- |
-| `sql.enabled` | advanced | `D365FO_SQL_ENABLED` | `false` | Enable the optional SQL tool after configuring its server. Blank server always disables SQL. |
+| `sql.enabled` | advanced | `D365FO_SQL_ENABLED` | `false` | Enable the optional, read-only SQL tool after configuring its server. Blank server always disables SQL. |
 | `sql.server` | setup | `D365FO_SQL_SERVER` | — | Optional server or named instance; enter localhost for a local developer SQL Server. Leaving it empty skips SQL setup. |
 | `sql.database` | setup | `D365FO_SQL_DATABASE` | `AxDB` | Database to query on this server. This is separate from the metadata index and cross-reference database. |
-| `sql.allowWrites` | setup | `D365FO_SQL_ALLOW_WRITES` | `false` | Enable direct SQL changes for debugging and targeted test data work. These do not execute X++ validation, CoC or business logic. |
 | `sql.trustServerCertificate` | setup | `D365FO_SQL_TRUST_CERTIFICATE` | `false` | Use for a developer SQL Server with a self-signed certificate. The connection remains encrypted. |
 | `sql.commandTimeoutSeconds` | advanced | `D365FO_SQL_TIMEOUT` | `30` | Maximum time for each SQL command; a batch also has a total time budget. |
 | `sql.maxRows` | advanced | `D365FO_SQL_MAX_ROWS` | `100` | Default returned row limit. Large results are explicitly marked truncated. |
@@ -267,7 +266,6 @@ Downloading a pre-built index from blob storage instead of building it locally.
     "enabled": false,
     "server": "localhost or localhost\\INSTANCE",
     "database": "AxDB",
-    "allowWrites": false,
     "trustServerCertificate": false,
     "commandTimeoutSeconds": 30,
     "maxRows": 100

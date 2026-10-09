@@ -11,25 +11,28 @@ const reply = (data: unknown, isError = false) => ({
 });
 
 export async function axdbSqlTool(args: unknown, context: AxDbContext) {
-  let dispatchedWrite = false;
   try {
     const input = SqlInputSchema.parse(args);
     if (input.action === 'contract') return reply(sqlContract());
-    const config = resolveAxDbConfig();
+    // A setting that does not resolve (a timeout out of range, a connection string where a
+    // server name belongs) is named here. The bridge was started without SQL for the same
+    // reason, so falling through would only report "bridge unavailable".
+    let config: ReturnType<typeof resolveAxDbConfig>;
+    try {
+      config = resolveAxDbConfig();
+    } catch (error) {
+      return reply({ code: 'SQL_CONFIG_INVALID', message: `${error instanceof Error ? error.message : String(error)}. Fix it with d365fo-mcp config sql, then restart MCP.` }, true);
+    }
     if (!config) return reply({ code: 'SQL_DISABLED', message: 'SQL was not configured or was disabled. Do not use SQL. Run d365fo-mcp config sql to configure it, then restart MCP.' }, true);
     if (!context.bridge?.isReady || !context.bridge.axdbSqlAvailable)
       return reply({ code: 'SQL_BRIDGE_UNAVAILABLE', message: 'An updated Windows bridge with AxDB SQL enabled is required. On the D365FO developer VM run npm run bridge:build to verify, then stop MCP and run dotnet build bridge/D365MetadataBridge -c Release to update the deployed binary. Restart MCP.' }, true);
-    if (input.action === 'execute' && !config.allowWrites)
-      return reply({ code: 'SQL_WRITES_DISABLED', message: 'This SQL installation is configured for reads only. Change sql.allowWrites through d365fo-mcp config sql to enable writes.' }, true);
-    const methods = { status: 'axdbStatus', schema: 'axdbSchema', query: 'axdbQuery', execute: 'axdbExecute' } as const;
+    const methods = { status: 'axdbStatus', schema: 'axdbSchema', query: 'axdbQuery' } as const;
     const { action, ...parameters } = input;
-    dispatchedWrite = action === 'execute';
     const result = await context.bridge.callAxDb(methods[action], parameters);
     if (!result || typeof result !== 'object' || !('success' in result) || typeof result.success !== 'boolean')
       throw new Error('Invalid SQL bridge response; operation outcome cannot be established.');
     return reply(boundedSqlResult(result as Record<string, unknown>), !result.success);
   } catch (error) {
-    return reply({ code: 'SQL_ERROR', ...(dispatchedWrite ? { transactionState: 'UNKNOWN', nextAction: 'Inspect the affected records before another write. Do not retry automatically.' } : {}),
-      message: String(error instanceof Error ? error.message : error).slice(0, 1500) }, true);
+    return reply({ code: 'SQL_ERROR', message: String(error instanceof Error ? error.message : error).slice(0, 1500) }, true);
   }
 }

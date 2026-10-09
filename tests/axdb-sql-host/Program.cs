@@ -27,42 +27,30 @@ internal static class Program
             "SELECT DATABASEPROPERTYEX('AxDB', 'Collation')",
             "SELECT DATABASEPROPERTYEX(DB_NAME(), 'Collation')",
             "SELECT collationproperty(@collation, @property), databasepropertyex(DB_NAME(), @property)"
-        }) Check(sql, false, true);
+        }) Check(sql, true);
         foreach (var sql in new[] {
             "SELECT dbo.COLLATIONPROPERTY('x', 'y')",
             "SELECT [dbo].[DATABASEPROPERTYEX]('x', 'y')",
             "SELECT dbo.DB_NAME()",
             "SELECT DATABASEPROPERTYEX_CUSTOM('x', 'y')"
-        }) Check(sql, false, false);
-        foreach (var sql in new[] { "SELECT * FROM dbo.CustTable", "WITH c AS (SELECT RECID FROM dbo.CustTable) SELECT COUNT(*) FROM c", "SELECT a.RECID FROM dbo.CustTable a JOIN dbo.Other b ON a.RECID=b.RECID", "SELECT 'EXEC DELETE INTO OPENROWSET' AS literal" })
-            Check(sql, false, true);
+        }) Check(sql, false);
+        foreach (var sql in new[] { "SELECT * FROM dbo.CustTable", "WITH c AS (SELECT RECID FROM dbo.CustTable) SELECT COUNT(*) FROM c", "SELECT a.RECID FROM dbo.CustTable a JOIN dbo.Other b ON a.RECID=b.RECID", "SELECT 'EXEC DELETE INTO OPENROWSET' AS literal", "SELECT @@TRANCOUNT AS t" })
+            Check(sql, true);
         foreach (var sql in new[] { "SELECT * INTO dbo.Other FROM dbo.CustTable", "DELETE dbo.CustTable", "SELECT 1; DELETE dbo.CustTable", "EXEC('SELECT 1')", "SELECT * FROM OtherDb.dbo.CustTable", "SELECT * FROM [server].[db].[dbo].[t]", "SELECT * FROM OPENQUERY(Remote, 'SELECT 1')", "SELECT * FROM OPENROWSET('x','y','z')", "SELECT dbo.CustomFunction()", "SELECT NEXT VALUE FOR dbo.Sequence", "SELECT @x = RECID FROM dbo.CustTable", "SELECT * FROM dbo.FunctionTable()", "SELECT 1 FOR XML AUTO", "SELECT * FROM #temp", "SELECT * FROM dbo.CustTable WITH (NOLOCK)", "SELECT CAST('x' AS dbo.CustomType)", "SELECT * FROM dbo.T OPTION (MAXDOP 0)", "SELECT * FROM OPENDATASOURCE('SQLNCLI','x').db.dbo.T", "SELECT * FROM (SELECT * FROM Other.dbo.T) x", "WITH c AS (SELECT dbo.CustomFunction() AS v) SELECT v FROM c", "SELECT [dbo].[CustomFunction]()" })
-            Check(sql, false, false);
-        foreach (var sql in new[] { "INSERT dbo.T (x) VALUES (@x)", "UPDATE dbo.T SET x=@x", "DELETE dbo.T", "UPDATE t SET x=1 FROM dbo.T t JOIN dbo.U u ON t.id=u.id" }) Check(sql, true, true);
-        foreach (var sql in new[] { "UPDATE dbo.T SET x=1; DELETE dbo.T", "MERGE dbo.T USING dbo.U ON 1=1 WHEN MATCHED THEN DELETE;", "BEGIN TRAN; DELETE dbo.T; COMMIT", "UPDATE dbo.T SET x=1 OUTPUT inserted.x", "SELECT 1", "TRUNCATE TABLE dbo.T", "INSERT dbo.T EXEC dbo.P", "UPDATE Other.dbo.T SET x=1" }) Check(sql, true, false);
+            Check(sql, false);
+        // Read-only: every data modification is refused, whatever its shape.
+        foreach (var sql in new[] { "INSERT dbo.T (x) VALUES (@x)", "UPDATE dbo.T SET x=@x", "DELETE dbo.T", "UPDATE t SET x=1 FROM dbo.T t JOIN dbo.U u ON t.id=u.id", "UPDATE dbo.T SET x=1; DELETE dbo.T", "MERGE dbo.T USING dbo.U ON 1=1 WHEN MATCHED THEN DELETE;", "BEGIN TRAN; DELETE dbo.T; COMMIT", "COMMIT", "ROLLBACK", "UPDATE dbo.T SET x=1 OUTPUT inserted.x", "TRUNCATE TABLE dbo.T", "INSERT dbo.T EXEC dbo.P", "UPDATE Other.dbo.T SET x=1", "CREATE TABLE dbo.X (a int)" }) Check(sql, false);
         foreach (var failure in failures) Console.Error.WriteLine(failure);
         if (failures.Count > 0) return 1;
         Console.WriteLine("PASS: SQL AST policy cases");
-        Assert(AxDbSqlPolicy.Validate("SELECT * FROM CustTable", false)[0].Schema == "", "unqualified tables must resolve against SQL default schema instead of assuming dbo");
-        foreach (var sql in new[] {
-            "UPDATE v SET x=1 WHERE EXISTS (SELECT 1 FROM dbo.T AS v)",
-            "DELETE v WHERE EXISTS (SELECT 1 FROM dbo.T AS v)",
-            "INSERT v(x) SELECT x FROM dbo.T AS v",
-            "UPDATE v SET x=1 FROM dbo.T AS V",
-            "WITH V AS (SELECT x FROM dbo.T) UPDATE v SET x=1",
-            "UPDATE v SET x=1 FROM dbo.U u WHERE EXISTS (SELECT 1 FROM dbo.T AS v)",
-            "UPDATE v SET x=1 FROM (SELECT * FROM dbo.T AS v) d"
-        })
-            Assert(System.Linq.Enumerable.Any(AxDbSqlPolicy.Validate(sql, true), table => table.Table == "v" && table.Schema == ""), "nested alias must not hide DML target from catalog checks: " + sql);
-        var aliasedWrite = AxDbSqlPolicy.Validate("UPDATE t SET x=1 FROM dbo.T t JOIN dbo.U u ON t.id=u.id", true);
-        Assert(aliasedWrite.Count == 2 && System.Linq.Enumerable.All(aliasedWrite, table => table.Schema == "dbo"), "top-level DML aliases resolve to catalogchecked base tables");
+        Assert(AxDbSqlPolicy.Validate("SELECT * FROM CustTable")[0].Schema == "", "unqualified tables must resolve against SQL default schema instead of assuming dbo");
         if (Assembly.GetExecutingAssembly().GetType("D365MetadataBridge.Services.AxDbSqlService") == null)
         { Console.Error.WriteLine("FAIL: SQL service must expose structured unavailable results without connecting."); return 1; }
-        var unavailable = new AxDbSqlService(new AxDbSqlOptions()).Handle("axdbExecute", null).GetAwaiter().GetResult();
-        Assert((bool)unavailable["success"]! == false && (string)unavailable["transactionState"]! == "ROLLED_BACK", "disabled execution must return no-write failure");
+        var unavailable = new AxDbSqlService(new AxDbSqlOptions()).Handle("axdbQuery", null).GetAwaiter().GetResult();
+        Assert((bool)unavailable["success"]! == false && JsonSerializer.Serialize(unavailable).Contains("AXDB_UNAVAILABLE"), "disabled SQL must fail without connecting");
         var guarded = new AxDbSqlService(new AxDbSqlOptions { Server = "invalid.never-connect.test" });
-        var disabled = guarded.Handle("axdbExecute", null).GetAwaiter().GetResult();
-        Assert(JsonSerializer.Serialize(disabled).Contains("AXDB_WRITES_DISABLED"), "disabled writes must fail before connecting");
+        var execute = guarded.Handle("axdbExecute", null).GetAwaiter().GetResult();
+        Assert(JsonSerializer.Serialize(execute).Contains("Unknown AxDB SQL operation"), "there is no write operation: execute must fail before connecting");
         var invalidQuery = guarded.Handle("axdbQuery", Parse("{\"sql\":\"DELETE dbo.T\"}")).GetAwaiter().GetResult();
         Assert(JsonSerializer.Serialize(invalidQuery).Contains("AXDB_INVALID_REQUEST"), "invalid query must fail before connecting");
         var builder = new SqlConnectionStringBuilder(new AxDbSqlOptions { Server = "db", Database = "fixture" }.ConnectionString());
@@ -91,7 +79,11 @@ internal static class Program
         Reject(() => Parameter("{\"name\":\"n\",\"type\":\"decimal\",\"precision\":5,\"scale\":2,\"value\":12.34}").ToSqlParameter(), "numeric decimal rejected");
         Reject(() => Parameter("{\"name\":\"n\",\"type\":\"nvarchar\",\"size\":2}").ToSqlParameter(), "missing value rejected");
         Assert(Parameter("{\"name\":\"n\",\"type\":\"int\",\"value\":null}").ToSqlParameter().Value == DBNull.Value, "explicit SQL null");
-        Console.WriteLine("PASS: disabled service, preflight, secure connection, parameter fidelity and serialization");
+        foreach (var view in new[] { "tables", "columns", "indexes", "index_columns", "foreign_keys", "key_constraints", "default_constraints", "partitions" })
+            Assert(AxDbSqlService.CatalogViews.Contains(view), "catalog view allowed for debugging: sys." + view);
+        foreach (var view in new[] { "sql_logins", "server_principals", "dm_exec_sessions", "syslogins", "database_principals", "credentials", "configurations", "servers" })
+            Assert(!AxDbSqlService.CatalogViews.Contains(view), "server-scoped or secret-bearing view must stay out: sys." + view);
+        Console.WriteLine("PASS: disabled service, preflight, secure connection, catalog allow-list, parameter fidelity and serialization");
         var schemaQuery = typeof(AxDbSqlService).GetField("SchemaSql", BindingFlags.Static | BindingFlags.NonPublic)?.GetRawConstantValue() as string;
         Assert(schemaQuery != null, "schema query must expose catalog defaults and primary-key membership");
         var schemaAst = (TSqlScript)new TSql160Parser(true).Parse(new StringReader(schemaQuery!), out var schemaErrors);
@@ -106,10 +98,10 @@ internal static class Program
         LiveFixture.Run();
         return 0;
 
-        void Check(string sql, bool write, bool allow)
+        void Check(string sql, bool allow)
         {
             bool accepted;
-            try { validate.Invoke(null, new object[] { sql, write }); accepted = true; }
+            try { validate.Invoke(null, new object[] { sql }); accepted = true; }
             catch (TargetInvocationException e) when (e.InnerException is ArgumentException) { accepted = false; }
             if (accepted != allow) failures.Add("FAIL: " + (allow ? "rejected " : "accepted ") + sql);
         }

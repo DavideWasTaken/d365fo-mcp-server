@@ -13,7 +13,11 @@ namespace D365MetadataBridge.Services
         public string Table { get; set; } = "";
     }
 
-    /// <summary>Conservative AST validation. SQL permissions remain the security boundary.</summary>
+    /// <summary>
+    /// Conservative AST validation: exactly one SELECT. This is the FIRST guard, not the only one —
+    /// on a dev VM the MCP account is normally sysadmin, so SQL permissions restrict nothing, and
+    /// AxDbSqlService runs every statement in a transaction it always rolls back (the second guard).
+    /// </summary>
     public static class AxDbSqlPolicy
     {
         private static readonly HashSet<string> Functions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -27,7 +31,7 @@ namespace D365MetadataBridge.Services
             "COLLATIONPROPERTY", "DATABASEPROPERTYEX", "DB_NAME"
         };
 
-        public static IReadOnlyList<AxDbTableReference> Validate(string sql, bool write)
+        public static IReadOnlyList<AxDbTableReference> Validate(string sql)
         {
             if (string.IsNullOrWhiteSpace(sql) || sql.Length > 65536)
                 throw new ArgumentException("SQL must contain 1..65536 characters.");
@@ -37,22 +41,13 @@ namespace D365MetadataBridge.Services
             if (script.Batches.Count != 1 || script.Batches[0].Statements.Count != 1)
                 throw new ArgumentException("Exactly one SQL statement is required per item; batches are not allowed.");
             var statement = script.Batches[0].Statements[0];
-            if (write ? !(statement is InsertStatement || statement is UpdateStatement || statement is DeleteStatement) : !(statement is SelectStatement))
-                throw new ArgumentException(write ? "Only INSERT, UPDATE and DELETE are allowed." : "Only SELECT is allowed.");
+            if (!(statement is SelectStatement))
+                throw new ArgumentException("Only SELECT is allowed.");
 
             var nodes = Walk(statement).ToList();
             // Exact spelling is conservative across both case-sensitive and case-insensitive database collations.
             // A case-folded match could hide a distinct physical table on a case-sensitive database.
             var ctes = new HashSet<string>(nodes.OfType<CommonTableExpression>().Select(c => c.ExpressionName.Value), StringComparer.Ordinal);
-            // An UPDATE/DELETE target may bind to an alias in its own FROM clause only.
-            // Aliases inside EXISTS, scalar subqueries or derived-table bodies cannot hide a real target.
-            var from = (statement as UpdateStatement)?.UpdateSpecification.FromClause ??
-                (statement as DeleteStatement)?.DeleteSpecification.FromClause;
-            var aliases = new HashSet<string>(StringComparer.Ordinal);
-            if (from != null)
-                foreach (var source in from.TableReferences)
-                    foreach (var alias in OuterAliases(source)) aliases.Add(alias);
-            var targets = new HashSet<TSqlFragment>(nodes.OfType<DataModificationSpecification>().Select(d => (TSqlFragment)d.Target));
             var tables = new List<AxDbTableReference>();
             foreach (var node in nodes)
             {
@@ -77,24 +72,12 @@ namespace D365MetadataBridge.Services
                     var name = table.SchemaObject;
                     if (name.Identifiers.Count > 2 || name.Identifiers.Count == 0 || name.BaseIdentifier.Value.StartsWith("#", StringComparison.Ordinal))
                         throw new ArgumentException("Only local database tables and CTEs are allowed.");
-                    if (name.Identifiers.Count == 1 && (ctes.Contains(name.BaseIdentifier.Value) || (targets.Contains(table) && aliases.Contains(name.BaseIdentifier.Value)))) continue;
+                    if (name.Identifiers.Count == 1 && ctes.Contains(name.BaseIdentifier.Value)) continue;
                     // Empty schema means SQL's normal default-schema resolution, not an assumed dbo object.
                     tables.Add(new AxDbTableReference { Schema = name.SchemaIdentifier?.Value ?? "", Table = name.BaseIdentifier.Value });
                 }
             }
             return tables;
-        }
-
-        private static IEnumerable<string> OuterAliases(TableReference source)
-        {
-            if (source is TableReferenceWithAlias named && named.Alias != null) yield return named.Alias.Value;
-            if (source is JoinTableReference join)
-            {
-                foreach (var alias in OuterAliases(join.FirstTableReference)) yield return alias;
-                foreach (var alias in OuterAliases(join.SecondTableReference)) yield return alias;
-            }
-            if (source is JoinParenthesisTableReference parenthesis)
-                foreach (var alias in OuterAliases(parenthesis.Join)) yield return alias;
         }
 
         // Reflection walks only AST children, not tokens/parents. This also sees constructs nested in expressions/CTEs.

@@ -1,4 +1,4 @@
-/** Preserve valid JSON and commit/error evidence while bounding model-facing SQL data. */
+/** Preserve valid JSON and error evidence while bounding model-facing SQL data. */
 export function boundedSqlResult(result: Record<string, unknown>): Record<string, unknown> {
   const cap = 24000;
   if (JSON.stringify(result).length <= cap) return result;
@@ -12,8 +12,7 @@ export function boundedSqlResult(result: Record<string, unknown>): Record<string
   // Extremely wide schema/column metadata: retain outcome, never a sliced JSON document.
   return {
     success: result.success, operationId: result.operationId, server: result.server, database: result.database,
-    durationMs: result.durationMs, transactionState: result.transactionState,
-    statements: result.statements, error: result.error,
+    durationMs: result.durationMs, error: result.error,
     truncated: true, dataOmitted: true, nextAction: copy.nextAction,
   };
 }
