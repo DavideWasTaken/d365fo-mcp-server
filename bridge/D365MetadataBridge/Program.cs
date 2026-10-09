@@ -72,9 +72,6 @@ namespace D365MetadataBridge
                     case "--axdb-database" when i + 1 < args.Length:
                         AxDbOptions.Database = args[++i];
                         break;
-                    case "--axdb-allow-writes":
-                        AxDbOptions.AllowWrites = true;
-                        break;
                     case "--axdb-trust-certificate":
                         AxDbOptions.TrustCertificate = true;
                         break;
@@ -557,9 +554,8 @@ Options:
   --xref-server <server>            SQL Server for cross-reference DB (default: localhost)
   --xref-database <db>              Cross-reference database name, e.g. DYNAMICSXREFDB
                                     (no default: without it cross-references are off)
-  --axdb-server <server>            Enable separate, lazy AxDB SQL debug access (Windows integrated authentication)
+  --axdb-server <server>            Enable separate, lazy, read-only AxDB SQL debug access (Windows integrated authentication)
   --axdb-database <db>              SQL debug database (default: AxDB)
-  --axdb-allow-writes               Enable transactional INSERT/UPDATE/DELETE debug operations
   --axdb-trust-certificate          Trust the SQL certificate (encryption remains enabled)
   --axdb-timeout <seconds>          Per-command timeout, 1..30 (default: 30)
   --axdb-max-rows <rows>            Default SQL query row cap, 1..1000 (default: 100)

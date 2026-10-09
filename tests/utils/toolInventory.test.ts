@@ -271,7 +271,7 @@ describe('tool inventory contract', () => {
     const writeTools = [
       'd365fo_file', 'labels', 'generate_object',
       'update_symbol_index', 'build_d365fo_project',
-      'run_systest_class', 'axdb_sql',
+      'run_systest_class',
     ];
     for (const toolName of writeTools) {
       // `false` and absent both mean "not read-only" — absent because that IS

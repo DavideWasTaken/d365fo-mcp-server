@@ -9,7 +9,6 @@ const sqlSetting = (path: string) => settingByPath(`sql.${path}`)!;
 
 function disableSql(store: SettingsStore): void {
   writeSetting(store, sqlSetting('enabled'), false);
-  writeSetting(store, sqlSetting('allowWrites'), false);
   p.log.info(`SQL is disabled. You can configure it later with ${cliCommand('config sql')}`);
 }
 
@@ -41,7 +40,6 @@ export async function configureSql(store: SettingsStore, detected?: AosWebConfig
   writeSetting(store, sqlSetting('enabled'), true);
   p.log.info('Authentication uses the Windows account running MCP; no SQL password is needed.');
   await askSetting(store, sqlSetting('database'), { initial: detected?.database });
-  await askSetting(store, sqlSetting('allowWrites'));
   // A developer VM's SQL Server presents a self-signed certificate; the
   // connection stays encrypted either way.
   await askSetting(store, sqlSetting('trustServerCertificate'), {

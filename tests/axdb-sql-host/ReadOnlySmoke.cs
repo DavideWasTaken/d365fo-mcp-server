@@ -15,7 +15,7 @@ internal static class ReadOnlySmoke
         var database = Environment.GetEnvironmentVariable("D365FO_SQL_TEST_DATABASE");
         if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(database))
             throw new ArgumentException("--read-only requires D365FO_SQL_TEST_SERVER and D365FO_SQL_TEST_DATABASE.");
-        var service = new AxDbSqlService(new AxDbSqlOptions { Server = server!, Database = database!, AllowWrites = false,
+        var service = new AxDbSqlService(new AxDbSqlOptions { Server = server!, Database = database!,
             TrustCertificate = Environment.GetEnvironmentVariable("D365FO_SQL_TEST_TRUST_CERTIFICATE") == "1" });
         var status = Call(service, "status", new { });
         RequireSuccess(status);
@@ -23,6 +23,15 @@ internal static class ReadOnlySmoke
         if (!Equals(identity["databaseName"], database) || string.IsNullOrWhiteSpace(identity["loginName"] as string) || string.IsNullOrWhiteSpace(identity["serverName"] as string))
             throw new Exception("SQL status did not return the requested database and identity");
         Console.WriteLine("PASS: real SQL status (database/login/server text)");
+
+        // The second guard: every statement runs inside a transaction the service only ever rolls back.
+        Equal(Query(service, "SELECT @@TRANCOUNT AS t").Single()["t"], 1);
+        foreach (var secret in new[] { "SELECT name FROM sys.sql_logins", "SELECT name FROM syslogins", "SELECT name FROM sys.server_principals" })
+        {
+            var refused = Call(service, "query", new { sql = secret });
+            if (Equals(refused["success"], true)) throw new Exception("Server-scoped catalog view was readable: " + secret);
+        }
+        Console.WriteLine("PASS: statements run inside a rolled-back transaction; server-scoped catalog views refused");
 
         foreach (var type in new[] { "varchar(40)", "nvarchar(40)", "char(2)", "nchar(2)", "varchar(max)", "nvarchar(max)" })
         {

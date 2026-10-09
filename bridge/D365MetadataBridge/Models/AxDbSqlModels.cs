@@ -12,7 +12,6 @@ namespace D365MetadataBridge.Models
     {
         public string Server { get; set; } = "";
         public string Database { get; set; } = "AxDB";
-        public bool AllowWrites { get; set; }
         public bool TrustCertificate { get; set; }
         public int TimeoutSeconds { get; set; } = 30;
         public int MaxRows { get; set; } = 100;
@@ -37,8 +36,6 @@ namespace D365MetadataBridge.Models
         public string Sql { get; set; } = "";
         public List<AxDbSqlParameter>? Parameters { get; set; }
         public int? MaxRows { get; set; }
-        public int? ExpectedRows { get; set; }
-        public List<AxDbSqlRequest>? Statements { get; set; }
         public string Table { get; set; } = "";
         public string Schema { get; set; } = "dbo";
     }

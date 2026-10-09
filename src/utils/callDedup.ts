@@ -32,7 +32,6 @@ const DEDUP_MAX_ENTRIES = 200;
  */
 export const MUTATING_TOOLS = new Set([
   'd365fo_file',            // create / modify / delete / generate
-  'axdb_sql',               // execute writes AxDB rows
   'generate_object',        // mode="scaffold" writes to disk
   'undo_last_modification', // reverts a write
   'update_symbol_index',    // changes what every index-backed read resolves
