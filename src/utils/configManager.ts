@@ -90,6 +90,8 @@ class ConfigManager {
   // Promise for the in-progress background autoDetectProject() call, awaited by
   // getWorkspaceInfoDiagnostics() when autoDetectedProject is still null.
   private detectionInProgress: Promise<void> | null = null;
+  /** A .rnrproj scan is running right now (set for the whole of autoDetectProject's work). */
+  private projectScanRunning = false;
   private xppConfigProvider: XppConfigProvider | null = null;
   private xppConfig: XppEnvironmentConfig | null = null;
   private xppConfigLoaded: boolean = false;
@@ -157,7 +159,16 @@ class ConfigManager {
     if (this.autoDetectionAttempted) {
       return; // Only attempt once per workspace
     }
+    this.projectScanRunning = true;
+    try {
+      await this.runProjectDetection(workspacePath, generation);
+    } finally {
+      this.projectScanRunning = false;
+    }
+  }
 
+  /** The body of autoDetectProject; its synchronous start marks the attempt before any await. */
+  private async runProjectDetection(workspacePath?: string, generation?: number): Promise<void> {
     this.autoDetectionAttempted = true;
     this.lastDetectionFingerprint = this.detectionSourceFingerprint(workspacePath);
 
@@ -192,8 +203,14 @@ class ConfigManager {
         this.config?.servers?.context?.packagePath;
 
       if (packagePathHint) {
-        debugLog(`[ConfigManager] No .rnrproj in workspace — scanning packagePath: ${packagePathHint}`);
-        const pkgScan = await detectD365Project(packagePathHint, 4);
+        // When the workspace already named the model, its .rnrproj can only be in
+        // that model's package: scan it, not every package. The whole root is
+        // hundreds of packages — 7.5 s on the dev VM, for a project that is not
+        // there when the workspace is the package folder itself.
+        const modelPackage = detectedProject?.modelName ? path.join(packagePathHint, detectedProject.modelName) : null;
+        const scanRoot = modelPackage && existsSync(modelPackage) ? modelPackage : packagePathHint;
+        debugLog(`[ConfigManager] No .rnrproj in workspace — scanning packagePath: ${scanRoot}`);
+        const pkgScan = await detectD365Project(scanRoot, 4);
         if (pkgScan?.projectPath) {
           detectedProject = {
             ...pkgScan,
@@ -460,6 +477,15 @@ class ConfigManager {
   }
 
   /**
+   * The model the USER named — D365FO_MODEL_NAME or modelName in the config file —
+   * not one detected from the workspace.
+   */
+  private configuredModelName(): string | undefined {
+    const fileContext = this.config?.context || this.config?.servers?.context || null;
+    return process.env.D365FO_MODEL_NAME?.trim() || fileContext?.modelName?.trim() || undefined;
+  }
+
+  /**
    * The one detection outcome worth a warning: the model named in static
    * configuration (D365FO_MODEL_NAME / .mcp.json) is not the model of the
    * project the workspace scan resolved.
@@ -471,12 +497,6 @@ class ConfigManager {
    * when a projectPath is configured too: the detected project is then unused
    * and the disagreement has no effect. Printed once per distinct conflict.
    */
-  /** The model the USER named — D365FO_MODEL_NAME or modelName in the config file. */
-  private configuredModelName(): string | undefined {
-    const fileContext = this.config?.context || this.config?.servers?.context || null;
-    return process.env.D365FO_MODEL_NAME?.trim() || fileContext?.modelName?.trim() || undefined;
-  }
-
   private warnOnModelConflict(detected: D365ProjectInfo): void {
     const fileContext = this.config?.context || this.config?.servers?.context || null;
     const envModel = process.env.D365FO_MODEL_NAME?.trim();
@@ -1196,9 +1216,23 @@ class ConfigManager {
     packageSource: string;
     customPackagesPath: string | null;
     customPackagesSource: string;
+    /** The model is configured and the .rnrproj scan is still running in the background. */
+    projectDetectionPending: boolean;
   }> {
     // Ensure config is loaded and auto-detection has had a chance to run
     await this.ensureLoaded();
+    const ctx = this.config?.servers?.context;
+    const detectFrom = this.runtimeContext.workspacePath || ctx?.workspacePath;
+
+    // A model named in D365FO_MODEL_NAME or the config already answers what this
+    // call is for (where writes land, which naming applies); the scan below only
+    // adds the .rnrproj path. Waiting for it cost every first call 5 s whenever the
+    // workspace holds no .rnrproj — the scan ran on, the wait hit its cap. Let it
+    // finish in the background and say so.
+    if (this.configuredModelName()) {
+      this.ensureProjectDetection(detectFrom).catch(() => {});
+      return this.workspaceInfoDiagnostics(!this.autoDetectedProject && this.projectScanRunning);
+    }
 
     // If the D365FO_SOLUTIONS_PATH eager scan is still running, wait for it
     // first — that scan populates allDetectedProjects which setRuntimeContextFromRoots
@@ -1219,9 +1253,11 @@ class ConfigManager {
       ]);
       this.detectionInProgress = null;
     }
-    const ctx = this.config?.servers?.context;
-    await this.ensureProjectDetection(this.runtimeContext.workspacePath || ctx?.workspacePath);
+    await this.ensureProjectDetection(detectFrom);
+    return this.workspaceInfoDiagnostics(false);
+  }
 
+  private async workspaceInfoDiagnostics(projectDetectionPending: boolean): ReturnType<ConfigManager['getWorkspaceInfoDiagnostics']> {
     // Model name
     const { modelName, source: modelSource } = this.getModelNameWithSource();
 
@@ -1294,6 +1330,7 @@ class ConfigManager {
       projectPath, projectSource, ambiguousProjects,
       packagePath, packageSource,
       customPackagesPath, customPackagesSource,
+      projectDetectionPending,
     };
   }
 
