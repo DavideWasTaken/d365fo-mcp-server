@@ -87,6 +87,18 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **`labels(action="update")` with only en-US overwrote every other language
+  with English, and every developer comment with the default (#1105).** Update
+  writes each existing language folder; one with no supplied translation got the
+  en-US (last-resort) text, and every written label got `description`'s default
+  (the VS project name, else the labelFileId) as its comment. Now, for a label that
+  already exists in a folder, update writes the text only where the call supplies
+  a translation (exact, parent or regional match) — a folder that would only get
+  the fallback keeps its text, unless that text is a copy of the fallback source's
+  current text, which follows the update — and replaces the comment only with a
+  `comment`, `defaultComment` or `description` the call states. The reply lists
+  the kept folders with their text (bulk mode too). A folder where the label is
+  missing still gets it, and create is unchanged.
 - **Modify no longer leaves `.backup-*` files for calls that changed nothing.**
   Outside git the pre-modify copy was taken before the operation was validated,
   so every refused call left a copy of an unchanged file beside the AOT source —
