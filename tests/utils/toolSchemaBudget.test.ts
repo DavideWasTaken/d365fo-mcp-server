@@ -196,6 +196,12 @@ const CHARS_PER_TOKEN = 4;
 // 85 chars under it are what the index/field-group targetTypes need next.
 // They took 63 of them (#1067): the two enum values and the "Table.Name" form in
 // targetType's description. Measured payload after: 45_078.
+//
+// d365fo_file's undo line gained "outside git, only if created this session": it
+// said "untracked → deleted", and on a TFVC workspace — every file untracked as far
+// as git can see — an agent read that as "undo deletes any file it is pointed at"
+// and would not use undo at all. Paid for in the same description ("returns the
+// contract for the one you picked" → "returns its contract"), so the ceiling holds.
 const TOTAL_BUDGET = 45_100;
 // axdb_sql is published only once SQL is configured, so TOTAL_BUDGET above —
 // the payload every default install sends — does not carry it. A configured

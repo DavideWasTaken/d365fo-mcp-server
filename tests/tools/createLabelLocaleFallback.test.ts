@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createLabelTool } from '../../src/tools/write/createLabel';
+import { createLabelTool, createLabelsBulk } from '../../src/tools/write/createLabel';
 import type { XppServerContext } from '../../src/types/context';
 
 vi.mock('../../src/utils/configManager', () => ({
@@ -100,15 +100,84 @@ describe('create_label locale resolution', () => {
     const content = await fs.readFile(file('it-IT'), 'utf8');
     expect(content).toContain('Greeting=Hello\r\n ;Default comment');
     expect(reply).toContain('it-IT  → Hello');
-    expect(reply).toMatch(/⚠.*fallback.*EN-us → it-IT/i);
+    expect(reply).toMatch(/⚠ Translation fallback \(en-US\): EN-us text written to it-IT — no translation supplied for it\./);
   });
 
   it('reports the first supplied locale as the last-resort source when English is absent', async () => {
     await seed('de-DE');
     const reply = await create([{ language: 'it', text: 'Ciao' }], { languages: ['de-DE'] });
     expect(await fs.readFile(file('de-DE'), 'utf8')).toContain('Greeting=Ciao');
-    expect(reply).toMatch(/⚠.*fallback.*it → de-DE/i);
+    expect(reply).toMatch(/⚠ Translation fallback \(first supplied locale\): it text written to de-DE/);
     expect(reply).not.toContain('en-US');
+  });
+
+  it('uses the one supplied regional translation for a bare-language folder (de-DE → de)', async () => {
+    // Microsoft's label folders are bare languages (de, cs, it); agents supply regions.
+    await seed('de');
+    const reply = await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'de-DE', text: 'Hallo', comment: 'German comment' },
+    ], { languages: ['de'] });
+    expect(await fs.readFile(file('de'), 'utf8')).toContain('Greeting=Hallo\r\n ;German comment');
+    expect(reply).toMatch(/⚠ Translation fallback \(regional locale\): de-DE → de; wrote "Hallo"\./);
+  });
+
+  it('does not guess between two regional translations, and never uses one for a sibling region', async () => {
+    await seed('de');
+    await seed('de-CH');
+    const reply = await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'de-DE', text: 'Hallo' },
+      { language: 'de-AT', text: 'Servus' },
+    ], { languages: ['de', 'de-CH'] });
+    for (const locale of ['de', 'de-CH']) {
+      expect(await fs.readFile(file(locale), 'utf8')).toContain('Greeting=Hello');
+    }
+    expect(reply).toMatch(/⚠ Translation fallback \(en-US\): en-US text written to de, de-CH — no translation supplied for them\./);
+  });
+
+  it('collapses the en-US fallbacks into one line', async () => {
+    for (const locale of ['de', 'es', 'fr']) await seed(locale);
+    const reply = await create([{ language: 'en-US', text: 'Hello' }], { languages: ['de', 'es', 'fr'] });
+    expect(reply.match(/Translation fallback/g)).toHaveLength(1);
+    expect(reply).toContain('en-US text written to de, es, fr');
+  });
+
+  it('reads it_IT as it-IT', async () => {
+    await seed('it-IT');
+    const reply = await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'it_IT', text: 'Ciao' },
+    ], { languages: ['it-IT'] });
+    expect(await fs.readFile(file('it-IT'), 'utf8')).toContain('Greeting=Ciao');
+    expect(reply).not.toMatch(/fallback/i);
+  });
+
+  it('lets the exact spelling win over a case variant, and the first variant over a later one', async () => {
+    await seed('it-IT');
+    await seed('de-DE');
+    await create([
+      { language: 'IT-it', text: 'Variant' },
+      { language: 'it-IT', text: 'Exact' },
+      { language: 'de-de', text: 'First' },
+      { language: 'DE-de', text: 'Second' },
+    ], { languages: ['it-IT', 'de-DE'] });
+    expect(await fs.readFile(file('it-IT'), 'utf8')).toContain('Greeting=Exact');
+    expect(await fs.readFile(file('de-DE'), 'utf8')).toContain('Greeting=First');
+  });
+
+  it('keeps the fallback lines in bulk mode', async () => {
+    await seed('it-IT');
+    const result = await createLabelsBulk(
+      [{ labelId: 'Greeting', translations: [{ language: 'en-US', text: 'Hello' }, { language: 'it', text: 'Ciao' }] }],
+      {
+        labelFileId: 'LocaleModel', model: 'LocaleModel', packageName: 'LocalePackage', packagePath: root,
+        addToProject: false, languages: ['it-IT'], defaultComment: 'Default comment',
+      },
+      { symbolIndex: { bulkAddLabels } } as unknown as XppServerContext,
+    );
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toMatch(/🟢 Greeting: .*\n {4}⚠ Translation fallback \(parent locale\): it → it-IT; wrote "Ciao"\./);
   });
 
   it('leaves skipped existing text untouched and omits fallback claims for that locale', async () => {
@@ -132,5 +201,51 @@ describe('create_label locale resolution', () => {
     expect(content).toContain('Other=Keep me');
     expect(content).not.toContain('Old English');
     expect(reply).toContain('it-IT  → Nuovo');
+  });
+  it('does not add a de-DE locale when de-DE already filled the bare de folder (no languages scope)', async () => {
+    await seed('en-US');
+    await seed('de');
+    const reply = await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'de-DE', text: 'Hallo' },
+    ]);
+    expect(await fs.readFile(file('de'), 'utf8')).toContain('Greeting=Hallo');
+    expect(reply).toMatch(/regional locale.*de-DE → de/);
+    expect((await fs.readdir(resources)).sort()).toEqual(['de', 'en-US']);
+    const descriptors = await fs.readdir(path.dirname(resources));
+    expect(descriptors.filter(f => /de-DE/i.test(f))).toEqual([]);
+  });
+
+  it('still creates a new locale folder for a supplied translation nothing else used', async () => {
+    await seed('en-US');
+    await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'fr-FR', text: 'Bonjour' },
+    ]);
+    expect((await fs.readdir(resources)).sort()).toEqual(['en-US', 'fr-FR']);
+    expect(await fs.readFile(file('fr-FR'), 'utf8')).toContain('Greeting=Bonjour');
+  });
+
+  it('creates one folder and one descriptor for two case variants of a new locale', async () => {
+    await seed('en-US');
+    await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'it-IT', text: 'Ciao' },
+      { language: 'IT-it', text: 'Salve' },
+    ]);
+    expect((await fs.readdir(resources)).sort()).toEqual(['en-US', 'it-IT']);
+    const descriptors = (await fs.readdir(path.dirname(resources))).filter(f => f.endsWith('.xml'));
+    expect(descriptors.filter(f => /it-it/i.test(f))).toEqual(['LocaleModel_it-IT.xml']);
+    expect(await fs.readFile(file('it-IT'), 'utf8')).toContain('Greeting=Ciao');
+  });
+
+  it('reads an underscore in the languages scope as a hyphen', async () => {
+    await seed('it-IT');
+    await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'it-IT', text: 'Ciao' },
+    ], { languages: ['it_IT'] });
+    expect(await fs.readdir(resources)).toEqual(['it-IT']);
+    expect(await fs.readFile(file('it-IT'), 'utf8')).toContain('Greeting=Ciao');
   });
 });

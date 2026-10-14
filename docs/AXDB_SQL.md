@@ -12,7 +12,7 @@ Configure or change it explicitly at any time, on any machine:
 d365fo-mcp config sql
 ```
 
-From a git checkout, use `node dist/cli/index.js config sql` (the `doctor` and `update` commands print the exact command for the installation). Restart MCP after changes.
+From a git checkout, use `npx tsx src/cli/index.ts config sql`. Restart MCP after changes.
 
 The questions are:
 
@@ -95,7 +95,7 @@ The read-only metadata functions `COLLATIONPROPERTY`, `DATABASEPROPERTYEX` and `
 
 ## Results and execution semantics
 
-Every query executes again: **no result cache and no duplicate-call replay**, and a query never invalidates the server's other caches (it is not a write). Output includes an operation ID, the target, the duration and the rows with their column types. Row and output limits mark incomplete results as `truncated`; the response always keeps whole JSON rows. Use narrow queries or COUNT/EXISTS instead of treating a partial result as complete. A SQL error is never reported as an empty successful result, and a failed call is not retried.
+Every query executes again: **no result cache and no duplicate-call replay**, and a query never invalidates the server's other caches (it is not a write). Output includes an operation ID, the target, the duration and the rows with their column types. Row and output limits (at most 1,000 rows; the reply is cut to about 24,000 characters of JSON) mark incomplete results as `truncated`; the response always keeps whole JSON rows. Use narrow queries or COUNT/EXISTS instead of treating a partial result as complete. A SQL error is never reported as an empty successful result, and a failed call is not retried.
 
 ## Verification
 

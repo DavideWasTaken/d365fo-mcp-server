@@ -9,7 +9,7 @@
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { DOTNET_MISSING, bridgeBuildCommand, installMode, isWindows, paths, repoRoot } from '../context.js';
-import { bridgeFreshness } from '../bridgeSources.js';
+import { bridgeFreshness, writeBridgeSourceStamp } from '../bridgeSources.js';
 import { commandExists, runExe, runShell } from '../exec.js';
 import { branchStatus, changedFiles, gitHead } from '../gitState.js';
 import { listInstances } from '../instances.js';
@@ -168,6 +168,7 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
         process.exitCode = 1;
         return;
       }
+      writeBridgeSourceStamp();
       p.log.success('C# bridge rebuilt.');
     } else if (gone) {
       // Declining is allowed, but it must not be quiet: the capability was

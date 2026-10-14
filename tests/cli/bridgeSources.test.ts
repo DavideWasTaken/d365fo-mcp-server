@@ -3,22 +3,23 @@
  *
  * `update` used to judge that by diffing HEAD across its own `git pull`, which
  * missed a hand-run pull and a pull whose npm install or build then failed —
- * the next run saw an empty diff and offered the rebuild as a nicety. The build
- * now stamps its sources next to the binary (WriteBridgeSourceStamp in the
- * csproj) and this compares against the sources as they are now.
+ * the next run saw an empty diff and offered the rebuild as a nicety. A CLI
+ * build now stamps its sources next to the binary (writeBridgeSourceStamp, kept
+ * out of the csproj so the bridge sources stay identical to upstream's) and this
+ * compares against the sources as they are now.
  */
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { bridgeFreshness, hashBridgeSources, SOURCE_STAMP_FILE } from '../../src/cli/bridgeSources.js';
+import { bridgeFreshness, hashBridgeSources, SOURCE_STAMP_FILE, writeBridgeSourceStamp } from '../../src/cli/bridgeSources.js';
 import { checkBridgeFreshness } from '../../src/cli/commands/doctor.js';
 import { hashSources } from '../../scripts/bridgeAttest.mjs';
 
 describe('hashBridgeSources', () => {
   it('computes the same hash as the build attestation', () => {
-    // The csproj stamp, this port and bridgeAttest.mjs must agree, or a
-    // freshly built bridge would read as stale.
+    // The stamp, this port and bridgeAttest.mjs must agree, or a freshly
+    // built bridge would read as stale.
     expect(hashBridgeSources()).toBe(hashSources().hash);
   });
 });
@@ -43,7 +44,8 @@ describe('bridgeFreshness', () => {
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
   const stamp = (sourceHash: string) =>
-    fs.writeFileSync(join(project, 'bin', 'Release', SOURCE_STAMP_FILE), JSON.stringify({ sourceHash }));
+    fs.writeFileSync(join(project, 'bin', 'Release', SOURCE_STAMP_FILE),
+      JSON.stringify({ sourceHash, exeMtimeMs: Math.round(fs.statSync(exe).mtimeMs) }));
 
   it('is current when the stamp matches the sources', () => {
     stamp(hashBridgeSources(project, root));
@@ -68,6 +70,26 @@ describe('bridgeFreshness', () => {
     fs.writeFileSync(join(project, 'obj', 'Generated.cs'), 'class G {}\n');
     fs.writeFileSync(join(project, 'Services', 'A.cs'), 'class A {}\r\n');
     expect(bridgeFreshness(exe, project, root)).toBe('current');
+  });
+
+  it('writes a stamp the check reads back as current', () => {
+    writeBridgeSourceStamp(exe, project, root);
+    expect(bridgeFreshness(exe, project, root)).toBe('current');
+    fs.writeFileSync(join(project, 'Services', 'A.cs'), 'class A { int y; }\n');
+    expect(bridgeFreshness(exe, project, root)).toBe('stale');
+  });
+
+  it('is unknown, not stale, when the binary was rebuilt outside the CLI', () => {
+    // A hand-run `dotnet build` replaces the exe and leaves the old stamp behind.
+    stamp('an-older-hash');
+    const later = new Date(fs.statSync(exe).mtimeMs + 60_000);
+    fs.utimesSync(exe, later, later);
+    expect(bridgeFreshness(exe, project, root)).toBe('unknown');
+  });
+
+  it('is unknown for a stamp without the binary mtime (the old csproj format)', () => {
+    fs.writeFileSync(join(project, 'bin', 'Release', SOURCE_STAMP_FILE), JSON.stringify({ sourceHash: hashBridgeSources(project, root) }));
+    expect(bridgeFreshness(exe, project, root)).toBe('unknown');
   });
 
   it('is unknown for a bridge built before stamping existed', () => {

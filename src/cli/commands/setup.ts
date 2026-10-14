@@ -16,6 +16,7 @@ import type { SectionId } from '../../config/settings.js';
 import { settingByPath, settingsInSection } from '../../config/settings.js';
 import { commandExists, runExe, runShell } from '../exec.js';
 import { pinBridgeExe } from '../bridgePath.js';
+import { writeBridgeSourceStamp } from '../bridgeSources.js';
 import { maybePrepareCopilotInstructions } from '../copilotFiles.js';
 import { mcpJsonNote, placementNote, stdioServer } from '../mcpJson.js';
 import { branchStatus } from '../gitState.js';
@@ -144,6 +145,7 @@ async function maybeBuildBridge(scenario: Scenario): Promise<boolean> {
     );
     return false;
   }
+  writeBridgeSourceStamp();
   p.log.success('C# bridge built.');
   return true;
 }

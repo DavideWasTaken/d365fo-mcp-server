@@ -7,7 +7,6 @@
  * the question. `config sql` still configures it by hand on any machine.
  */
 import { readAosWebConfig } from './aosWebConfig.js';
-import { cliCommand } from './context.js';
 import type { SettingsStore } from './settingsStore.js';
 import { configureSql } from './sqlSetup.js';
 import { p } from './ui.js';
@@ -23,7 +22,7 @@ export async function configureSqlForEnvironment(
       (envType === 'ude'
         ? 'AxDB SQL skipped — it needs a local AxDB reached with Windows authentication, which a UDE machine does not have.'
         : 'AxDB SQL skipped — no local AOS web.config names a database beside this packages folder.') +
-      `\n   If this machine does reach one: ${cliCommand('config sql')}`,
+      '\n   If this machine does reach one: d365fo-mcp config sql',
     );
     return;
   }

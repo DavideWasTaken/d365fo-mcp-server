@@ -1,6 +1,5 @@
 import { settingByPath } from '../config/settings.js';
 import { isLocalSqlServer, type AosWebConfig } from './aosWebConfig.js';
-import { cliCommand } from './context.js';
 import { askSetting } from './settingsPrompt.js';
 import { readSetting, writeSetting, type SettingsStore } from './settingsStore.js';
 import { askConfirm, p } from './ui.js';
@@ -9,7 +8,7 @@ const sqlSetting = (path: string) => settingByPath(`sql.${path}`)!;
 
 function disableSql(store: SettingsStore): void {
   writeSetting(store, sqlSetting('enabled'), false);
-  p.log.info(`SQL is disabled. You can configure it later with ${cliCommand('config sql')}`);
+  p.log.info('SQL is disabled. You can configure it later with d365fo-mcp config sql');
 }
 
 /**

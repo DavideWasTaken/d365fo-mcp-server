@@ -6,10 +6,16 @@
  * code: the server keeps running the previous build, without the fixes the pull
  * brought. Diffing HEAD across one `update` run misses a hand-run `git pull`,
  * and a pull whose `npm install` or build then failed (the next run sees an
- * empty diff). So the build itself records what it compiled: the
- * WriteBridgeSourceStamp target in D365MetadataBridge.csproj writes
+ * empty diff). So a build records what it compiled: after `setup` or `update`
+ * builds the bridge, writeBridgeSourceStamp() writes
  * D365MetadataBridge.sources.json next to the binary, and this compares it with
  * the sources as they are now.
+ *
+ * It is written here, not by a target in the csproj, so the bridge sources stay
+ * byte-identical to upstream's and upstream's build attestation stays valid for
+ * this fork. The stamp also records the binary's mtime: a bridge rebuilt by hand
+ * (`dotnet build` outside the CLI) leaves an old stamp beside a new binary, and
+ * that reads as unknown — never as a stale binary that is in fact current.
  *
  * The hash is the one scripts/bridgeAttest.mjs computes — same files, same
  * order, CRLF normalised — ported here because that script is not part of the
@@ -48,10 +54,30 @@ export function hashBridgeSources(dir: string = paths.bridgeDir, root: string = 
   return digest.digest('hex');
 }
 
+/** Record, next to a freshly built binary, which sources it was compiled from. */
+export function writeBridgeSourceStamp(
+  exePath: string = paths.bridgeExe,
+  dir: string = paths.bridgeDir,
+  root: string = repoRoot,
+): void {
+  try {
+    if (!fs.existsSync(exePath)) return;
+    const stamp = {
+      sourceHash: hashBridgeSources(dir, root),
+      exeMtimeMs: Math.round(fs.statSync(exePath).mtimeMs),
+      builtAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(join(dirname(exePath), SOURCE_STAMP_FILE), `${JSON.stringify(stamp, null, 2)}\n`);
+  } catch {
+    // Advisory only: without a stamp, freshness reads as unknown.
+  }
+}
+
 /**
  *   current — the binary was built from exactly these sources
  *   stale   — the sources changed after the binary was built
- *   unknown — no binary, or one built before stamping existed (or an unreadable stamp)
+ *   unknown — no binary, one built without a stamp (before stamping existed, or by
+ *             hand outside the CLI), or an unreadable stamp
  */
 export type BridgeFreshness = 'current' | 'stale' | 'unknown';
 
@@ -64,8 +90,10 @@ export function bridgeFreshness(
     if (!fs.existsSync(exePath)) return 'unknown';
     const stampPath = join(dirname(exePath), SOURCE_STAMP_FILE);
     if (!fs.existsSync(stampPath)) return 'unknown';
-    const stamp = JSON.parse(fs.readFileSync(stampPath, 'utf-8')) as { sourceHash?: unknown };
+    const stamp = JSON.parse(fs.readFileSync(stampPath, 'utf-8')) as { sourceHash?: unknown; exeMtimeMs?: unknown };
     if (typeof stamp.sourceHash !== 'string' || stamp.sourceHash.length === 0) return 'unknown';
+    // A stamp written for a different binary (rebuilt since, outside the CLI) says nothing about this one.
+    if (typeof stamp.exeMtimeMs !== 'number' || stamp.exeMtimeMs !== Math.round(fs.statSync(exePath).mtimeMs)) return 'unknown';
     return stamp.sourceHash === hashBridgeSources(dir, root) ? 'current' : 'stale';
   } catch {
     return 'unknown';

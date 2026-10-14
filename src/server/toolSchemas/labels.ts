@@ -79,7 +79,7 @@ export const labelsTool = {
         },
         translations: {
           type: 'array',
-          description: '[create] REQUIRED for single-label create (omit with labels[]). Locales match case-insensitively, then use supplied parent (it for it-IT), then en-US/first translation. Every fallback is reported.',
+          description: '[create] REQUIRED for single-label create (omit with labels[]). Translations for each language. Provide at least en-US.',
           items: {
             type: 'object',
             properties: {

@@ -2,11 +2,9 @@
 
 <div align="center">
 
-**21 AI tools that know every X++ class, table, form, and EDT in your D365FO codebase — plus optional live AxDB SQL for debugging**
+**21 AI tools that know every X++ class, table, form, and EDT in your D365FO codebase**
 
-> **This fork adds optional `axdb_sql`** — read-only, Windows-authenticated SQL against AxDB on the development VM, to inspect what your code actually wrote. It is off by default and invisible until configured; setup offers it only on a classic AOSService VM whose `web.config` names the AOS database. It cannot write: one SELECT checked on the T-SQL syntax tree, inside a transaction that is always rolled back. See [SQL setup](docs/AXDB_SQL.md). Install or update this fork from `main` using [Quick Start](#quick-start).
-
-> **This fork also extends the existing build tool.** Builds run in the background and return a log path plus a result you collect later. With `restartAos:true`, `build_d365fo_project` completes compilation, runtime metadata generation and any requested database sync, then restarts the matching local IIS/IIS Express AOS and checks readiness, so new objects are loaded without a manual refresh or a second Visual Studio build. If restart/readiness cannot be confirmed, the tool tells the client AI to notify the user. Label translations use the exact locale, then a supplied parent (`it` for `it-IT`), then a disclosed fallback. [Build changes and usage](docs/BUILD_FEEDBACK.md#why-this-fork-changes-the-build-workflow)
+> **This fork extends the existing build tool.** Builds run in the background and return a log path plus a result you collect later. With `restartAos:true`, `build_d365fo_project` completes compilation, runtime metadata generation and any requested database sync, then restarts the matching local IIS/IIS Express AOS and checks readiness, so new objects are loaded without a manual refresh or a second Visual Studio build. If restart/readiness cannot be confirmed, the tool tells the client AI to notify the user. [Build changes and usage](docs/BUILD_FEEDBACK.md#why-this-fork-changes-the-build-workflow)
 
 [![npm](https://img.shields.io/npm/v/d365fo-mcp.svg?logo=npm&color=cb3837)](https://www.npmjs.com/package/d365fo-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -33,7 +31,7 @@
 
 AI assistants excel at C#, Python, and JavaScript. X++ is different: your D365FO codebase is private, deeply customized, and invisible to every model — so AI confidently generates code that doesn't compile.
 
-This server pre-indexes your entire D365FO installation (580 000+ symbols across standard, ISV, and custom models) and exposes 21 specialized MCP tools (`axdb_sql` only once SQL is configured). Every signature, every CoC wrapper, every label, every form pattern — verified against your real metadata **before** the AI writes a single line.
+This server pre-indexes your entire D365FO installation (580 000+ symbols across standard, ISV, and custom models) and exposes it as 21 specialized MCP tools (`axdb_sql` only once SQL is configured). Every signature, every CoC wrapper, every label, every form pattern — verified against your real metadata **before** the AI writes a single line.
 
 ![Solution Architecture](docs/img/solution-architecture-diagram.svg)
 
@@ -57,7 +55,7 @@ This server pre-indexes your entire D365FO installation (580 000+ symbols across
 | 🧩 **Form pattern engine** | Complete catalog of Microsoft form patterns and sub-patterns: recommends the right pattern, clones reference forms with datasource re-binding, **deterministically expands** patterns that have no reference form, **auto-repairs** a form's missing required controls, validates structure and blocks invalid writes |
 | ✍️ **Safe metadata writes** | C# bridge uses Microsoft's own `IMetadataProvider` wherever it can express the object; the few types and ops it cannot go through structured XML writers with ambiguity guards — never blind string replacement. Automatic `.rnrproj` registration, one-call undo |
 | 🏗️ **SDLC integration** | Background X++ compilation with `xppc.exe`, structured diagnostics, DB sync, xppbp best practices and SysTestRunner. `restartAos:true` reloads the local IIS/IIS Express runtime after a successful build and requested sync, with an explicit user warning if readiness cannot be confirmed. [Build workflow](docs/BUILD_FEEDBACK.md) · [Runtime restart](docs/AOS_RUNTIME_RESTART.md) |
-| 🗄️ **Optional AxDB SQL — `axdb_sql`** | Read-only, live parameterized queries and table columns/keys/defaults on the development VM's AxDB. One SELECT checked on the parsed T-SQL tree, run in a transaction that is always rolled back; only database-scoped catalog views; no result cache. Data is changed through the application or X++. [Setup](docs/AXDB_SQL.md) |
+| 🗄️ **Optional AxDB SQL** | Off by default and not even published until configured: `axdb_sql` runs read-only, parameterized queries against AxDB on the development VM, so the agent can check what the code actually persisted. Windows authentication; one SELECT checked on the parsed T-SQL tree, inside a transaction that is always rolled back; no result cache. [Setup](docs/AXDB_SQL.md) |
 | 📐 **X++ knowledge base** | Queryable rules: select grammar, CoC authoring, financial dimensions, the posting engine (`LedgerVoucher`), number sequences, `SysExtension`, Electronic Reporting, AX2012→D365FO migration — prevents deprecated APIs |
 
 ### Configure optional AxDB SQL
@@ -70,7 +68,7 @@ Configure or change SQL later from this checkout with:
 npx tsx src/cli/index.ts config sql
 ```
 
-Restart MCP after saving. The upstream npm package does not include this fork's additions.
+Restart MCP after saving. AxDB SQL is part of upstream since #1095; the npm package carries it from the release after that.
 
 ### Pattern-grounded form development
 
@@ -119,7 +117,7 @@ npm run build
 dotnet build bridge/D365MetadataBridge -c Release
 ```
 
-Restart MCP after updating. Every bridge build writes `D365MetadataBridge.sources.json` next to the binary, so `npx tsx src/cli/index.ts doctor` and `update` report a bridge that is older than its sources — including after a hand-run `git pull` — and `update` then requires the rebuild. Existing configuration is retained; use `npx tsx src/cli/index.ts config sql` when you want to enable or change SQL. Building the bridge and validating live AxDB access must be done on your developer VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
+Restart MCP after updating. A bridge built by `setup` or `update` gets a `D365MetadataBridge.sources.json` stamp next to the binary, so `npx tsx src/cli/index.ts doctor` and `update` report a bridge that is older than its sources — including after a hand-run `git pull` — and `update` then requires the rebuild. After a hand-run `dotnet build` that state reads as unknown until the next `update`. Existing configuration is retained; use `npx tsx src/cli/index.ts config sql` when you want to enable or change SQL. Building the bridge and validating live AxDB access must be done on your developer VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
 
 ### Migrate from an upstream npm installation
 
@@ -145,7 +143,7 @@ A `d365fo-mcp` command on `PATH` is still the upstream npm CLI and still manages
 
 ### Upstream package and shared servers
 
-The npm package `d365fo-mcp`, the original project's installer and its hosted server do **not** include these fork additions. Use the checkout above for AxDB SQL and the build changes.
+The npm package `d365fo-mcp`, the original project's installer and its hosted server do **not** include this fork's build changes. Use the checkout above for them; AxDB SQL is upstream since #1095.
 
 **Your team already runs a shared server?** Then you install nothing — point your editor at it:
 
