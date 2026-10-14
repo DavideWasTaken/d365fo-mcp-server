@@ -97,6 +97,52 @@ those are called out explicitly below.
 - **Wrong headings and progress labels.** `create` with `operations[]` headed its
   results `d365fo_file(action="modify")`; `undo`, `delete` and `project` calls
   showed "📁 Creating …" while they ran.
+- **`workspace.projectPath` / `D365FO_PROJECT_PATH` pins the project again.**
+  The config file loads its settings as `D365FO_*` environment variables, but
+  `getProjectPath()`, `getSolutionPath()` and `get_workspace_info` read only the
+  `.mcp.json` context — so the documented "Pinned .rnrproj file" setting did
+  nothing: `Project : (not detected)`, and no write could register a file in the
+  project. Both are read now, the environment first (the order `getContext()`
+  already used), and the top-level `context` block of `.mcp.json` as well as
+  `servers.context`; the same holds for `workspace.solutionPath`. A pinned path
+  also outranks a detected one in the context snapshot, as it does for writes.
+- **`d365fo_file(action="create")` keeps an extension class name that already
+  carries the model's token after its base.** `SalesTableMcpCreditHold_Extension`
+  with `[ExtensionOf(tableStr(SalesTable))]` was written as
+  `SalesTableMcpCreditHoldMcp_Extension` — the token was only looked for at
+  either end of the name — and a delete + re-create renamed it again, so the name
+  a task asked for could not be written through the server at all. The base named
+  in `[ExtensionOf]` (or `properties.baseClass`) now decides: base, then the
+  token as its own word, means already prefixed. Without a stated base the
+  symbol index stands in: the longest known table/class/form/view/query/entity/map
+  the token follows is the base, and with none known nothing changes.
+  `validate_object_naming`, `prepare(mode="create")` and create all derive the
+  base the same way, so they predict and write the same name. Found by the model ×
+  MCP benchmark (`ref-credit-hold-extension`), where it cost three with-MCP runs
+  a check the runs without MCP passed.
+- **Form and form-extension XML passed as `xmlContent` gets the metadata
+  namespace.** Written without `xmlns="Microsoft.Dynamics.AX.Metadata.V6"`, an
+  `AxFormExtension` builds clean and then fails xppbp ("Error reading
+  FormExtension … not found"); create now adds it to the root and `xmlns=""` to
+  the grandchildren — the layout every one of the 10,530 shipped `AxForm` /
+  `AxFormExtension` files has (no other root type carries the namespace) — and
+  says so in the response. Matched pair on the benchmark's own files: as written,
+  2 xppbp errors; fixed, 0.
+- **A label could land in English in a language folder, without a word.**
+  `labels(action="create")` looked up each existing language folder's
+  translation by exact, case-sensitive name, and fell back to the en-US text
+  for anything else — so `it` for an `it-IT` folder, `it-it`, and above all
+  `de-DE` for the bare `de` folders Microsoft's own models use all wrote
+  English, listed as written with nothing saying it was a substitute. Locales
+  now match case-insensitively (`it_IT` reads as `it-IT`; the exact spelling,
+  then the first case variant, wins), then fall back along the target's parent
+  chain (`it-IT` → `it`; `zh-Hant-TW` → `zh-Hant` → `zh`), then — for a
+  bare-language folder — to the one supplied regional translation of that
+  language (`de-DE` → `de`; two candidates such as `de-AT` and `de-CH` fall
+  through, and a sibling region is never used), and only then to en-US or the
+  first supplied translation. Each parent or regional fallback is reported on
+  its own line, the last-resort ones in one line per source, and bulk mode
+  (`labels[]`) forwards those lines instead of dropping them.
 - **`get_workspace_info` no longer waits 5 s for a `.rnrproj` scan it does not
   need.** When `D365FO_MODEL_NAME` or the config names the model, the first call
   answered only after the background project scan — and with the server started
