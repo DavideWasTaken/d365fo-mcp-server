@@ -29,6 +29,23 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Added
+- **No prefix at all: `naming.prefixSource=none` (#1085).** For teams on a
+  suffix convention (`CustomerSettings_ABC`). An empty `naming.prefix` never
+  meant "no prefix": the server inferred one from the model's objects, then fell
+  back to the model name. `none` (env `EXTENSION_PREFIX_SOURCE=none`) skips all
+  of it — new objects, fields and methods keep the name as given, `naming.suffix`
+  is still appended (and its own underscore no longer trips the naming check),
+  and extension elements and classes embed the model name (`CustTable.ABC`,
+  `CustTable_ABC_Extension`), since they still need a collision-avoiding token.
+  `validate_object_naming` stops asking for a prefix, `generate_object` stops
+  warning "No prefix resolved", and `get_workspace_info` / `doctor` report the
+  choice (doctor warns when it ignores a `naming.prefix` that is still set). The
+  cross-model refusal suggests the model-name extension, modify can auto-create
+  a missing `Base_Model_Extension` class, report copies from `generate_object`
+  carry the model token trailing (`SalesInvoiceABC`), and the type checks read
+  a role suffix before the configured one (`CustomerExportEntity_ABC`).
+  `naming.prefix` is no longer marked required; `setup` asks which one you mean
+  when you leave it empty. Without the setting nothing changes.
 - **`modify-property` sets properties on a form's own controls.** With
   `controlName` (or a dotted `propertyPath`, `"PostButton.NeedsRecord"`), it now
   reaches a control of an `objectType="form"` and a control a form extension
@@ -87,6 +104,18 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **`labels(action="update")` with only en-US overwrote every other language
+  with English, and every developer comment with the default (#1105).** Update
+  writes each existing language folder; one with no supplied translation got the
+  en-US (last-resort) text, and every written label got `description`'s default
+  (the VS project name, else the labelFileId) as its comment. Now, for a label that
+  already exists in a folder, update writes the text only where the call supplies
+  a translation (exact, parent or regional match) — a folder that would only get
+  the fallback keeps its text, unless that text is a copy of the fallback source's
+  current text, which follows the update — and replaces the comment only with a
+  `comment`, `defaultComment` or `description` the call states. The reply lists
+  the kept folders with their text (bulk mode too). A folder where the label is
+  missing still gets it, and create is unchanged.
 - **Modify no longer leaves `.backup-*` files for calls that changed nothing.**
   Outside git the pre-modify copy was taken before the operation was validated,
   so every refused call left a copy of an unchanged file beside the AOT source —

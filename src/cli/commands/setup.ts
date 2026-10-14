@@ -13,7 +13,7 @@ import * as fs from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { DOTNET_MISSING, cliCommand, dataRoot, installMode, isWindows, paths, repoRoot, setDataRoot } from '../context.js';
 import type { SectionId } from '../../config/settings.js';
-import { settingByPath, settingsInSection } from '../../config/settings.js';
+import { settingByPath } from '../../config/settings.js';
 import { commandExists, runExe, runShell } from '../exec.js';
 import { pinBridgeExe } from '../bridgePath.js';
 import { writeBridgeSourceStamp } from '../bridgeSources.js';
@@ -21,7 +21,7 @@ import { maybePrepareCopilotInstructions } from '../copilotFiles.js';
 import { mcpJsonNote, placementNote, stdioServer } from '../mcpJson.js';
 import { branchStatus } from '../gitState.js';
 import { checkRelease } from '../npmRegistry.js';
-import { askAdvanced, askSecrets, askSetting, askSettings } from '../settingsPrompt.js';
+import { askAdvanced, askNaming, askSecrets, askSetting } from '../settingsPrompt.js';
 import { migrateLegacyEnv, openStore, readSetting, saveStore, writeSetting, type SettingsStore } from '../settingsStore.js';
 import { findPackagesRoot } from '../../utils/packagesRoot.js';
 import { rootTarget } from '../target.js';
@@ -231,7 +231,7 @@ function solutionsPath(store: SettingsStore): string {
 
 async function configureNaming(store: SettingsStore): Promise<void> {
   p.log.step('Naming');
-  await askSettings(store, settingsInSection('naming', 'basic'));
+  await askNaming(store);
 }
 
 async function configureIndex(store: SettingsStore): Promise<void> {
