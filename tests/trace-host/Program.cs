@@ -23,6 +23,7 @@ internal static class Program
         SqlAttributionAndRollUp();
         RepeatedSql();
         FocusSelectsThreads();
+        FocusRootsListedFirst();
         SubtreeScope();
         ProcessFilter();
         StatementNormalisation();
@@ -147,6 +148,23 @@ internal static class Program
         Check(!r.TopInclusive.Any(x => x.Method == "Web::render"), "focus: other thread excluded");
         Check(r.TopInclusive.Any(x => x.Method == "BatchRun::run"), "focus: whole selected thread kept in thread scope");
         Near(r.Totals!.FocusSeconds ?? -1, 2, "focus: time inside closed focus frames");
+    }
+
+    private static void FocusRootsListedFirst()
+    {
+        // A web thread runs many other requests; the one root the focus ran under comes first.
+        var events = new List<XppTraceEvent>();
+        double s = 0;
+        foreach (var root in new[] { "Menu::a", "Menu::a", "Menu::a", "Menu::b", "Menu::b", "Form::notify", "Form::notify" })
+        {
+            events.Add(Enter(s, root)); events.Add(Exit(s + 0.5, root)); s += 1;
+        }
+        events.Add(Enter(s, "SysClassRunner::main")); events.Add(Enter(s + 0.1, "MyTest::main"));
+        events.Add(Exit(s + 0.2, "MyTest::main")); events.Add(Exit(s + 0.3, "SysClassRunner::main"));
+        var r = Run(events, new XppTraceOptions { Focus = new[] { "MyTest" } });
+        var roots = r.Threads.Single().Roots;
+        Check(roots.Count == 3 && roots[0] == "SysClassRunner::main", "focus roots: the root the focus ran under is listed first, got " + string.Join(", ", roots));
+        Check(roots[1] == "Menu::a", "focus roots: then the most frequent other roots");
     }
 
     private static void SubtreeScope()
