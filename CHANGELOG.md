@@ -55,8 +55,120 @@ those are called out explicitly below.
   reads are limited to database-scoped sys views (no `sys.sql_logins`,
   server principals or DMVs). No result cache, no replay, no retry. Excluded
   from `read-only` mode. See [docs/AXDB_SQL.md](docs/AXDB_SQL.md).
+- **`add-field` on a view.** `modify` had no view path: `dataField` + `dataSource`
+  (the natural guess — it is the data-entity shape) was refused as data-entity
+  only, and `fieldType` reached the bridge, whose AddField resolves tables only, so
+  it failed with "Table or table-extension not found" and blamed a same-session
+  create. It now writes an `AxViewFieldBound` — `dataSource` (a data source of the
+  view, case-corrected against the ones the view declares), `dataField` (defaults
+  to `fieldName`), optional `fieldLabel` — in the shape 25,946 of the 28,493
+  shipped bound view fields use. `prepare` and the op-spec describe the view
+  contract instead of the table/entity one.
+- **`add-data-source` takes `insertIfEmpty` on a form or form extension.** The
+  bridge's AddDataSource has no such property, so a new data source always kept
+  the platform default (Yes), while the VS designer writes `<InsertIfEmpty>No` for
+  one — the usual choice for a joined, read-only source. `insertIfEmpty=false`
+  writes it where all 12,798 shipped occurrences sit (every one of them `No`;
+  Yes is never serialized), `true` removes it. The data source's `<Fields>` list
+  stays empty: the designer fills it on save, but Microsoft ships a view data
+  source with an empty one whose controls bind to its fields, so it is not needed.
+
+### Changed
+- **Every `.rnrproj` write is bounded by the configured solution roots.**
+  `d365fo_file(action="project")` refused a project outside them, while
+  `create`'s `addToProject` — and modify, labels and generate_object
+  registration — wrote whatever `.rnrproj` it was given, so `add-object` refused
+  the very project `create` had just registered objects into. They now share the
+  bound; a refused registration is reported and the object is still written.
+  The folder of a configured `workspace.projectPath` / `D365FO_PROJECT_PATH`
+  counts as a root, a project activated with `get_workspace_info(projectPath=…)`
+  does not — set `workspace.solutionsPath` to the folder holding your projects.
+  `delete` still removes its own entry from any project listing it, since a
+  dangling include stops the project loading.
 
 ### Fixed
+- **Modify no longer leaves `.backup-*` files for calls that changed nothing.**
+  Outside git the pre-modify copy was taken before the operation was validated,
+  so every refused call left a copy of an unchanged file beside the AOT source —
+  on a TFVC workspace, a pending add each. The copy is still taken first, and is
+  now removed when the call ends without changing the file (refusal or skip). A
+  file created in the same session gets none (undo deletes it), so `create` with
+  `operations[]` no longer leaves one per operation. `createBackup=true` now
+  names its copy in the response (and, like the forced copy, it is removed when
+  the call left the file unchanged). `insertIfEmpty` on a type other than a form
+  is refused before anything is written.
+- **`undo` described a non-git workspace wrongly.** The schema said "untracked →
+  deleted" and the forced-backup note said undo "would not work here". Outside git
+  undo deletes a file `create` made in this server session and refuses everything
+  else; both texts now say so.
+- **The solutions-path scan could pick a project of another model.** With no
+  project resolved from the workspace, the `workspace.solutionsPath` scan took
+  the first project in disk order. A projects folder that also held one stray
+  project of another model — scanned first, the only one of its model — had that
+  project selected, its model registered as custom, and every new object of the
+  configured model registered into it, failing that project's build. A configured
+  `modelName` now limits the pick to that model's projects; if the folder holds
+  none, nothing is selected and the server says so.
+- **Wrong headings and progress labels.** `create` with `operations[]` headed its
+  results `d365fo_file(action="modify")`; `undo`, `delete` and `project` calls
+  showed "📁 Creating …" while they ran.
+- **`workspace.projectPath` / `D365FO_PROJECT_PATH` pins the project again.**
+  The config file loads its settings as `D365FO_*` environment variables, but
+  `getProjectPath()`, `getSolutionPath()` and `get_workspace_info` read only the
+  `.mcp.json` context — so the documented "Pinned .rnrproj file" setting did
+  nothing: `Project : (not detected)`, and no write could register a file in the
+  project. Both are read now, the environment first (the order `getContext()`
+  already used), and the top-level `context` block of `.mcp.json` as well as
+  `servers.context`; the same holds for `workspace.solutionPath`. A pinned path
+  also outranks a detected one in the context snapshot, as it does for writes.
+- **`d365fo_file(action="create")` keeps an extension class name that already
+  carries the model's token after its base.** `SalesTableMcpCreditHold_Extension`
+  with `[ExtensionOf(tableStr(SalesTable))]` was written as
+  `SalesTableMcpCreditHoldMcp_Extension` — the token was only looked for at
+  either end of the name — and a delete + re-create renamed it again, so the name
+  a task asked for could not be written through the server at all. The base named
+  in `[ExtensionOf]` (or `properties.baseClass`) now decides: base, then the
+  token as its own word, means already prefixed. Without a stated base the
+  symbol index stands in: the longest known table/class/form/view/query/entity/map
+  the token follows is the base, and with none known nothing changes.
+  `validate_object_naming`, `prepare(mode="create")` and create all derive the
+  base the same way, so they predict and write the same name. Found by the model ×
+  MCP benchmark (`ref-credit-hold-extension`), where it cost three with-MCP runs
+  a check the runs without MCP passed.
+- **Form and form-extension XML passed as `xmlContent` gets the metadata
+  namespace.** Written without `xmlns="Microsoft.Dynamics.AX.Metadata.V6"`, an
+  `AxFormExtension` builds clean and then fails xppbp ("Error reading
+  FormExtension … not found"); create now adds it to the root and `xmlns=""` to
+  the grandchildren — the layout every one of the 10,530 shipped `AxForm` /
+  `AxFormExtension` files has (no other root type carries the namespace) — and
+  says so in the response. Matched pair on the benchmark's own files: as written,
+  2 xppbp errors; fixed, 0.
+- **A label could land in English in a language folder, without a word.**
+  `labels(action="create")` looked up each existing language folder's
+  translation by exact, case-sensitive name, and fell back to the en-US text
+  for anything else — so `it` for an `it-IT` folder, `it-it`, and above all
+  `de-DE` for the bare `de` folders Microsoft's own models use all wrote
+  English, listed as written with nothing saying it was a substitute. Locales
+  now match case-insensitively (`it_IT` reads as `it-IT`; the exact spelling,
+  then the first case variant, wins), then fall back along the target's parent
+  chain (`it-IT` → `it`; `zh-Hant-TW` → `zh-Hant` → `zh`), then — for a
+  bare-language folder — to the one supplied regional translation of that
+  language (`de-DE` → `de`; two candidates such as `de-AT` and `de-CH` fall
+  through, and a sibling region is never used), and only then to en-US or the
+  first supplied translation. Each parent or regional fallback is reported on
+  its own line, the last-resort ones in one line per source, and bulk mode
+  (`labels[]`) forwards those lines instead of dropping them.
+- **`get_workspace_info` no longer waits 5 s for a `.rnrproj` scan it does not
+  need.** When `D365FO_MODEL_NAME` or the config names the model, the first call
+  answered only after the background project scan — and with the server started
+  in a folder that holds no `.rnrproj` (a package folder, a CLI session outside
+  the solution), that scan fell back to every package under
+  PackagesLocalDirectory (7.5 s on the dev VM, nothing found), so the call hit
+  its 5 s cap on every session. It now answers at once (0.2 s, measured) and
+  reports the project as still being detected; the scan finishes in the
+  background. When nothing names the model the call still waits, since the scan
+  is how the model is found. The fallback scan itself now covers only the
+  detected model's package instead of the whole root.
 - **The form element-order check no longer reports an empty element as unknown
   (#1093).** Microsoft's own `CustInvoiceJournal.ApplicationSuite_Extension`
   (ApplicationSuite 10.36) writes an empty `<Items />` on a string control, so

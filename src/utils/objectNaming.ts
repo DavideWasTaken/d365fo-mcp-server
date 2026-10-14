@@ -22,6 +22,7 @@ import {
   getExtensionNamingStyle,
   getExtensionClassNamingStyle,
   endsWithInfix,
+  inferBaseBeforeToken,
 } from './modelClassifier.js';
 import { normalizeModelToken } from './modelToken.js';
 
@@ -36,6 +37,33 @@ export const DOT_NOTATION_EXTENSION_TYPES: ReadonlySet<string> = new Set([
   'menu-item-output-extension', 'menu-extension',
   'security-duty-extension', 'security-role-extension',
 ]);
+
+/**
+ * Index types a CoC class can extend. Scopes inferExtendedBase's lookups, so a
+ * candidate also spelled by thousands of method/field rows stays a cheap probe.
+ */
+export const COC_BASE_SYMBOL_TYPES: readonly string[] = ['class', 'table', 'form', 'view', 'query', 'data-entity', 'map'];
+
+/**
+ * The base a `{Base}{Token}{Feature}_Extension` class name extends, for a caller
+ * with no `[ExtensionOf]` to read it from — prepare and validate_object_naming
+ * predict names before any source exists. The writer reads the base from the
+ * attribute; these read it from the index, so all three name the same class.
+ * Undefined for any other shape, or when no known object precedes the token.
+ */
+export function inferExtendedBase(
+  objectName: string,
+  modelName: string | undefined,
+  isKnownObject: (name: string) => boolean,
+): string | undefined {
+  // A dotted name is an element extension (CustTable.MY_Extension), never a class.
+  if (!objectName.endsWith('_Extension') || objectName.includes('.')) return undefined;
+  const stem = objectName.slice(0, -'_Extension'.length);
+  const prefix = resolveObjectPrefix(modelName ?? '');
+  const infix = prefix ? deriveExtensionInfix(prefix, modelName) : '';
+  const modelToken = modelName ? normalizeModelToken(modelName) : '';
+  return inferBaseBeforeToken(stem, [infix, modelToken, prefix], isKnownObject);
+}
 
 export function isExtensionObjectType(objectType: string): boolean {
   return objectType === 'class-extension' || DOT_NOTATION_EXTENSION_TYPES.has(objectType);
@@ -81,7 +109,7 @@ export function normalizeObjectName(
   objectType: string,
   modelName: string | undefined,
   onNote?: (note: string) => void,
-  options?: { knownBase?: boolean },
+  options?: { knownBase?: boolean; extendedBase?: string },
 ): string {
   const objectPrefix = resolveObjectPrefix(modelName ?? '');
   // Elements and classes carry their own style: a convention may spell one with the
@@ -161,7 +189,7 @@ export function normalizeObjectName(
       : `Bare class-extension name auto-converted to _Extension form: ${objectName} → ${effective}`);
   }
 
-  let finalName = applyObjectPrefix(effective, objectPrefix, modelName, { knownBase });
+  let finalName = applyObjectPrefix(effective, objectPrefix, modelName, { knownBase, extendedBase: options?.extendedBase });
 
   // EXTENSION_SUFFIX applies to NEW objects only — never to extensions. The
   // model-name style's "Base.ModelName" form has no "Extension" word, so
