@@ -47,7 +47,22 @@ namespace D365MetadataBridge.Services
             var nodes = Walk(statement).ToList();
             // Exact spelling is conservative across both case-sensitive and case-insensitive database collations.
             // A case-folded match could hide a distinct physical table on a case-sensitive database.
-            var ctes = new HashSet<string>(nodes.OfType<CommonTableExpression>().Select(c => c.ExpressionName.Value), StringComparer.Ordinal);
+            var cteList = ((SelectStatement)statement).WithCtesAndXmlNamespaces?.CommonTableExpressions?.ToList()
+                ?? new List<CommonTableExpression>();
+            var ctes = new HashSet<string>(cteList.Select(c => c.ExpressionName.Value), StringComparer.Ordinal);
+            // A CTE name is in scope only for the CTEs AFTER it (and its own body, for
+            // recursion) and for the main query. Inside an earlier CTE body the same name
+            // resolves to the real object: `WITH a AS (SELECT * FROM syslogins),
+            // syslogins AS (SELECT 1 x) SELECT * FROM a` reads the server's logins. So a
+            // reference inside CTE i sees only CTEs 0..i; anything else goes to the
+            // catalog check like any other table.
+            var cteScope = new Dictionary<NamedTableReference, HashSet<string>>(ReferenceComparer.Instance);
+            for (var i = 0; i < cteList.Count; i++)
+            {
+                var visible = new HashSet<string>(cteList.Take(i + 1).Select(c => c.ExpressionName.Value), StringComparer.Ordinal);
+                foreach (var reference in Walk(cteList[i].QueryExpression).OfType<NamedTableReference>())
+                    if (!cteScope.ContainsKey(reference)) cteScope[reference] = visible;
+            }
             var tables = new List<AxDbTableReference>();
             foreach (var node in nodes)
             {
@@ -72,12 +87,20 @@ namespace D365MetadataBridge.Services
                     var name = table.SchemaObject;
                     if (name.Identifiers.Count > 2 || name.Identifiers.Count == 0 || name.BaseIdentifier.Value.StartsWith("#", StringComparison.Ordinal))
                         throw new ArgumentException("Only local database tables and CTEs are allowed.");
-                    if (name.Identifiers.Count == 1 && ctes.Contains(name.BaseIdentifier.Value)) continue;
+                    var inScope = cteScope.TryGetValue(table, out var visibleCtes) ? visibleCtes : ctes;
+                    if (name.Identifiers.Count == 1 && inScope.Contains(name.BaseIdentifier.Value)) continue;
                     // Empty schema means SQL's normal default-schema resolution, not an assumed dbo object.
                     tables.Add(new AxDbTableReference { Schema = name.SchemaIdentifier?.Value ?? "", Table = name.BaseIdentifier.Value });
                 }
             }
             return tables;
+        }
+
+        private sealed class ReferenceComparer : IEqualityComparer<NamedTableReference>
+        {
+            public static readonly ReferenceComparer Instance = new ReferenceComparer();
+            public bool Equals(NamedTableReference x, NamedTableReference y) => ReferenceEquals(x, y);
+            public int GetHashCode(NamedTableReference obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
         }
 
         // Reflection walks only AST children, not tokens/parents. This also sees constructs nested in expressions/CTEs.

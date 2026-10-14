@@ -44,6 +44,12 @@ internal static class Program
         if (failures.Count > 0) return 1;
         Console.WriteLine("PASS: SQL AST policy cases");
         Assert(AxDbSqlPolicy.Validate("SELECT * FROM CustTable")[0].Schema == "", "unqualified tables must resolve against SQL default schema instead of assuming dbo");
+        // CTE scope: a name defined LATER does not shadow the real object inside an earlier CTE body.
+        Assert(AxDbSqlPolicy.Validate("WITH a AS (SELECT TOP 3 name FROM syslogins), syslogins AS (SELECT 1 x) SELECT * FROM a").Any(t => t.Table == "syslogins"), "a forward CTE reference must reach the catalog check");
+        Assert(AxDbSqlPolicy.Validate("WITH a AS (SELECT 1 x FROM sysprocesses), sysprocesses AS (SELECT 1 x) SELECT * FROM a JOIN sysprocesses p ON 1=1").Count(t => t.Table == "sysprocesses") == 1, "the main query's reference is the CTE, the earlier body's is the real object");
+        Assert(AxDbSqlPolicy.Validate("WITH r AS (SELECT 1 n UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r").Count == 0, "a recursive CTE's self-reference is the CTE");
+        Assert(AxDbSqlPolicy.Validate("WITH a AS (SELECT RECID FROM dbo.CustTable), b AS (SELECT RECID FROM a) SELECT * FROM b").Count == 1, "an earlier CTE is in scope for a later one");
+        Console.WriteLine("PASS: CTE names are scoped as SQL Server scopes them");
         if (Assembly.GetExecutingAssembly().GetType("D365MetadataBridge.Services.AxDbSqlService") == null)
         { Console.Error.WriteLine("FAIL: SQL service must expose structured unavailable results without connecting."); return 1; }
         var unavailable = new AxDbSqlService(new AxDbSqlOptions()).Handle("axdbQuery", null).GetAwaiter().GetResult();

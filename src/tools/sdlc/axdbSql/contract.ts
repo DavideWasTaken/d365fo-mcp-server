@@ -35,7 +35,7 @@ export function sqlContract() {
       'query accepts one SELECT (joins, CTEs, aggregates). DDL, DML, EXEC, dynamic SQL, transaction control, cross-database names, SELECT INTO, user OUTPUT, hints, UDFs, views/synonyms and external tables are refused.',
       'Catalog views: only sys.tables, columns, types, schemas, objects, indexes, index_columns, foreign_keys, foreign_key_columns, key_constraints, default_constraints, check_constraints, computed_columns, identity_columns, views, triggers and partitions.',
       'Use bigint and decimal strings to preserve precision. Decimal requires precision/scale; nvarchar requires size. datetime2 is an ISO local datetime without offset. NULL requires an explicit type.',
-      'Query limits: default from setup, at most 1000 returned rows and 256 KiB result. Truncated output is not complete evidence; use COUNT or specific columns/keys. timestamp/rowversion and binary values come back base64.',
+      'Query limits: default from setup, at most 1000 rows; the reply is cut to about 24,000 characters of JSON (whole rows dropped from the end, marked truncated). Truncated output is not complete evidence; use COUNT or specific columns/keys. timestamp/rowversion and binary values come back base64.',
     ],
     examples: [
       { action: 'query', sql: 'SELECT TOP (10) RECID, PURCHID FROM dbo.PURCHTABLE WHERE DATAAREAID=@company', parameters: [{ name: 'company', type: 'nvarchar', size: 4, value: 'USMF' }] },
