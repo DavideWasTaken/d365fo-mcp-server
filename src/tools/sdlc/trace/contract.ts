@@ -19,6 +19,9 @@ const fromText = (v: unknown): unknown => {
   return v;
 };
 const typed = <T extends z.ZodType>(schema: T) => z.preprocess(fromText, schema);
+/** A list, also as JSON text or as one bare name ("BOMCalc" → ["BOMCalc"]). */
+const list = <T extends z.ZodType>(schema: T) =>
+  z.preprocess(v => (typeof v === 'string' && !v.trim().startsWith('[') ? [v] : fromText(v)), schema);
 
 export const TraceInputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('contract') }).strict(),
@@ -35,7 +38,7 @@ export const TraceInputSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('analyze'),
     file: etl.optional(),
-    focus: typed(z.array(method).min(1).max(10)).optional(),
+    focus: list(z.array(method).min(1).max(10)).optional(),
     pid: typed(z.number().int().min(1)).optional(),
     scope: z.enum(['thread', 'subtree']).optional(),
     top: typed(z.number().int().min(1).max(50)).optional(),
