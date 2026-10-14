@@ -202,4 +202,50 @@ describe('create_label locale resolution', () => {
     expect(content).not.toContain('Old English');
     expect(reply).toContain('it-IT  → Nuovo');
   });
+  it('does not add a de-DE locale when de-DE already filled the bare de folder (no languages scope)', async () => {
+    await seed('en-US');
+    await seed('de');
+    const reply = await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'de-DE', text: 'Hallo' },
+    ]);
+    expect(await fs.readFile(file('de'), 'utf8')).toContain('Greeting=Hallo');
+    expect(reply).toMatch(/regional locale.*de-DE → de/);
+    expect((await fs.readdir(resources)).sort()).toEqual(['de', 'en-US']);
+    const descriptors = await fs.readdir(path.dirname(resources));
+    expect(descriptors.filter(f => /de-DE/i.test(f))).toEqual([]);
+  });
+
+  it('still creates a new locale folder for a supplied translation nothing else used', async () => {
+    await seed('en-US');
+    await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'fr-FR', text: 'Bonjour' },
+    ]);
+    expect((await fs.readdir(resources)).sort()).toEqual(['en-US', 'fr-FR']);
+    expect(await fs.readFile(file('fr-FR'), 'utf8')).toContain('Greeting=Bonjour');
+  });
+
+  it('creates one folder and one descriptor for two case variants of a new locale', async () => {
+    await seed('en-US');
+    await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'it-IT', text: 'Ciao' },
+      { language: 'IT-it', text: 'Salve' },
+    ]);
+    expect((await fs.readdir(resources)).sort()).toEqual(['en-US', 'it-IT']);
+    const descriptors = (await fs.readdir(path.dirname(resources))).filter(f => f.endsWith('.xml'));
+    expect(descriptors.filter(f => /it-it/i.test(f))).toEqual(['LocaleModel_it-IT.xml']);
+    expect(await fs.readFile(file('it-IT'), 'utf8')).toContain('Greeting=Ciao');
+  });
+
+  it('reads an underscore in the languages scope as a hyphen', async () => {
+    await seed('it-IT');
+    await create([
+      { language: 'en-US', text: 'Hello' },
+      { language: 'it-IT', text: 'Ciao' },
+    ], { languages: ['it_IT'] });
+    expect(await fs.readdir(resources)).toEqual(['it-IT']);
+    expect(await fs.readFile(file('it-IT'), 'utf8')).toContain('Greeting=Ciao');
+  });
 });

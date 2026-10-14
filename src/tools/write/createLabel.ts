@@ -966,7 +966,7 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
       }
 
       const english = translationsByLocale.get('en-us');
-      const source = english ?? { language: translations[0].language, entry: translations[0] };
+      const source = english ?? { language: translations[0].language.replace(/_/g, '-'), entry: translations[0] };
       return {
         language: source.language,
         // Preserve the existing last-resort comment behavior: use the target's
@@ -980,7 +980,7 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
     //    NOTE: LabelResources/ is shared by EVERY label file in the model, so this lists
     //    locales owned by sibling label files too. The `languages` arg scopes the writes.
     const requestedLanguages = (args.languages ?? [])
-      .map(l => l.trim())
+      .map(l => l.trim().replace(/_/g, '-'))
       .filter(Boolean);
 
     let discoveredLanguages: string[] = [];
@@ -1084,7 +1084,11 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
     } else if (labelFileMissing) {
       // No explicit scope and nothing exists yet — seed the folders from the translations.
       existingLanguages = [];
+      const seeded = new Set<string>();
       for (const [lang] of translationMap) {
+        // `it-IT` and `IT-it` are one locale: one folder, one descriptor.
+        if (seeded.has(lang.toLowerCase())) continue;
+        seeded.add(lang.toLowerCase());
         await createLangDirectory(lang);
         existingLanguages.push(lang);
       }
@@ -1093,11 +1097,21 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
       // exists in the model, plus any new languages supplied via translations.
       existingLanguages = [...discoveredLanguages];
       const existingSet = new Set(existingLanguages.map(l => l.toLowerCase()));
+      // A supplied regional translation that already fills an existing bare folder
+      // (`de-DE` → `de`) is not a request for a new `de-DE` locale: creating one
+      // would add a folder and a descriptor nobody asked for.
+      const consumedByRegional = new Set(
+        existingLanguages
+          .map(resolveTranslation)
+          .filter(r => r.fallback === 'regional locale')
+          .map(r => r.language.toLowerCase()),
+      );
       for (const [lang] of translationMap) {
-        if (!existingSet.has(lang.toLowerCase())) {
-          await createLangDirectory(lang);
-          existingLanguages.push(lang);
-        }
+        const key = lang.toLowerCase();
+        if (existingSet.has(key) || consumedByRegional.has(key)) continue;
+        await createLangDirectory(lang);
+        existingLanguages.push(lang);
+        existingSet.add(key);
       }
     }
 
