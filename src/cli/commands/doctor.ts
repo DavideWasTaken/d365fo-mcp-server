@@ -474,6 +474,26 @@ function layoutChecks(inst: Instance): CheckResult[] {
 }
 
 /**
+ * A SQL server configured while SQL itself stays off.
+ *
+ * axdb_sql is published only when sql.enabled is true AND a server is set
+ * (isAxDbConfigured). The wizard writes both together, but a config edited by
+ * hand can carry the server alone — and then the tool is simply absent, with
+ * nothing saying why.
+ */
+export function checkSqlSwitch(store: SettingsStore, label: string): CheckResult | null {
+  const server = readSetting(store, settingByPath('sql.server')!);
+  const enabled = readSetting(store, settingByPath('sql.enabled')!);
+  if (typeof server !== 'string' || !server.trim()) return null;
+  if (enabled === true || /^(true|1|yes|on)$/i.test(String(enabled ?? '').trim())) return null;
+  return {
+    severity: 'warn',
+    message: `${label}: sql.server is set (${server}) but sql.enabled is not true — axdb_sql is not published`,
+    fix: `set sql.enabled to true in ${store.configPath}, or run: d365fo-mcp config sql`,
+  };
+}
+
+/**
  * The symbol index is SQLite, served by node:sqlite — core since Node 22, and
  * the reason this package has no native dependency and installs without
  * lifecycle scripts. Two things can still be absent on an unusual runtime: the
@@ -598,6 +618,8 @@ export async function doctorCommand(): Promise<void> {
   for (const r of checkPackagesRoot(root.store, 'Root')) emit(r);
   for (const r of checkPathSetting(root.store, 'Root', 'environment.customPackagesPath')) emit(r);
   for (const r of checkPathSetting(root.store, 'Root', 'environment.microsoftPackagesPath')) emit(r);
+  const rootSql = checkSqlSwitch(root.store, 'Root');
+  if (rootSql) emit(rootSql);
 
   // Database (root)
   emit(checkDb(root.store, paths.defaultDb, 'Root'));
@@ -661,6 +683,8 @@ export async function doctorCommand(): Promise<void> {
       for (const r of checkPackagesRoot(target.store, `Instance '${inst.name}'`)) emit(r);
       for (const r of checkPathSetting(target.store, `Instance '${inst.name}'`, 'environment.customPackagesPath')) emit(r);
       for (const r of checkPathSetting(target.store, `Instance '${inst.name}'`, 'environment.microsoftPackagesPath')) emit(r);
+      const instanceSql = checkSqlSwitch(target.store, `Instance '${inst.name}'`);
+      if (instanceSql) emit(instanceSql);
       emit(checkDb(target.store, resolve(inst.dir, 'data', 'xpp-metadata.db'), `Instance '${inst.name}'`));
       if (isWindows && isXppConfigStale(target.store)) {
         emit({
