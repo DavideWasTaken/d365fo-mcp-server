@@ -33,6 +33,10 @@ npx tsx src/cli/index.ts config trace
 
 Restart MCP after saving.
 
+Each capture gets its own size limit: its `seconds` × 50 MB (at least 200 MB), never more than
+`trace.maxSizeMB` — a 30-second capture stops at 1,500 MB. `start` reports it as `sizeLimitMB`;
+`status` shows the configured ceilings under `limits`.
+
 **Folder.** Without `trace.outputDir`, captures go to `%TEMP%\d365fo-mcp-trace`. When that drive
 (or the configured one) lacks space for the capture asked, `start` does not start: it answers
 `TRACE_LOCATION_NEEDED` with every drive and its free space, the agent asks you which folder to
