@@ -217,6 +217,8 @@ export class BridgeClient extends EventEmitter {
 
   public readonly options: BridgeClientOptions;
 
+  private startedExePath: string | undefined;
+
   constructor(options: BridgeClientOptions) {
     super();
     this.options = options;
@@ -225,6 +227,8 @@ export class BridgeClient extends EventEmitter {
   /** Whether the bridge process is running and the metadata provider initialized */
   get isReady(): boolean { return this._isReady && !this._disposed; }
   get axdbSqlAvailable(): boolean { return this.readyPayload?.axdbSqlAvailable ?? false; }
+  /** The binary this client started, for one-shot modes such as --analyze-trace; undefined before the first start. */
+  get exePath(): string | undefined { return this.startedExePath; }
 
   /** Whether the MS metadata API is available (set after ready) */
   get metadataAvailable(): boolean { return this.readyPayload?.metadataAvailable ?? false; }
@@ -254,6 +258,7 @@ export class BridgeClient extends EventEmitter {
   /** Spawn the child process and wait for its "ready" message. Used by initialize() and restart(). */
   private async spawnAndWaitReady(): Promise<BridgeReadyPayload> {
     const exePath = this.resolveBridgeExe();
+    this.startedExePath = exePath;
     const args = [
       '--packages-path', this.options.packagesPath,
     ];

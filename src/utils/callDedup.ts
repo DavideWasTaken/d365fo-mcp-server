@@ -57,6 +57,7 @@ export function bumpWriteEpoch(): number {
 export const DEDUP_EXCLUDED_TOOLS = new Set([
   'd365fo_file', // create/modify/generate — never dedup writes
   'axdb_sql',    // every query re-reads live data
+  'trace_d365fo', // start/stop/status/analyze answer the machine's state now
   'labels', 'undo_last_modification',
   'update_symbol_index', 'build_d365fo_project', 'trigger_db_sync',
   'run_bp_check', 'run_systest_class', 'review_workspace_changes',

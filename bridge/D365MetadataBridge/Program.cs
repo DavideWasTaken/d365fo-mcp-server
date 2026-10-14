@@ -43,6 +43,11 @@ namespace D365MetadataBridge
 
         static async Task<int> Main(string[] args)
         {
+            // A separate one-shot mode: analyse an ETW capture and exit. It runs in its own process
+            // (started by the MCP server), so a multi-minute analysis never holds the bridge.
+            if (args.Length > 0 && args[0] == "--analyze-trace")
+                return Services.Trace.TraceAnalysisCommand.Run(args);
+
             // Parse command-line arguments — NO D365FO type references allowed here!
             for (int i = 0; i < args.Length; i++)
             {
@@ -544,6 +549,9 @@ D365 Metadata Bridge — stdin/stdout JSON protocol for D365FO metadata access
 
 Usage:
   D365MetadataBridge.exe [options]
+  D365MetadataBridge.exe --analyze-trace <file.etl> --out <result.json> [--focus A;B] [--pid N]
+                         [--scope thread|subtree] [--top N] [--repeat N] [--progress <file>]
+                                    One-shot: analyse an ETW capture (X++ and SQL time) and exit.
 
 Options:
   --packages-path <path>            Path to primary PackagesLocalDirectory (required; the server detects it per machine)

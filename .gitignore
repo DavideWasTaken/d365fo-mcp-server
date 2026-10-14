@@ -118,3 +118,5 @@ copilot-setup/
 # Standalone AxDB SQL test host build output
 tests/axdb-sql-host/bin/
 tests/axdb-sql-host/obj/
+tests/trace-host/bin/
+tests/trace-host/obj/

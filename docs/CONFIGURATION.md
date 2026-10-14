@@ -105,7 +105,7 @@ Transport, timeouts and logging of the MCP server process.
 | Key | Asked | Env var | Default | Description |
 | --- | --- | --- | --- | --- |
 | `server.mode` | advanced | `MCP_SERVER_MODE` | `full` | Which half of the toolset this process exposes. "full" is a single local server; the hybrid deployment splits into an Azure "read-only" instance plus a local "write-only" companion that owns the C# bridge. Values: `full` — all tools — single local server; `read-only` — search/inspect only — Azure-hosted shared index; `write-only` — create/modify/build only — local companion. |
-| `server.toolProfile` | advanced | `MCP_TOOL_PROFILE` | `full` | How many tools this server advertises. "full" publishes all 21 (axdb_sql only once SQL is configured). "core" publishes only the plan → discover → write → build → verify loop (16 tools) and leaves out the specialist ones (extension_info, analyze_code, validate_code, security_info, run_systest_class). Worth switching when the workspace runs several MCP servers at once: hosts stop sending the tool catalogue inline past a limit (VS Code: ~100 tools) and make the model search for tools first, which costs a round trip per tool. Values: `full` — all 21 tools; `core` — 16-tool create-and-build loop. |
+| `server.toolProfile` | advanced | `MCP_TOOL_PROFILE` | `full` | How many tools this server advertises. "full" publishes all 22 (axdb_sql and trace_d365fo only once configured). "core" publishes only the plan → discover → write → build → verify loop (17 tools) and leaves out the specialist ones (extension_info, analyze_code, validate_code, security_info, run_systest_class). Worth switching when the workspace runs several MCP servers at once: hosts stop sending the tool catalogue inline past a limit (VS Code: ~100 tools) and make the model search for tools first, which costs a round trip per tool. Values: `full` — all 22 tools; `core` — 17-tool create-and-build loop. |
 | `server.extraTools` | advanced | `MCP_EXTRA_TOOLS` | — | Tool names to publish in addition to the core profile, e.g. security_info,run_systest_class. Ignored when the tool profile is "full". |
 | `server.port` | setup | `PORT` | `8080` | Port for the HTTP transport. Only relevant when clients connect over http://localhost:<port>/mcp/ — an IDE that spawns the server itself uses stdio and ignores this. |
 | `server.host` | advanced | `HOST` | `0.0.0.0` | Interface the HTTP transport binds to. Left unset it follows the API key: 0.0.0.0 once a key (or ALLOW_UNAUTHENTICATED) is configured, which is what a container or App Service needs, and 127.0.0.1 when neither is, so an unauthenticated server stays off the network. Setting it to a public interface without a key is refused at startup. |
@@ -155,6 +155,17 @@ Windows-authenticated SQL access to AxDB on a development VM, for debugging.
 | `sql.trustServerCertificate` | setup | `D365FO_SQL_TRUST_CERTIFICATE` | `false` | Use for a developer SQL Server with a self-signed certificate. The connection remains encrypted. |
 | `sql.commandTimeoutSeconds` | advanced | `D365FO_SQL_TIMEOUT` | `30` | Maximum time for each SQL command; a batch also has a total time budget. |
 | `sql.maxRows` | advanced | `D365FO_SQL_MAX_ROWS` | `100` | Default returned row limit. Large results are explicitly marked truncated. |
+
+### ETW performance trace (optional)
+
+Capture and analyse an ETW trace of X++ methods and SQL on this D365FO VM.
+
+| Key | Asked | Env var | Default | Description |
+| --- | --- | --- | --- | --- |
+| `trace.enabled` | advanced | `D365FO_TRACE_ENABLED` | `false` | Publish the optional trace_d365fo tool: capture an ETW trace of X++ methods and SQL on this D365FO VM and analyse it, instead of adding timer code. Needs a Windows account allowed to run logman (Administrators or Performance Log Users). |
+| `trace.outputDir` | advanced | `D365FO_TRACE_DIR` | — | Where captures are written. A capture grows by tens of MB per second, so pick a drive with space. Left empty, the folder the agent proposes when it first needs one is remembered for this installation. |
+| `trace.maxSeconds` | advanced | `D365FO_TRACE_MAX_SECONDS` | `120` | A running capture is stopped after this many seconds even if nobody stops it. |
+| `trace.maxSizeMB` | advanced | `D365FO_TRACE_MAX_SIZE_MB` | `4096` | logman stops the capture by itself when the file reaches this size. |
 
 ### Quality gates
 
@@ -269,6 +280,12 @@ Downloading a pre-built index from blob storage instead of building it locally.
     "trustServerCertificate": false,
     "commandTimeoutSeconds": 30,
     "maxRows": 100
+  },
+  "trace": {
+    "enabled": false,
+    "outputDir": "",
+    "maxSeconds": 120,
+    "maxSizeMB": 4096
   }
 }
 ```
