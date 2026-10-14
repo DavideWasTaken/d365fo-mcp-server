@@ -11,6 +11,7 @@ import { p } from '../ui.js';
 import { settingByPath } from '../../config/settings.js';
 import { bridgeBuildCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { commandExists } from '../exec.js';
+import { freeBytes } from '../../tools/sdlc/trace/capture.js';
 import { isLegacyInstanceLayout, listInstances, type Instance } from '../instances.js';
 import { checkRelease } from '../npmRegistry.js';
 import { conflictingLegacyValues, readPath, readSetting, settingSource, type SettingsStore } from '../settingsStore.js';
@@ -502,6 +503,29 @@ async function checkSqliteEngine(): Promise<CheckResult> {
 }
 
 /**
+ * Tracing switched on: where captures will go and whether that drive can take one.
+ *
+ * A capture of a busy batch grows by tens of MB per second; the tool refuses to start
+ * without room, so a full drive is better said here than discovered mid-investigation.
+ */
+export function checkTrace(store: SettingsStore, label: string, free: (dir: string) => number | undefined = freeBytes): CheckResult | null {
+  if (readSetting(store, settingByPath('trace.enabled')!) !== true) return null;
+  if (!isWindows) {
+    return { severity: 'warn', message: `${label}: trace.enabled is true, but ETW capture runs only on the Windows D365FO VM — trace_d365fo will refuse`, fix: `set trace.enabled to false in ${store.configPath}` };
+  }
+  const dir = readSetting(store, settingByPath('trace.outputDir')!);
+  if (typeof dir !== 'string' || !dir.trim()) {
+    return { severity: 'ok', message: `${label}: tracing enabled — no trace.outputDir; the first capture proposes a drive with space and remembers it. Needs Administrators or Performance Log Users.` };
+  }
+  const bytes = free(dir);
+  const gb = bytes === undefined ? undefined : Math.round(bytes / 2 ** 30 * 10) / 10;
+  if (gb === undefined || gb < 4) {
+    return { severity: 'warn', message: `${label}: trace.outputDir ${dir} has ${gb === undefined ? 'no readable volume' : `${gb} GB free`} — a one-minute capture of a busy batch can take 3 GB`, fix: 'point trace.outputDir at a drive with space: d365fo-mcp config trace' };
+  }
+  return { severity: 'ok', message: `${label}: tracing enabled — captures in ${dir} (${gb} GB free). Needs Administrators or Performance Log Users.` };
+}
+
+/**
  * Whether this copy is the latest published release.
  *
  * Never a hard failure: an old copy still works, and a VM with no route to the
@@ -601,6 +625,8 @@ export async function doctorCommand(): Promise<void> {
 
   // Database (root)
   emit(checkDb(root.store, paths.defaultDb, 'Root'));
+  const rootTrace = checkTrace(root.store, 'Root');
+  if (rootTrace) emit(rootTrace);
 
   // Which source resolves the workspace, and the prefix that follows from it —
   // both were previously only inferable from a tool error (#833).
@@ -662,6 +688,8 @@ export async function doctorCommand(): Promise<void> {
       for (const r of checkPathSetting(target.store, `Instance '${inst.name}'`, 'environment.customPackagesPath')) emit(r);
       for (const r of checkPathSetting(target.store, `Instance '${inst.name}'`, 'environment.microsoftPackagesPath')) emit(r);
       emit(checkDb(target.store, resolve(inst.dir, 'data', 'xpp-metadata.db'), `Instance '${inst.name}'`));
+      const instanceTrace = checkTrace(target.store, `Instance '${inst.name}'`);
+      if (instanceTrace) emit(instanceTrace);
       if (isWindows && isXppConfigStale(target.store)) {
         emit({
           severity: 'warn',

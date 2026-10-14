@@ -70,7 +70,7 @@ are kept beside the capture (`<file>.analysis.<hash>.json`) and reused.
 - `topSqlByTime` / `topSqlByCount` — statements (normalised, truncated) with executions, total,
   preparation, max and their top callers. `repeatedSql` — one caller running the same statement
   at least 50 times: the per-record query in a loop that set-based code or a cache would remove.
-- `topRowFetch`, `totals` (SQL share of the selected threads' time), `threads`, `openAtEnd`,
+- `topRowFetch`, `totals` (SQL share of the selected threads' busy time), `threads`, `openAtEnd`,
   `pairing` and `caveats`.
 
 ## Accuracy
@@ -86,7 +86,10 @@ its callers. What it cannot know is stated, not guessed:
   are listed in `openAtEnd` with their time so far (a lower bound); a frame closed by an outer
   method's exit (an exception unwinding, or a lost event) is counted and its time is an upper
   bound.
-- The share of SQL is computed over the selected threads' spans, not the wall-clock span.
+- The share of SQL is computed over `busySeconds`: the time the selected threads spent inside X++
+  frames, plus SQL issued outside any frame. Not the wall-clock span, and not the threads' spans,
+  which an idle pool thread would dilute. In a capture taken mid-run, time in the outer method's own
+  code before its first traced callee is not seen, so busy time is a lower bound.
 
 ## Customer data
 
