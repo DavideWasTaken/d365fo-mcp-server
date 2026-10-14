@@ -58,7 +58,14 @@ export function logman(args: string[]): Promise<LogmanResult> {
   });
 }
 
-export const accessDenied = (r: LogmanResult) => /0x80070005|access is denied|accesso negato/i.test(r.output);
+/**
+ * logman refused for lack of ETW rights. Its text is localised ("Access is denied.",
+ * "Accesso negato.") and carries no code, so the exit code decides: 0x80070005, which
+ * Node reports unsigned (2147942405). Measured with a token whose Administrators and
+ * Performance Log Users groups were disabled.
+ */
+export const accessDenied = (r: LogmanResult) =>
+  r.code === 0x80070005 || r.code === -2147024891 || /0x80070005|access is denied/i.test(r.output);
 
 export async function isSessionRunning(): Promise<boolean> {
   return (await logman(['query', SESSION, '-ets'])).code === 0;

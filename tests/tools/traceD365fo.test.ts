@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { traceD365foTool } from '../../src/tools/sdlc/traceD365fo.js';
 import { TraceInputSchema } from '../../src/tools/sdlc/trace/contract.js';
-import { captureFileName, isInside, sizeLimitMB, requiredFreeMB } from '../../src/tools/sdlc/trace/capture.js';
+import { accessDenied, captureFileName, isInside, sizeLimitMB, requiredFreeMB } from '../../src/tools/sdlc/trace/capture.js';
 import { analysisFiles, analysisState, boundedAnalysis } from '../../src/tools/sdlc/trace/analysis.js';
 import { readRememberedOutputDir, rememberOutputDir, resolveTraceConfig } from '../../src/config/trace.js';
 import { isToolEnabled } from '../../src/server/serverMode.js';
@@ -58,6 +58,14 @@ describe('trace_d365fo', () => {
     expect(sizeLimitMB(120, 4096)).toBe(4096);
     expect(sizeLimitMB(1, 4096)).toBe(200);
     expect(requiredFreeMB(3000)).toBe(4024);
+  });
+
+  it('recognises a refused logman by its exit code, whatever the language', () => {
+    // What Node got from logman under a token without Administrators / Performance Log Users.
+    expect(accessDenied({ code: 2147942405, output: 'Errore:\r\nAccesso negato.\r\nProva a eseguire questo comando come amministratore.' })).toBe(true);
+    expect(accessDenied({ code: 2147942405, output: 'Fehler:\r\nZugriff verweigert.' })).toBe(true);
+    expect(accessDenied({ code: 1, output: 'Error: Access is denied.' })).toBe(true);
+    expect(accessDenied({ code: 2147942487, output: 'Errore:\r\nParametro non corretto.' })).toBe(false);
   });
 
   it('names captures by time and label', () => {
