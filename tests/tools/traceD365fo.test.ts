@@ -64,7 +64,8 @@ describe('trace_d365fo', () => {
     expect(TraceInputSchema.safeParse({ action: 'start', mode: 'auto', seconds: '5' }).success).toBe(false);
     expect(TraceInputSchema.safeParse({ action: 'start', mode: 'auto', seconds: '60s' }).success).toBe(false);
     expect(TraceInputSchema.safeParse({ action: 'start', mode: 'auto', rememberOutputDir: 'yes' }).success).toBe(false);
-    expect(TraceInputSchema.safeParse({ action: 'analyze', focus: 'MyTraceProbe' }).success).toBe(false);
+    expect(TraceInputSchema.parse({ action: 'analyze', focus: 'MyTraceProbe' })).toMatchObject({ focus: ['MyTraceProbe'] });
+    expect(TraceInputSchema.safeParse({ action: 'analyze', focus: 'A;B' }).success).toBe(false);
     expect(TraceInputSchema.safeParse({ action: 'analyze', focus: '["A"' }).success).toBe(false);
   });
 
