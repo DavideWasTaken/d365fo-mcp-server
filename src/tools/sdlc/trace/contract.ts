@@ -5,26 +5,41 @@ const folder = z.string().trim().min(3).max(240);
 const etl = z.string().trim().min(5).max(400).regex(/\.etl$/i, 'must be an .etl file');
 const method = z.string().trim().min(2).max(200).regex(/^[^;]+$/, 'no ;');
 
+/**
+ * The MCP inputSchema declares only `action` (the strict schema is this contract), so a client
+ * has no type for the other parameters and may send them as text: "60", "false", '["A"]'. Read
+ * text back only where a number, boolean or list is expected; anything else is left to refuse.
+ */
+const fromText = (v: unknown): unknown => {
+  if (typeof v !== 'string') return v;
+  const s = v.trim();
+  if (/^-?\d+$/.test(s)) return Number(s);
+  if (s === 'true' || s === 'false') return s === 'true';
+  if (s.startsWith('[')) { try { return JSON.parse(s); } catch { return v; } }
+  return v;
+};
+const typed = <T extends z.ZodType>(schema: T) => z.preprocess(fromText, schema);
+
 export const TraceInputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('contract') }).strict(),
   z.object({
     action: z.literal('start'),
     mode: z.enum(['auto', 'manual']),
-    seconds: z.number().int().min(10).max(900).optional(),
+    seconds: typed(z.number().int().min(10).max(900)).optional(),
     label: label.optional(),
     outputDir: folder.optional(),
-    rememberOutputDir: z.boolean().optional(),
+    rememberOutputDir: typed(z.boolean()).optional(),
   }).strict(),
   z.object({ action: z.literal('stop') }).strict(),
   z.object({ action: z.literal('status') }).strict(),
   z.object({
     action: z.literal('analyze'),
     file: etl.optional(),
-    focus: z.array(method).min(1).max(10).optional(),
-    pid: z.number().int().min(1).optional(),
+    focus: typed(z.array(method).min(1).max(10)).optional(),
+    pid: typed(z.number().int().min(1)).optional(),
     scope: z.enum(['thread', 'subtree']).optional(),
-    top: z.number().int().min(1).max(50).optional(),
-    waitSeconds: z.number().int().min(0).max(50).optional(),
+    top: typed(z.number().int().min(1).max(50)).optional(),
+    waitSeconds: typed(z.number().int().min(0).max(50)).optional(),
   }).strict().refine(a => a.scope !== 'subtree' || !!a.focus, { message: 'scope=subtree needs focus', path: ['scope'] }),
   z.object({ action: z.literal('delete'), file: etl }).strict(),
 ]);
