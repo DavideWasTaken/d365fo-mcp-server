@@ -13,7 +13,7 @@ import { createInstance, getInstance, listInstances, normalizeInstanceLayout, su
 import { mcpJsonNote, placementNote, stdioServer } from '../mcpJson.js';
 import { selectXppConfig } from './config.js';
 import { configureSqlForEnvironment } from '../sqlEnvironmentSetup.js';
-import { askAdvanced, askSetting, askSettings } from '../settingsPrompt.js';
+import { askAdvanced, askNaming, askSetting, askSettings } from '../settingsPrompt.js';
 import { openInstanceStore, readPath, readSetting, saveStore, writeSetting } from '../settingsStore.js';
 import { instanceTarget } from '../target.js';
 import { askConfirm, askSelect, askText, p } from '../ui.js';
@@ -113,7 +113,7 @@ export async function instanceAddCommand(name: string | undefined, portArg: stri
   await askSetting(store, settingByPath('workspace.modelName')!);
   await askSetting(store, settingByPath('workspace.path')!);
   await askSetting(store, settingByPath('workspace.solutionsPath')!);
-  await askSettings(store, settingsInSection('naming', 'basic'));
+  await askNaming(store);
   p.log.step('Metadata index');
   await askSettings(store, settingsInSection('index', 'basic'));
   await askAdvanced(store, ['environment', 'workspace', 'index', 'server', 'bridge', 'behavior']);

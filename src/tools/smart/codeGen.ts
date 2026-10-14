@@ -9,8 +9,9 @@ import { z } from 'zod';
 import { readMethodCall } from '../../utils/methodBodyHint.js';
 import {
   resolveObjectPrefix, applyObjectPrefix, deriveExtensionInfix, getObjectSuffix, applyObjectSuffix,
-  getExtensionClassNamingStyle,
+  getExtensionClassNamingStyle, isNoPrefixMode,
 } from '../../utils/modelClassifier.js';
+import { normalizeModelToken } from '../../utils/modelToken.js';
 import { normalizeObjectName } from '../../utils/objectNaming.js';
 import { getConfigManager } from '../../utils/configManager.js';
 import { enforceGrounding } from '../../utils/provenanceStore.js';
@@ -2736,7 +2737,12 @@ export async function codeGenTool(request: CallToolRequest) {
     const resolvedModelName = args.modelName || getConfigManager().getModelName() || '';
     const prefix = resolveObjectPrefix(resolvedModelName);
     // Extension infix: PascalCase form without underscore (e.g. "XY" → "Xy" when env has "XY_")
-    const extensionInfix = deriveExtensionInfix(prefix);
+    // With no prefix by choice (naming.prefixSource=none) the model name is the token
+    // these patterns embed, as it is in the extension names the writer produces.
+    const extensionInfix =
+      deriveExtensionInfix(prefix) ||
+      (isNoPrefixMode() && resolvedModelName ? normalizeModelToken(resolvedModelName) : '');
+    const noPrefixNote = '📌 **Naming:** no prefix (naming.prefixSource=none) — ';
     // The name d365fo_file(action="create") WILL write for an extension class, from the
     // writer's own function. Assembled here by hand it disagreed with the writer in every
     // style: the writer puts the token right before "_Extension", so the old
@@ -3027,8 +3033,11 @@ export async function codeGenTool(request: CallToolRequest) {
       namingNote = prefix
         ? `📌 **Naming (MS guidelines):** Object prefix: \`${prefix}\` → generates \`${finalName}DataContract\`, \`${finalName}Controller\`, \`${finalName}Service\`\n` +
           `   Service method: \`${serviceMethod}(${finalName}DataContract _contract)\``
-        : `⚠️ **No prefix resolved** — set \`EXTENSION_PREFIX\` env var or pass \`modelName\`.\n` +
-          `   Service method: \`${serviceMethod}(${finalName}DataContract _contract)\``;
+        : isNoPrefixMode()
+          ? `${noPrefixNote}generates \`${finalName}DataContract\`, \`${finalName}Controller\`, \`${finalName}Service\`\n` +
+            `   Service method: \`${serviceMethod}(${finalName}DataContract _contract)\``
+          : `⚠️ **No prefix resolved** — set \`EXTENSION_PREFIX\` env var or pass \`modelName\`.\n` +
+            `   Service method: \`${serviceMethod}(${finalName}DataContract _contract)\``;
     } else {
       // New element pattern — apply prefix to the name
       const newTemplate = newElementTemplates[args.pattern];
@@ -3045,6 +3054,8 @@ export async function codeGenTool(request: CallToolRequest) {
       displayName = finalName;
       namingNote = prefix
         ? `📌 **Naming (MS guidelines):** Object name with prefix: \`${finalName}\``
+        : isNoPrefixMode()
+        ? `${noPrefixNote}object name as given: \`${finalName}\``
         : `⚠️ **No prefix resolved** — set \`EXTENSION_PREFIX\` env var or pass \`modelName\` to auto-prefix new objects.`;
     }
 

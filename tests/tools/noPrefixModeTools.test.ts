@@ -1,0 +1,129 @@
+/**
+ * naming.prefixSource=none, seen from the tools that report or check the prefix
+ * (issue #1085): validate_object_naming must not ask for a prefix nor guess one
+ * off the index, a configured suffix's own underscore is not a stray one, and
+ * doctor / get_workspace_info state the choice instead of nagging about it.
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { CallToolRequest } from '@modelcontextprotocol/sdk/types.js';
+import type { XppServerContext } from '../../src/types/context.js';
+import { validateObjectNamingTool } from '../../src/tools/analysis/validateObjectNaming.js';
+import { buildPrefixDiagnostics } from '../../src/tools/analysis/prefixDiagnostics.js';
+import { checkPrefixResolution } from '../../src/cli/commands/doctor.js';
+import { setModelObjectNameSource, clearInferredModelPrefixes } from '../../src/utils/modelPrefixInference.js';
+
+const MODEL = 'ABC';
+
+vi.mock('../../src/utils/configManager', () => ({
+  getConfigManager: vi.fn(() => ({
+    getModelName: () => MODEL,
+    getWriteAnchorModel: () => MODEL,
+    getAutoDetectedModelName: async () => MODEL,
+    getRawAutoDetectedModelName: () => MODEL,
+    getAllDetectedProjects: () => [],
+    getToolProjectSwitch: () => null,
+  })),
+}));
+
+/** Every name lookup answers with objects, as a populated index would. */
+const buildContext = (): XppServerContext => {
+  const hit = (params: unknown[]) =>
+    params.some(p => typeof p === 'string' && p.replace(/"/g, '').toLowerCase() === 'custtable')
+      ? { name: 'CustTable', type: 'table', model: 'ApplicationSuite', extends_class: null, file_path: null }
+      : undefined;
+  const stmt = {
+    all: vi.fn((...params: unknown[]) =>
+      hit(params) ? [hit(params)] : Array.from({ length: 5 }, (_, i) => ({ name: `XYZThing${i}`, type: 'class', model: MODEL }))),
+    get: vi.fn((...params: unknown[]) => hit(params)),
+    run: vi.fn(),
+  };
+  const db = { prepare: vi.fn(() => stmt) };
+  return {
+    symbolIndex: { db, getReadDb: () => db, getLastIndexedAt: () => null } as any,
+    parser: {} as any,
+    cache: {} as any,
+    workspaceScanner: {} as any,
+    hybridSearch: {} as any,
+  };
+};
+
+const validate = async (args: Record<string, unknown>): Promise<string> => {
+  const req: CallToolRequest = {
+    method: 'tools/call',
+    params: { name: 'validate_object_naming', arguments: { modelName: MODEL, ...args } },
+  };
+  const result = await validateObjectNamingTool(req, buildContext());
+  return String(result.content[0].text);
+};
+
+const originalEnv = { ...process.env };
+
+beforeEach(() => {
+  clearInferredModelPrefixes();
+  setModelObjectNameSource(m => (m === MODEL ? Array.from({ length: 30 }, (_, i) => `ABCThing${i}`) : []));
+  for (const k of ['EXTENSION_PREFIX', 'EXTENSION_SUFFIX', 'EXTENSION_NAMING_STYLE', 'EXTENSION_CLASS_NAMING_STYLE']) {
+    delete process.env[k];
+  }
+  process.env.EXTENSION_PREFIX_SOURCE = 'none';
+});
+
+afterEach(() => {
+  setModelObjectNameSource(null);
+  clearInferredModelPrefixes();
+  process.env = { ...originalEnv };
+});
+
+describe('validate_object_naming under naming.prefixSource=none', () => {
+  it('passes an unprefixed new object without asking for a prefix', async () => {
+    const out = await validate({ proposedName: 'CustomerSettings', objectType: 'table' });
+    expect(out).not.toMatch(/ERRORS \(\d/);
+    expect(out).not.toMatch(/does not start with model prefix/i);
+    expect(out).not.toMatch(/Prefixed name/);
+  });
+
+  it('passes the suffix convention CustomerSettings_ABC — the underscore is the suffix\'s', async () => {
+    process.env.EXTENSION_SUFFIX = '_ABC';
+    const out = await validate({ proposedName: 'CustomerSettings_ABC', objectType: 'table' });
+    expect(out).not.toMatch(/must not contain underscores/);
+    expect(out).not.toMatch(/ERRORS \(\d/);
+    expect(out).not.toMatch(/does not end with it/);
+  });
+
+  it('still refuses a stray underscore that is not the suffix', async () => {
+    process.env.EXTENSION_SUFFIX = '_ABC';
+    const out = await validate({ proposedName: 'Customer_Settings_ABC', objectType: 'table' });
+    expect(out).toMatch(/must not contain underscores/);
+  });
+
+  it('accepts the model-name extension names the writer produces', async () => {
+    for (const [proposedName, objectType] of [
+      ['CustTable.ABC', 'table-extension'],
+      ['CustTable_ABC_Extension', 'class-extension'],
+    ] as const) {
+      const out = await validate({ proposedName, objectType, baseObjectName: 'CustTable' });
+      expect(out, proposedName).not.toMatch(/ERRORS \(\d/);
+      expect(out, proposedName).not.toMatch(/will not use this name as given/);
+    }
+  });
+});
+
+describe('reporting the choice', () => {
+  it('get_workspace_info states "none" and does not nag about EXTENSION_PREFIX', () => {
+    const { lines, verboseLines } = buildPrefixDiagnostics(MODEL, MODEL);
+    expect(lines.join('\n')).toMatch(/Prefix\s+: \(none\)\s+\(none/);
+    expect(lines.join('\n')).not.toMatch(/EXTENSION_PREFIX is not set/);
+    expect(verboseLines.join('\n')).toMatch(/naming\.prefixSource=none/);
+  });
+
+  it('doctor reports it as OK, and offers it where it used to only say "set a prefix"', () => {
+    const none = checkPrefixResolution('', MODEL, [], 'Naming', false, true);
+    expect(none).toHaveLength(1);
+    expect(none[0].severity).toBe('ok');
+    expect(none[0].message).toMatch(/no prefix \(naming\.prefixSource=none\)/);
+
+    const unset = checkPrefixResolution('', MODEL, [], 'Naming');
+    expect(unset[0].severity).toBe('warn');
+    expect(unset[0].fix).toMatch(/naming\.prefixSource=none/);
+  });
+});

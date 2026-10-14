@@ -23,6 +23,7 @@ import {
   endsWithInfix,
   deriveExtensionInfix,
   inferBaseBeforeToken,
+  isNoPrefixMode,
 } from './modelClassifier.js';
 import { COC_BASE_SYMBOL_TYPES, normalizeObjectName } from './objectNaming.js';
 import {
@@ -248,7 +249,8 @@ export async function checkObjectNaming(
     // suggested name and every startsWith() check below wrong.
     const resolution = resolveEffectivePrefix(modelName);
     const explicitPrefix = args.modelPrefix?.trim() || '';
-    const prefix = explicitPrefix || resolution.prefix || detectModelPrefix(db, name);
+    // naming.prefixSource=none is a decision, not a gap: no guess off the index either.
+    const prefix = explicitPrefix || resolution.prefix || (isNoPrefixMode() ? '' : detectModelPrefix(db, name));
 
     // An explicitly passed prefix is the caller's decision and the only candidate;
     // otherwise every token that could rightfully prefix a name in this workspace
@@ -546,8 +548,15 @@ export async function checkObjectNaming(
 
       // Underscores are allowed only as a prefix separator: {Prefix}_{Rest}
       // (e.g. valid "MY_VendPaymTermsMaintain", invalid "MYVendPaymTerms_Helper").
-      if (name.includes('_')) {
-        const underscoreIdx = name.indexOf('_');
+      // A configured suffix may carry its own separator (EXTENSION_SUFFIX="_ABC" →
+      // CustomerSettings_ABC); that underscore is the suffix's, not a stray one.
+      const suffixToken = getObjectSuffix();
+      const nameWithoutSuffix =
+        suffixToken && name.toLowerCase().endsWith(suffixToken.toLowerCase()) && name.length > suffixToken.length
+          ? name.slice(0, name.length - suffixToken.length)
+          : name;
+      if (nameWithoutSuffix.includes('_')) {
+        const underscoreIdx = nameWithoutSuffix.indexOf('_');
         const beforeUnderscore = name.slice(0, underscoreIdx);
         // Matched against every candidate prefix, not just the winning one: while
         // the model's own naming and EXTENSION_PREFIX disagree, "Other_MyObject"

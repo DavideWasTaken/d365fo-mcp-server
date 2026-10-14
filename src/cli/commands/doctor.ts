@@ -344,7 +344,17 @@ export function checkPrefixResolution(
   modelObjectNames: string[],
   label: string,
   pinned = false,
+  noPrefix = false,
 ): CheckResult[] {
+  // naming.prefixSource=none: no prefix by decision (#1085), so there is nothing
+  // to infer, pin or warn about — only what the server does instead.
+  if (noPrefix) {
+    return [{
+      severity: 'ok',
+      message: `${label}: no prefix (naming.prefixSource=none) — new objects keep the name as given; ` +
+        `extensions embed the model name${modelName ? ` ("${modelName}")` : ''}`,
+    }];
+  }
   const inferred = modelName ? inferPrefixFromObjectNames(modelObjectNames, modelName) : null;
   const bare = (s: string) => s.replace(/_+$/, '').toLowerCase();
 
@@ -374,7 +384,7 @@ export function checkPrefixResolution(
       return [{
         severity: 'warn',
         message: `${label}: no prefix configured and none inferable — new objects will be prefixed with the model name`,
-        fix: `set naming.prefix to your ISV prefix (${SETUP_COMMAND})`,
+        fix: `set naming.prefix to your ISV prefix, or naming.prefixSource=none for no prefix at all (${SETUP_COMMAND})`,
       }];
     }
     return [{ severity: 'ok', message: `${label}: prefix "${configuredPrefix}" (naming.prefix)` }];
@@ -599,7 +609,7 @@ export async function doctorCommand(): Promise<void> {
     ?? String(readSetting(root.store, settingByPath('naming.prefixSource')!) ?? '')
   ).trim().toLowerCase();
   for (const r of checkPrefixResolution(
-    configuredPrefix, detection.modelName, names, 'Naming', prefixSource === 'config',
+    configuredPrefix, detection.modelName, names, 'Naming', prefixSource === 'config', prefixSource === 'none',
   )) emit(r);
 
   // C# bridge: the only write path; Windows-only.

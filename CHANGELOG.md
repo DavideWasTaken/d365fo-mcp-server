@@ -29,6 +29,18 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Added
+- **No prefix at all: `naming.prefixSource=none` (#1085).** For teams on a
+  suffix convention (`CustomerSettings_ABC`). An empty `naming.prefix` never
+  meant "no prefix": the server inferred one from the model's objects, then fell
+  back to the model name. `none` (env `EXTENSION_PREFIX_SOURCE=none`) skips all
+  of it — new objects, fields and methods keep the name as given, `naming.suffix`
+  is still appended (and its own underscore no longer trips the naming check),
+  and extension elements and classes embed the model name (`CustTable.ABC`,
+  `CustTable_ABC_Extension`), since they still need a collision-avoiding token.
+  `validate_object_naming` stops asking for a prefix, `generate_object` stops
+  warning "No prefix resolved", and `get_workspace_info` / `doctor` report the
+  choice. `naming.prefix` is no longer marked required; `setup` asks which one
+  you mean when you leave it empty. Without the setting nothing changes.
 - **`modify-property` sets properties on a form's own controls.** With
   `controlName` (or a dotted `propertyPath`, `"PostButton.NeedsRecord"`), it now
   reaches a control of an `objectType="form"` and a control a form extension
