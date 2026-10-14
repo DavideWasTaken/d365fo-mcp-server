@@ -99,6 +99,8 @@ class ConfigManager {
   // active project off the model this workspace itself resolved to. `anchorModel` is
   // that original model and it survives further switches — see getWriteAnchorModel().
   private toolForcedProject: { anchorModel: string; forcedModel: string } | null = null;
+  /** The .rnrproj forceProject() last activated — see getServerDetectedProject(). */
+  private lastForcedProjectPath: string | null = null;
   // The sources available the last time detection ran, and whether the retry that
   // a change in them buys has been spent — see ensureProjectDetection().
   private lastDetectionFingerprint: string | null = null;
@@ -966,6 +968,19 @@ class ConfigManager {
    * not that: forceProject() writes the project it activates into runtimeContext, so
    * the merged value can name a project an earlier tool call chose.
    */
+  /**
+   * The project the SERVER detected (cwd, workspace, well-known folders, the
+   * packages scan) — null when there is none, or when it is the one a tool call
+   * activated through forceProject(). Detection is not caller-chosen, so its
+   * folder may bound project writes; a project the caller activated may not.
+   */
+  getServerDetectedProject(): D365ProjectInfo | null {
+    const detected = this.autoDetectedProject;
+    if (!detected?.projectPath) return null;
+    if (this.lastForcedProjectPath && path.normalize(detected.projectPath) === this.lastForcedProjectPath) return null;
+    return detected;
+  }
+
   getConfiguredProjectPath(): string | undefined {
     const fileContext = this.config?.context || this.config?.servers?.context || null;
     return process.env.D365FO_PROJECT_PATH?.trim() || fileContext?.projectPath?.trim() || undefined;
@@ -1416,6 +1431,7 @@ class ConfigManager {
         solutionPath: path.dirname(path.dirname(normalizedPath)),
       };
       this.autoDetectedProject = project;
+      this.lastForcedProjectPath = normalizedPath;
       this.autoDetectionAttempted = true;
       // Cache under the project path key so direct lookups work.
       this.autoDetectionCache.set(normalizedPath, project);

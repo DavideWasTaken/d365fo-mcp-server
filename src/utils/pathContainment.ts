@@ -434,7 +434,9 @@ export function isFileUnderRoot(filePath: string, rootDir: string): boolean {
  * would let a project created in a foreign folder vouch for writes and deletes
  * there on the next call. A projectPath the user configured is configuration,
  * so its own folder counts — without it, a setup that names its project and
- * nothing else could no longer register what it creates.
+ * nothing else could no longer register what it creates. So does the solution
+ * folder of a project the server detected itself (getServerDetectedProject),
+ * which excludes one a tool call activated.
  */
 async function getProjectRoots(): Promise<string[]> {
   const cfg = getConfigManager();
@@ -453,6 +455,11 @@ async function getProjectRoots(): Promise<string[]> {
   add(ctx?.solutionPath);
   const configuredProject = cfg.getConfiguredProjectPath();
   if (configuredProject) add(path.dirname(configuredProject));
+  // A project the server detected on its own is not caller-chosen either: a
+  // zero-config install registers every create into it, and refusing that would
+  // write each object with a "could not add to project" warning instead.
+  const detected = cfg.getServerDetectedProject();
+  if (detected?.projectPath) add(detected.solutionPath || path.dirname(path.dirname(detected.projectPath)));
   return [...roots];
 }
 

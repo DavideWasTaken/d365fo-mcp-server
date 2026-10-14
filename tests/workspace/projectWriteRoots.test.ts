@@ -5,7 +5,8 @@
  * project create had just registered three objects into.
  *
  * A projectPath the USER configured (D365FO_PROJECT_PATH / config file) vouches for its
- * own folder; a project a tool call activated (forceProject) does not.
+ * own folder, as does a project the server detected itself; a project a tool call
+ * activated (forceProject) does not.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs/promises';
@@ -43,6 +44,7 @@ beforeEach(async () => {
   saved = {
     autoDetectedProject: cfg.autoDetectedProject, autoDetectionAttempted: cfg.autoDetectionAttempted,
     toolForcedProject: cfg.toolForcedProject, runtimeContext: cfg.runtimeContext,
+    lastForcedProjectPath: cfg.lastForcedProjectPath,
   };
   savedEnv = process.env.D365FO_PROJECT_PATH;
   delete process.env.D365FO_PROJECT_PATH;
@@ -89,6 +91,18 @@ describe('which projects vouch for their own folder', () => {
   it('a project a tool call activated does not', async () => {
     expect(await cfg.forceProject(foreignProject)).not.toBeNull();
     expect((await assertProjectPathAllowed(foreignProject)).ok).toBe(false);
+  });
+
+  it('a project the server detected on its own does — a zero-config install still registers', async () => {
+    cfg.lastForcedProjectPath = null;
+    cfg.autoDetectedProject = {
+      projectPath: foreignProject,
+      modelName: 'ContosoRobotics',
+      solutionPath: path.dirname(path.dirname(foreignProject)),
+    };
+    expect((await assertProjectPathAllowed(foreignProject)).ok).toBe(true);
+    const note = await registerFileInActiveProject('class', 'CRThing', 'ContosoRobotics', foreignProject);
+    expect(note).toContain('added it to');
   });
 });
 

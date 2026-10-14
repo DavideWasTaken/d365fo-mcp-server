@@ -203,6 +203,15 @@ describe('add-data-source — insertIfEmpty', () => {
     expect(writtenXml()).toBeUndefined();
   });
 
+  it('is refused on a query, before the bridge adds anything', async () => {
+    const r = await modifyD365FileTool(
+      addDataSource({ objectType: 'query', objectName: 'CRJournalQuery', insertIfEmpty: false }), buildContext());
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toMatch(/insertIfEmpty applies to form data sources only/);
+    expect(mockBridgeAddDataSource).not.toHaveBeenCalled();
+    expect(writtenXml()).toBeUndefined();
+  });
+
   it('places it before DerivedDataSources when a data source carries no DataSourceLinks', async () => {
     // A form's own data source sits one level shallower than an extension's.
     fixture.xml = [

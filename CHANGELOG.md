@@ -79,7 +79,9 @@ those are called out explicitly below.
   now removed when the call ends without changing the file (refusal or skip). A
   file created in the same session gets none (undo deletes it), so `create` with
   `operations[]` no longer leaves one per operation. `createBackup=true` now
-  names its copy in the response.
+  names its copy in the response (and, like the forced copy, it is removed when
+  the call left the file unchanged). `insertIfEmpty` on a type other than a form
+  is refused before anything is written.
 - **`undo` described a non-git workspace wrongly.** The schema said "untracked →
   deleted" and the forced-backup note said undo "would not work here". Outside git
   undo deletes a file `create` made in this server session and refuses everything

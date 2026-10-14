@@ -6,7 +6,7 @@
  * the same second produced the same `<file>.backup-<stamp>` path and the second
  * copy silently replaced the first — with content that had already been modified.
  * On a target outside git that backup is the ONLY recovery route (see
- * ensureRecoverableModification, which forces one exactly there), so the original
+ * planRecoverableModification in modifyBackup.ts, which forces one exactly there), so the original
  * was gone for good.
  */
 

@@ -3011,6 +3011,16 @@ async function runModify(
           bridgeResult = await entityAddDataSource(actualFilePath, args as any);
           break;
         }
+        // InsertIfEmpty is a FORM data-source property: on a query or a view the
+        // bridge would add the data source and the setter would then report it
+        // "not found" — refuse before anything is written instead.
+        if ((args as any).insertIfEmpty !== undefined && objectType !== 'form' && objectType !== 'form-extension') {
+          bridgeResult = {
+            success: false,
+            message: `insertIfEmpty applies to form data sources only, not to objectType "${objectType}". Omit it and retry.`,
+          };
+          break;
+        }
         if ((args as any).dataSourceName && (args as any).dataSourceTable) {
           bridgeResult = await bridgeAddDataSource(
             context.bridge,
