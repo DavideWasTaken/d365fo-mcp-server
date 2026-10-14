@@ -111,6 +111,22 @@ To pin step 2 above step 1 (pre-1.8.2 behaviour) — worth doing when one model 
 
 `npx d365fo-mcp config naming` asks for it in the advanced pass. The equivalent environment variable, `EXTENSION_PREFIX_SOURCE=config`, still works and still outranks the config file.
 
+### No prefix at all
+
+Some teams use no prefix — a suffix convention such as `CustomerSettings_ABC`, `ProductService_ABC`. Leaving `naming.prefix` empty does **not** mean "no prefix": steps 1–3 above still run, and step 3 prefixes every new object with the model name. Say so explicitly instead:
+
+```json
+{ "naming": { "prefixSource": "none", "suffix": "_ABC" } }
+```
+
+With `prefixSource: none` (env `EXTENSION_PREFIX_SOURCE=none`):
+
+- New objects, fields and methods keep the name as given — nothing is inferred from the model, `naming.prefix` is ignored, and the model name is never used as a prefix. `naming.suffix` (optional) is still appended to new objects, and its own underscore is not flagged by the naming check.
+- Extension elements and classes still need a token that keeps two models' extensions apart, so they embed the **model name**, as Visual Studio does: `CustTable.ABC`, `CustTable_ABC_Extension` (whatever `extensionStyle` / `extensionClassStyle` say — a prefix style has no prefix to embed). A CoC class you name yourself in a `{Base}_{Kind}_{Model}_Extension` shape, e.g. `CustTable_Table_ABC_Extension`, is kept as given.
+- `validate_object_naming` stops asking for a prefix, and `get_workspace_info` / `doctor` report the choice instead of warning that no prefix is set.
+
+`npx d365fo-mcp setup` asks for this when you leave the prefix empty.
+
 ## Objects owned by another model
 
 A customer solution is commonly split across several **custom** models — a shared `ContosoFinanceCore` plus country models `ContosoFinanceSK` / `ContosoFinanceCZ` that extend it. The workspace targets exactly one of them; every other model is code this workspace only consumes.

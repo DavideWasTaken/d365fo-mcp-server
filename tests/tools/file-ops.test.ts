@@ -109,6 +109,7 @@ vi.mock('../../src/utils/modelClassifier', async (importOriginal) => {
       name.endsWith('_Extension') ? name.slice(0, -'_Extension'.length) : name),
     registerCustomModel: vi.fn(),
     resolveObjectPrefix: vi.fn(() => ''),
+    isNoPrefixMode: vi.fn(() => false),
     applyObjectPrefix: vi.fn((name: string) => name),
     getObjectSuffix: vi.fn(() => ''),
     applyObjectSuffix: vi.fn((name: string) => name),

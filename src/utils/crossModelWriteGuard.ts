@@ -55,7 +55,7 @@
  * transcript rather than a log nobody opens.
  */
 
-import { resolveObjectPrefix, applyObjectPrefix } from './modelClassifier.js';
+import { resolveObjectPrefix, applyObjectPrefix, isNoPrefixMode } from './modelClassifier.js';
 import { reloadWritePolicy } from './loadEnv.js';
 
 /** An extension of the target object that already exists in the active model. */
@@ -242,7 +242,8 @@ export function suggestedExtensionName(
 ): string | null {
   if (!EXTENSION_TYPE_OF[baseType]) return null;
   const prefix = resolveObjectPrefix(activeModel);
-  if (!prefix) return null;
+  // naming.prefixSource=none still names extensions — after the model.
+  if (!prefix && !isNoPrefixMode()) return null;
   return baseType === 'class'
     ? applyObjectPrefix(`${baseObject}_Extension`, prefix, activeModel, { knownBase: true })
     : applyObjectPrefix(`${baseObject}.Extension`, prefix, activeModel);

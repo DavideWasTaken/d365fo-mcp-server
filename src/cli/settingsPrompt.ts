@@ -9,7 +9,7 @@
 import { c } from '../utils/terminalUi.js';
 import { multiselect, type Option } from '@clack/prompts';
 import type { Setting, SectionId } from '../config/settings.js';
-import { SECTIONS, settingsInSection } from '../config/settings.js';
+import { SECTIONS, settingByPath, settingsInSection } from '../config/settings.js';
 import { initialText, readSetting, readSettingOrDefault, writeSetting, type SettingsStore } from './settingsStore.js';
 import { askConfirm, askSelect, askText, ensure, p } from './ui.js';
 
@@ -146,6 +146,21 @@ export async function askSettings(store: SettingsStore, settings: Setting[]): Pr
   for (const setting of settings) {
     await askSetting(store, setting);
   }
+}
+
+/**
+ * The naming questions. naming.prefix is optional (#1085), and an empty one is
+ * ambiguous — "infer it / use the model name" or "we use no prefix" — so only
+ * then is the user asked which they mean (naming.prefixSource, whose `none`
+ * choice is the suffix-convention answer).
+ */
+export async function askNaming(store: SettingsStore): Promise<void> {
+  await askSettings(store, settingsInSection('naming', 'basic'));
+  const prefix = String(readSetting(store, settingByPath('naming.prefix')!) ?? '').trim();
+  const source = String(readSetting(store, settingByPath('naming.prefixSource')!) ?? '').trim().toLowerCase();
+  // Also when a prefix was just entered over an earlier `none`: left as it is, that
+  // choice would silently ignore the prefix the user has just typed.
+  if (!prefix || source === 'none') await askSetting(store, settingByPath('naming.prefixSource')!);
 }
 
 /**
