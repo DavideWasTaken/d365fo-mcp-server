@@ -982,8 +982,7 @@ class ConfigManager {
   }
 
   getConfiguredProjectPath(): string | undefined {
-    const fileContext = this.config?.context || this.config?.servers?.context || null;
-    return process.env.D365FO_PROJECT_PATH?.trim() || fileContext?.projectPath?.trim() || undefined;
+    return this.pinnedPath('projectPath')?.path.trim() || undefined;
   }
 
   /**
