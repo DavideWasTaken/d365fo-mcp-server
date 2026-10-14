@@ -37,8 +37,8 @@ those are called out explicitly below.
   time and size limit. `analyze` reads the `.etl` in the bridge binary
   (`--analyze-trace`, its own process): enter/exit paired per thread,
   exclusive/inclusive time, SQL by statement and by caller, statements repeated
-  in loops; parameter values are never returned. When the drive lacks space,
-  `start` lists the drives and remembers the folder chosen. See
+  in loops; parameter values are never returned. When no folder is set, or it
+  lacks space, `start` lists the drives and remembers the folder chosen. See
   [docs/TRACE.md](docs/TRACE.md).
 - **No prefix at all: `naming.prefixSource=none` (#1085).** For teams on a
   suffix convention (`CustomerSettings_ABC`). An empty `naming.prefix` never

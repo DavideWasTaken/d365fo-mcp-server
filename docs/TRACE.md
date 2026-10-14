@@ -34,14 +34,14 @@ npx tsx src/cli/index.ts config trace
 Restart MCP after saving.
 
 Each capture gets its own size limit: its `seconds` × 50 MB (at least 200 MB), never more than
-`trace.maxSizeMB` — a 30-second capture stops at 1,500 MB. `start` reports it as `sizeLimitMB`;
-`status` shows the configured ceilings under `limits`.
+`trace.maxSizeMB`, not even for that minimum — a 30-second capture stops at 1,500 MB. `start`
+reports it as `sizeLimitMB`; `status` shows the configured ceilings under `limits`.
 
-**Folder.** Without `trace.outputDir`, captures go to `%TEMP%\d365fo-mcp-trace`. When that drive
-(or the configured one) lacks space for the capture asked, `start` does not start: it answers
-`TRACE_LOCATION_NEEDED` with every drive and its free space, the agent asks you which folder to
-use, and the folder you choose is remembered in `trace-settings.json` beside the index database
-for the next captures (a configured `trace.outputDir` always wins).
+**Folder.** When no folder is set yet, or the folder lacks space for the capture asked, `start`
+does not start: it answers `TRACE_LOCATION_NEEDED` with every drive and its free space, the agent
+asks you which folder to use, and the folder you choose is remembered in `trace-settings.json`
+beside the index database for the next captures (a configured `trace.outputDir` always wins).
+Nothing is written to the system drive unless you choose it.
 
 ## Two ways to capture
 
@@ -53,8 +53,11 @@ for the next captures (a configured `trace.outputDir` always wins).
   person, data the agent should not touch, or a client the agent cannot drive.
 
 Either way the capture ends by itself at the time limit or the size limit, even if nobody calls
-`stop` (the deadline is also checked on every call, so a restart of the server does not leave a
-session running). Only one capture runs at a time.
+`stop`. The deadline is also checked on every call and when the server starts, and the server
+stops its capture when it shuts down (the client closing the session), so a capture does not
+outlive the session that started it. Only one capture runs at a time on the VM, across MCP
+instances: `stop` ends only the capture this server started, and a session started elsewhere is
+reported, not stopped.
 
 Good practice: run the scenario once untraced first (the first run pays for caches), keep
 captures short, and for a job that runs for hours capture a representative minute in the middle.
