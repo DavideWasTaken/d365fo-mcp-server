@@ -349,6 +349,14 @@ export function checkPrefixResolution(
   // naming.prefixSource=none: no prefix by decision (#1085), so there is nothing
   // to infer, pin or warn about — only what the server does instead.
   if (noPrefix) {
+    if (configuredPrefix) {
+      return [{
+        severity: 'warn',
+        message: `${label}: naming.prefixSource=none ignores naming.prefix "${configuredPrefix}" — new objects ` +
+          `get no prefix; extensions embed the model name`,
+        fix: `clear naming.prefix, or set naming.prefixSource=model/config to use it (${SETUP_COMMAND})`,
+      }];
+    }
     return [{
       severity: 'ok',
       message: `${label}: no prefix (naming.prefixSource=none) — new objects keep the name as given; ` +

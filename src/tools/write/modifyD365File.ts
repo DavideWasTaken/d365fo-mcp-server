@@ -17,6 +17,7 @@ import {
 } from './modifyBackup.js';
 import { getConfigManager, extractModelFromFilePath } from '../../utils/configManager.js';
 import { isStandardModel, resolveRegularObjectPrefixToken, resolveObjectPrefix, deriveExtensionInfix } from '../../utils/modelClassifier.js';
+import { normalizeModelToken } from '../../utils/modelToken.js';
 import { normalizeObjectName } from '../../utils/objectNaming.js';
 import { findBaseObjectXml, findBaseFormXml } from '../../utils/baseObjectXml.js';
 import { describeTableAlreadyBound } from './formDataSourceNote.js';
@@ -3621,7 +3622,10 @@ export function baseObjectNameCandidates(objectName: string, modelName?: string)
   if (!stripped) return [];
   const out = [stripped];
   const prefix = resolveObjectPrefix(modelName ?? '');
-  for (const token of [deriveExtensionInfix(prefix, modelName), prefix]) {
+  // The model token too: model-name style (and naming.prefixSource=none, which
+  // forces it) writes Base_Model_Extension, whose base is Base.
+  const modelToken = modelName ? normalizeModelToken(modelName) : '';
+  for (const token of [deriveExtensionInfix(prefix, modelName), prefix, modelToken]) {
     if (!token) continue;
     if (stripped.toLowerCase().endsWith(token.toLowerCase())) {
       const shorter = stripped.slice(0, -token.length).replace(/_+$/, '');

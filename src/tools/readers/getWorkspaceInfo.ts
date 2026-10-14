@@ -18,7 +18,7 @@ import { getStdioSessionInfo } from '../../utils/stdioSessionInfo.js';
 import { checkIndexStaleness } from '../../utils/indexStaleness.js';
 import {
   isCustomModel, getObjectSuffix, getExtensionNamingStyle, getExtensionClassNamingStyle, deriveExtensionInfix,
-  unrecognisedNamingStyleSettings,
+  unrecognisedNamingStyleSettings, isNoPrefixMode,
 } from '../../utils/modelClassifier.js';
 import { normalizeModelToken } from '../../utils/modelToken.js';
 import { buildPrefixDiagnostics, modelWritesLandIn } from '../analysis/prefixDiagnostics.js';
@@ -254,7 +254,9 @@ export async function getWorkspaceInfoTool(
     lines.push(
       `## Extension Naming`,
       ``,
-      `EXTENSION_NAMING_STYLE: ${process.env.EXTENSION_NAMING_STYLE?.trim() || '(not set → "prefix")'}`,
+      isNoPrefixMode()
+        ? `EXTENSION_NAMING_STYLE: model-name (forced by naming.prefixSource=none — there is no prefix to embed)`
+        : `EXTENSION_NAMING_STYLE: ${process.env.EXTENSION_NAMING_STYLE?.trim() || '(not set → "prefix")'}`,
       `EXTENSION_CLASS_NAMING_STYLE: ${process.env.EXTENSION_CLASS_NAMING_STYLE?.trim() || `(not set → inherits "${extNamingStyle}")`}`,
       extNamingStyle === 'model-name'
         ? `✅ model-name style — element extension token is the MODEL NAME (Visual Studio default).`

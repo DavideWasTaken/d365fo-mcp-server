@@ -417,7 +417,7 @@ export async function checkObjectNaming(
           // detectModelPrefix is a guess off the symbol index that resolveObjectPrefix
           // would not make. Skipped once an error stands, so a rejected name is not
           // also told what it would have been written as.
-          if (!explicitPrefix && resolution.prefix && errors.length === 0) {
+          if (!explicitPrefix && (resolution.prefix || isNoPrefixMode()) && errors.length === 0) {
             // The base is known here, as it is to the writer from [ExtensionOf].
             const wouldWrite = normalizeObjectName(name, 'class-extension', modelName || undefined, undefined, { extendedBase: baseObjectName });
             if (wouldWrite !== name) {
@@ -566,10 +566,14 @@ export async function checkObjectNaming(
         separator = matchPrefixCandidate(beforeUnderscore, candidates);
         if (!separator) {
           errors.push(
-            `Non-extension objects must not contain underscores. ` +
-              `The only allowed underscore is as a prefix separator: ` +
-              `${prefix ? prefix + '_MyObject' : 'Prefix_MyObject'}. ` +
-              `For extension classes use: VendTable${prefix || 'Prefix'}_Extension.`,
+            isNoPrefixMode()
+              ? `Non-extension objects must not contain underscores. With naming.prefixSource=none the only ` +
+                `allowed one belongs to a configured suffix (naming.suffix="_ABC" → MyObject_ABC). ` +
+                `For extension classes use: VendTable_${modelToken || 'ModelName'}_Extension.`
+              : `Non-extension objects must not contain underscores. ` +
+                `The only allowed underscore is as a prefix separator: ` +
+                `${prefix ? prefix + '_MyObject' : 'Prefix_MyObject'}. ` +
+                `For extension classes use: VendTable${prefix || 'Prefix'}_Extension.`,
           );
         }
       }
@@ -599,8 +603,11 @@ export async function checkObjectNaming(
         }
       }
 
+      // The role suffixes below sit before a configured EXTENSION_SUFFIX, which the
+      // writer appends last (CustomerExportEntity_ABC is an entity name, not one
+      // missing "Entity").
       if (args.objectType === 'security-privilege') {
-        if (!/(View|Maintain|Delete|Admin|Invoke|Approve|FullControl)$/.test(name)) {
+        if (!/(View|Maintain|Delete|Admin|Invoke|Approve|FullControl)$/.test(nameWithoutSuffix)) {
           warnings.push(
             `Security privileges typically end with an action suffix: View, Maintain, Delete, Admin, Invoke, Approve, or FullControl.\n  Examples: ${name}View, ${name}Maintain`,
           );
@@ -609,7 +616,7 @@ export async function checkObjectNaming(
 
       if (args.objectType === 'security-duty') {
         if (
-          !/(Maintain|View|Inquire|Admin|Approve|Process)$/.test(name) &&
+          !/(Maintain|View|Inquire|Admin|Approve|Process)$/.test(nameWithoutSuffix) &&
           !(name.toLowerCase().includes('maintain') || name.toLowerCase().includes('view'))
         ) {
           warnings.push(`Security duties typically end with: Maintain, View, Inquire, Admin, Approve, or Process.`);
@@ -617,7 +624,7 @@ export async function checkObjectNaming(
       }
 
       if (args.objectType === 'data-entity') {
-        if (!name.endsWith('Entity')) {
+        if (!nameWithoutSuffix.endsWith('Entity')) {
           warnings.push(`Data entity names typically end with 'Entity'. Recommendation: ${name}Entity`);
           suggestions.push(`Data entity name: ${name}Entity`);
         }
@@ -627,7 +634,7 @@ export async function checkObjectNaming(
         // The AxReport name itself carries no suffix; what matters is that the
         // companion classes follow the role-suffix convention, so hand the full
         // roster to the caller in one place.
-        if (/(DP|Contract|Controller|UIBuilder|Tmp)$/.test(name)) {
+        if (/(DP|Contract|Controller|UIBuilder|Tmp)$/.test(nameWithoutSuffix)) {
           warnings.push(
             `"${name}" ends with a report COMPANION-class suffix — the AxReport itself is normally the bare document name ` +
             `(the suffixed names belong to its classes/table).`,

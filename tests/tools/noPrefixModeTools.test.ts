@@ -127,3 +127,30 @@ describe('reporting the choice', () => {
     expect(unset[0].fix).toMatch(/naming\.prefixSource=none/);
   });
 });
+
+describe('review follow-ups', () => {
+  it('reads role suffixes before a configured suffix (CustomerExportEntity_ABC is an entity name)', async () => {
+    process.env.EXTENSION_SUFFIX = '_ABC';
+    const entity = await validate({ proposedName: 'CustomerExportEntity_ABC', objectType: 'data-entity' });
+    expect(entity).not.toMatch(/typically end with 'Entity'/);
+    const privilege = await validate({ proposedName: 'CustomerSettingsView_ABC', objectType: 'security-privilege' });
+    expect(privilege).not.toMatch(/privileges typically end with/);
+  });
+
+  it('the cross-model refusal names the model-name extension instead of "<Prefix>Extension"', async () => {
+    const { suggestedExtensionName } = await import('../../src/utils/crossModelWriteGuard.js');
+    expect(suggestedExtensionName('CustTable', 'table', MODEL)).toBe('CustTable.ABC');
+    expect(suggestedExtensionName('SalesFormLetter', 'class', MODEL)).toBe('SalesFormLetter_ABC_Extension');
+  });
+
+  it('modify finds the base of a Base_Model_Extension class to auto-create it', async () => {
+    const { baseObjectNameCandidates } = await import('../../src/tools/write/modifyD365File.js');
+    expect(baseObjectNameCandidates('SalesFormLetter_ABC_Extension', MODEL)).toContain('SalesFormLetter');
+  });
+
+  it('doctor warns when naming.prefix is set but ignored by none', () => {
+    const r = checkPrefixResolution('XY', MODEL, [], 'Naming', false, true);
+    expect(r[0].severity).toBe('warn');
+    expect(r[0].message).toMatch(/ignores naming\.prefix "XY"/);
+  });
+});

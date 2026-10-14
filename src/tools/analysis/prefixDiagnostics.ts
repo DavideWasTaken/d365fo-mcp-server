@@ -85,7 +85,9 @@ export function buildPrefixDiagnostics(
   const verboseLines = [
     `## Prefix Configuration`,
     ``,
-    `EXTENSION_PREFIX: ${extensionPrefixEnv ?? '(not set — falling back to model name)'}`,
+    `EXTENSION_PREFIX: ${extensionPrefixEnv
+      ? `${extensionPrefixEnv}${noPrefix ? ' (ignored — naming.prefixSource=none)' : ''}`
+      : noPrefix ? '(not set)' : '(not set — falling back to model name)'}`,
     `Effective prefix: ${effectivePrefix || '(none)'}  (source: ${source})`,
   ];
   if (switched) verboseLines.push(switchNote);

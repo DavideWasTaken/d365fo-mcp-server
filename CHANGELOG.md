@@ -39,8 +39,13 @@ those are called out explicitly below.
   `CustTable_ABC_Extension`), since they still need a collision-avoiding token.
   `validate_object_naming` stops asking for a prefix, `generate_object` stops
   warning "No prefix resolved", and `get_workspace_info` / `doctor` report the
-  choice. `naming.prefix` is no longer marked required; `setup` asks which one
-  you mean when you leave it empty. Without the setting nothing changes.
+  choice (doctor warns when it ignores a `naming.prefix` that is still set). The
+  cross-model refusal suggests the model-name extension, modify can auto-create
+  a missing `Base_Model_Extension` class, report copies from `generate_object`
+  carry the model token trailing (`SalesInvoiceABC`), and the type checks read
+  a role suffix before the configured one (`CustomerExportEntity_ABC`).
+  `naming.prefix` is no longer marked required; `setup` asks which one you mean
+  when you leave it empty. Without the setting nothing changes.
 - **`modify-property` sets properties on a form's own controls.** With
   `controlName` (or a dotted `propertyPath`, `"PostButton.NeedsRecord"`), it now
   reaches a control of an `objectType="form"` and a control a form extension

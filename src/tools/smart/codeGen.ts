@@ -1272,8 +1272,8 @@ function reportCustomDesignTemplate(
   baseController: string,
   documentType: string,
   designName: string,
+  customReport = `${prefix}${standardReport}`,
 ): string {
-  const customReport = `${prefix}${standardReport}`;
   return `
 // ── 1. Controller — runs YOUR copy of the report ────────────────────────
 /// <summary>
@@ -2871,15 +2871,18 @@ export async function codeGenTool(request: CallToolRequest) {
         const baseController = args.baseName?.trim() || `${standardReport}Controller`;
         const documentType = args.documentType?.trim() || 'SalesOrderConfirmation';
         const designName = args.designName?.trim() || 'Report';
+        // The copy is a NEW object: under naming.prefixSource=none the model token
+        // trails it (SalesInvoiceABC), so the model name is never a leading prefix.
+        const customReport = isNoPrefixMode() ? `${standardReport}${extensionInfix}` : `${extensionInfix}${standardReport}`;
         code = reportCustomDesignTemplate(
-          standardReport, extensionInfix, baseController, documentType, designName);
-        displayName = `${extensionInfix}${standardReport}`;
+          standardReport, extensionInfix, baseController, documentType, designName, customReport);
+        displayName = customReport;
         namingNote =
-          `📌 **Generated:** \`${extensionInfix}${standardReport}Controller extends ${baseController}\` ` +
-          `+ \`${extensionInfix}${standardReport}PrintMgmtHandler\`` +
+          `📌 **Generated:** \`${customReport}Controller extends ${baseController}\` ` +
+          `+ \`${customReport}PrintMgmtHandler\`` +
           (extensionInfix ? '' : ' — ⚠️ no prefix resolved; set `EXTENSION_PREFIX` or pass `modelName`.') +
           `\n\n**Do this first:** duplicate the standard \`${standardReport}\` report into your model and ` +
-          `rename the copy \`${extensionInfix}${standardReport}\`. Neither class compiles until it exists.\n\n` +
+          `rename the copy \`${customReport}\`. Neither class compiles until it exists.\n\n` +
           `⚠️ **Verify two names against the real objects** — both are compile-time checked: the base ` +
           `controller (\`${baseController}\`) and the DESIGN inside the report (\`${designName}\`). ` +
           `Read the design from the AxReport, not from habit: shipped reports do use "Report", but it is a ` +
@@ -2890,7 +2893,7 @@ export async function codeGenTool(request: CallToolRequest) {
 
       } else if (args.pattern === 'report-menu-redirect') {
         const controllerClass = args.name;
-        const customReport = args.baseName?.trim() || `${extensionInfix}Report`;
+        const customReport = args.baseName?.trim() || (isNoPrefixMode() ? `Report${extensionInfix}` : `${extensionInfix}Report`);
         const designName = args.designName?.trim() || 'Report';
         code = reportMenuRedirectTemplate(controllerClass, extensionInfix, customReport, designName);
         displayName = controllerClass;
