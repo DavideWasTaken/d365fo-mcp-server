@@ -475,6 +475,28 @@ describe('a modify outside git keeps a copy only when it changed the file', () =
     expect(textOf(r)).not.toContain('Backup:');
   });
 
+  it('a call that succeeded without changing the file removes its copy', async () => {
+    // The idempotent index writer answers "already present — skipped" as a plain
+    // success; the bytes, not the wording, say nothing changed.
+    disk.set(FILE_PATH, TABLE_XML.replace(
+      '\t<Indexes />',
+      '\t<Indexes>\n\t\t<AxTableIndex>\n\t\t\t<Name>IdxKeep</Name>\n\t\t\t<Fields>\n\t\t\t\t<AxTableIndexField>\n' +
+      '\t\t\t\t\t<DataField>ProbeId</DataField>\n\t\t\t\t</AxTableIndexField>\n\t\t\t</Fields>\n\t\t</AxTableIndex>\n\t</Indexes>',
+    ));
+    const r = await modifyD365FileTool(
+      req({
+        objectType: 'table', objectName: 'ConProbeTable', operation: 'add-index',
+        indexName: 'IdxKeep', indexFields: [{ fieldName: 'ProbeId' }], filePath: FILE_PATH,
+      }),
+      ctx(),
+    );
+    expect(r.isError, textOf(r)).toBeFalsy();
+    expect(textOf(r)).toContain('already present');
+    expect(copiesTaken()).toHaveLength(1);
+    expect(copiesRemoved()).toEqual(copiesTaken());
+    expect(textOf(r)).not.toContain('Backup:');
+  });
+
   it('a call that wrote keeps its copy', async () => {
     const r = await modifyD365FileTool(
       req({

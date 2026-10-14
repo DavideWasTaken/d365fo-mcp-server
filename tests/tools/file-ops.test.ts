@@ -1957,10 +1957,9 @@ describe('modify_d365fo_file', () => {
       }
     });
 
-    it('a value already set is a skip: nothing written, no backup left behind', async () => {
-      const fsMod = await import('fs/promises');
-      (fsMod.rm as any).mockClear();
-      (fsMod.copyFile as any).mockClear();
+    it('a value already set is a skip, and writes nothing', async () => {
+      // The backup side of a no-op is in modifyArgNormalization.test.ts, which pins
+      // the "outside git" answer this file inherits from wherever the suite runs.
       const { result, written } = await modify('form', 'MyForm', FORM_PATH, FORM, {
         controlName: 'PostButton', propertyPath: 'MenuItemName', propertyValue: 'MyPostAction',
       });
@@ -1969,12 +1968,6 @@ describe('modify_d365fo_file', () => {
       const text = String(result.content[0].text);
       expect(text).toContain('SKIPPED, nothing was written');
       expect(text).not.toContain('kept a copy of the original');
-      // The target is outside git, so a copy was taken up front; the no-op must remove it.
-      const copied = (fsMod.copyFile as any).mock.calls.map((c: any[]) => String(c[1]));
-      const removed = (fsMod.rm as any).mock.calls.map((c: any[]) => String(c[0]));
-      const backups = copied.filter((p: string) => p.includes('.backup-'));
-      expect(backups.length).toBeGreaterThan(0);
-      for (const copy of backups) expect(removed).toContain(copy);
     });
 
     it('still sets a Design property through the dotted Design spelling', async () => {
