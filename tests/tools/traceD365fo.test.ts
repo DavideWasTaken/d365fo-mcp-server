@@ -68,14 +68,14 @@ describe('trace_d365fo', () => {
     // The MCP inputSchema types only `action`, so a client may send the rest as strings.
     expect(TraceInputSchema.parse({ action: 'start', mode: 'manual', seconds: '120', rememberOutputDir: 'false' }))
       .toEqual({ action: 'start', mode: 'manual', seconds: 120, rememberOutputDir: false });
-    expect(TraceInputSchema.parse({ action: 'analyze', focus: '["AVATraceUnwind"]', pid: ' 4242 ', top: '15', waitSeconds: '0' }))
-      .toEqual({ action: 'analyze', focus: ['AVATraceUnwind'], pid: 4242, top: 15, waitSeconds: 0 });
+    expect(TraceInputSchema.parse({ action: 'analyze', focus: '["MyTraceProbe"]', pid: ' 4242 ', top: '15', waitSeconds: '0' }))
+      .toEqual({ action: 'analyze', focus: ['MyTraceProbe'], pid: 4242, top: 15, waitSeconds: 0 });
     // Text is read back only where its type is expected, and the limits still apply.
     expect(TraceInputSchema.parse({ action: 'start', mode: 'auto', label: '2026' })).toMatchObject({ label: '2026' });
     expect(TraceInputSchema.safeParse({ action: 'start', mode: 'auto', seconds: '5' }).success).toBe(false);
     expect(TraceInputSchema.safeParse({ action: 'start', mode: 'auto', seconds: '60s' }).success).toBe(false);
     expect(TraceInputSchema.safeParse({ action: 'start', mode: 'auto', rememberOutputDir: 'yes' }).success).toBe(false);
-    expect(TraceInputSchema.parse({ action: 'analyze', focus: 'AVATraceUnwind' })).toMatchObject({ focus: ['AVATraceUnwind'] });
+    expect(TraceInputSchema.parse({ action: 'analyze', focus: 'MyTraceProbe' })).toMatchObject({ focus: ['MyTraceProbe'] });
     expect(TraceInputSchema.safeParse({ action: 'analyze', focus: 'A;B' }).success).toBe(false);
     expect(TraceInputSchema.safeParse({ action: 'analyze', focus: '["A"' }).success).toBe(false);
   });
