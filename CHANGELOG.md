@@ -91,6 +91,13 @@ those are called out explicitly below.
   source with an empty one whose controls bind to its fields, so it is not needed.
 
 ### Changed
+- **Code comments are written in English.** Neither the system instructions nor
+  the knowledge base said which language a `//` or `///` comment is in, so an
+  agent talking to the user in Czech often commented the X++ in Czech, and
+  nothing caught it (xppc and BP never check the language of a comment). Both
+  now say: always English, whatever language the conversation is in, and
+  another language only when the user explicitly asks. A comment explains what
+  the code below it does and why, not the syntax. Templates were already English.
 - **Every `.rnrproj` write is bounded by the configured solution roots.**
   `d365fo_file(action="project")` refused a project outside them, while
   `create`'s `addToProject` — and modify, labels and generate_object
