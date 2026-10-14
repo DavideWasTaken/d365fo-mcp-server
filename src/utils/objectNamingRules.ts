@@ -22,8 +22,9 @@ import {
   prefixLeadingClassName,
   endsWithInfix,
   deriveExtensionInfix,
+  inferBaseBeforeToken,
 } from './modelClassifier.js';
-import { normalizeObjectName } from './objectNaming.js';
+import { COC_BASE_SYMBOL_TYPES, normalizeObjectName } from './objectNaming.js';
 import {
   matchPrefixCandidate,
   modelWritesLandIn,
@@ -305,6 +306,15 @@ export async function checkObjectNaming(
           const stripped = derived.slice(0, derived.length - token.length).replace(/_+$/, '');
           if (stripped) args.baseObjectName = stripped;
           break;
+        }
+        // {Base}{Token}{Feature}: the token sits mid-stem, so neither end says where
+        // the base stops. The index does — the same base the writer reads from
+        // [ExtensionOf], so check and writer name the same class.
+        if (args.baseObjectName === derived) {
+          const inferred = inferBaseBeforeToken(derived, candidates, n => {
+            try { return lookupSymbolNocase(db, n, COC_BASE_SYMBOL_TYPES) != null; } catch { return false; }
+          });
+          if (inferred) args.baseObjectName = inferred;
         }
       }
     }

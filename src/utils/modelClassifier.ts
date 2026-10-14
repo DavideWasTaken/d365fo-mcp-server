@@ -325,8 +325,36 @@ export function tokenFollowsBase(stem: string, base: string, tokens: string[]): 
     if (!token || rest.length < token.length) return false;
     if (rest.slice(0, token.length).toLowerCase() !== token.toLowerCase()) return false;
     const after = rest[token.length];
-    return after === undefined || after === '_' || /[A-Z]/.test(after);
+    return after === undefined || after === '_' || /[A-Z0-9]/.test(after);
   });
+}
+
+/**
+ * The base a `{Base}{Token}{Feature}` extension-class stem names, for a caller
+ * that has no `[ExtensionOf]` to read it from (validate_object_naming, prepare).
+ * Each place a token starts as its own word inside the stem splits it into a
+ * candidate base; the longest candidate `isKnownObject` accepts wins. Undefined
+ * when none is known — the stem is then left to the end-of-stem rules.
+ */
+export function inferBaseBeforeToken(
+  stem: string,
+  tokens: string[],
+  isKnownObject: (name: string) => boolean,
+): string | undefined {
+  let best: string | undefined;
+  for (const token of tokens) {
+    if (!token) continue;
+    const needle = token.toLowerCase();
+    for (let i = 1; i + token.length <= stem.length; i++) {
+      if (stem.slice(i, i + token.length).toLowerCase() !== needle) continue;
+      if (!/[A-Z]/.test(stem[i]) && stem[i - 1] !== '_') continue;
+      const candidate = stem.slice(0, i).replace(/_+$/, '');
+      if (!candidate || (best && candidate.length <= best.length)) continue;
+      if (!tokenFollowsBase(stem, candidate, [token])) continue;
+      if (isKnownObject(candidate)) best = candidate;
+    }
+  }
+  return best;
 }
 
 /**

@@ -165,6 +165,30 @@ describe('create discloses the name it actually wrote', () => {
     expect(text).toMatch(/later calls/i);
   });
 
+  it('keeps {Base}{Token}{Feature}_Extension without [ExtensionOf] when the index knows the base', async () => {
+    const ctx = buildContext();
+    const known = (params: unknown[]) =>
+      params.some(p => typeof p === 'string' && p.replace(/"/g, '').toLowerCase() === 'salestable');
+    ctx.symbolIndex.db = {
+      prepare: vi.fn(() => ({
+        all: vi.fn((...params: unknown[]) =>
+          known(params) ? [{ name: 'SalesTable', type: 'table', model: 'ApplicationSuite', extends_class: null, file_path: null }] : []),
+        get: vi.fn(() => undefined),
+        run: vi.fn(),
+      })),
+    };
+    const result = await handleCreateD365File(
+      req('class-extension', 'SalesTableCtsoCreditHold_Extension', {
+        sourceCode: 'final class SalesTableCtsoCreditHold_Extension\n{\n}',
+      }),
+      ctx,
+    );
+    expect(result.isError).toBeFalsy();
+    expect(createObject).toHaveBeenCalledWith(
+      expect.objectContaining({ objectName: 'SalesTableCtsoCreditHold_Extension' }),
+    );
+  });
+
   it('says nothing when the name came back unchanged', async () => {
     const result = await handleCreateD365File(
       req('class', 'CtsoDemoNoteService', { sourceCode: 'class CtsoDemoNoteService\n{\n}' }),

@@ -20,7 +20,8 @@ import { verifyWrittenFile, renderWriteVerification, runInlineBpCheck, membershi
 import { validateWrittenXpp } from './inlineXppValidation.js';
 import { createPhaseTimer } from '../../utils/phaseTimer.js';
 import { registerCustomModel } from '../../utils/modelClassifier.js';
-import { normalizeObjectName } from '../../utils/objectNaming.js';
+import { COC_BASE_SYMBOL_TYPES, inferExtendedBase, normalizeObjectName } from '../../utils/objectNaming.js';
+import { lookupSymbolsNocase } from '../../utils/symbolLookup.js';
 import { PackageResolver } from '../../utils/packageResolver.js';
 import { crossModelWriteRefusal, standDownNotice } from '../../utils/crossModelWriteGuard.js';
 import { resolveAnchorModel } from './writeAnchorGuard.js';
@@ -976,9 +977,19 @@ export async function handleCreateD365File(
     // tells "SalesTable + Mcp + CreditHold" — a name that already carries the token —
     // apart from a base that merely contains it. See ApplyObjectPrefixOptions.extendedBase.
     const statedBaseClass = (args.properties as Record<string, unknown> | undefined)?.baseClass;
+    // With neither, the index stands in — the same inference prepare and
+    // validate_object_naming use, so the name they predict is the name written.
     const extendedBase =
       parseExtensionOfAttribute(args.sourceCode ?? args.xmlContent ?? '')?.baseObjectName ??
-      (typeof statedBaseClass === 'string' && statedBaseClass ? statedBaseClass : undefined);
+      (typeof statedBaseClass === 'string' && statedBaseClass ? statedBaseClass : undefined) ??
+      inferExtendedBase(args.objectName, actualModelName, n => {
+        try {
+          const db = context?.symbolIndex?.getReadDb?.();
+          return !!db && lookupSymbolsNocase(db, n, { types: COC_BASE_SYMBOL_TYPES, limit: 1 }).length > 0;
+        } catch {
+          return false;
+        }
+      });
     const finalObjectName = normalizeObjectName(
       args.objectName,
       args.objectType,

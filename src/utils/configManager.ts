@@ -1567,12 +1567,14 @@ class ConfigManager {
     return {
       modelName,
       source,
+      // Same order as getProjectPath()/getSolutionPath(): a pinned path outranks a
+      // detected one, or the snapshot names a project writes do not go to.
       projectPath:  this.runtimeContext.projectPath  ??
-                    this.autoDetectedProject?.projectPath  ??
-                    this.pinnedPath('projectPath')?.path  ?? null,
+                    this.pinnedPath('projectPath')?.path  ??
+                    this.autoDetectedProject?.projectPath  ?? null,
       solutionPath: this.runtimeContext.solutionPath ??
-                    this.autoDetectedProject?.solutionPath ??
-                    this.pinnedPath('solutionPath')?.path ?? null,
+                    this.pinnedPath('solutionPath')?.path ??
+                    this.autoDetectedProject?.solutionPath ?? null,
       workspacePath: this.runtimeContext.workspacePath ??
                      this.config?.servers?.context?.workspacePath ?? null,
     };
