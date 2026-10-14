@@ -42,6 +42,37 @@ those are called out explicitly below.
   the element, and an ambiguous or unknown control name writes nothing.
 
 ### Fixed
+- **`workspace.projectPath` / `D365FO_PROJECT_PATH` pins the project again.**
+  The config file loads its settings as `D365FO_*` environment variables, but
+  `getProjectPath()`, `getSolutionPath()` and `get_workspace_info` read only the
+  `.mcp.json` context — so the documented "Pinned .rnrproj file" setting did
+  nothing: `Project : (not detected)`, and no write could register a file in the
+  project. Both are read now, the environment first (the order `getContext()`
+  already used), and the top-level `context` block of `.mcp.json` as well as
+  `servers.context`; the same holds for `workspace.solutionPath`. A pinned path
+  also outranks a detected one in the context snapshot, as it does for writes.
+- **`d365fo_file(action="create")` keeps an extension class name that already
+  carries the model's token after its base.** `SalesTableMcpCreditHold_Extension`
+  with `[ExtensionOf(tableStr(SalesTable))]` was written as
+  `SalesTableMcpCreditHoldMcp_Extension` — the token was only looked for at
+  either end of the name — and a delete + re-create renamed it again, so the name
+  a task asked for could not be written through the server at all. The base named
+  in `[ExtensionOf]` (or `properties.baseClass`) now decides: base, then the
+  token as its own word, means already prefixed. Without a stated base the
+  symbol index stands in: the longest known table/class/form/view/query/entity/map
+  the token follows is the base, and with none known nothing changes.
+  `validate_object_naming`, `prepare(mode="create")` and create all derive the
+  base the same way, so they predict and write the same name. Found by the model ×
+  MCP benchmark (`ref-credit-hold-extension`), where it cost three with-MCP runs
+  a check the runs without MCP passed.
+- **Form and form-extension XML passed as `xmlContent` gets the metadata
+  namespace.** Written without `xmlns="Microsoft.Dynamics.AX.Metadata.V6"`, an
+  `AxFormExtension` builds clean and then fails xppbp ("Error reading
+  FormExtension … not found"); create now adds it to the root and `xmlns=""` to
+  the grandchildren — the layout every one of the 10,530 shipped `AxForm` /
+  `AxFormExtension` files has (no other root type carries the namespace) — and
+  says so in the response. Matched pair on the benchmark's own files: as written,
+  2 xppbp errors; fixed, 0.
 - **A label could land in English in a language folder, without a word.**
   `labels(action="create")` looked up each existing language folder's
   translation by exact, case-sensitive name, and fell back to the en-US text

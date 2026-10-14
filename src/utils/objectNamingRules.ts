@@ -22,8 +22,9 @@ import {
   prefixLeadingClassName,
   endsWithInfix,
   deriveExtensionInfix,
+  inferBaseBeforeToken,
 } from './modelClassifier.js';
-import { normalizeObjectName } from './objectNaming.js';
+import { COC_BASE_SYMBOL_TYPES, normalizeObjectName } from './objectNaming.js';
 import {
   matchPrefixCandidate,
   modelWritesLandIn,
@@ -306,6 +307,15 @@ export async function checkObjectNaming(
           if (stripped) args.baseObjectName = stripped;
           break;
         }
+        // {Base}{Token}{Feature}: the token sits mid-stem, so neither end says where
+        // the base stops. The index does — the same base the writer reads from
+        // [ExtensionOf], so check and writer name the same class.
+        if (args.baseObjectName === derived) {
+          const inferred = inferBaseBeforeToken(derived, candidates, n => {
+            try { return lookupSymbolNocase(db, n, COC_BASE_SYMBOL_TYPES) != null; } catch { return false; }
+          });
+          if (inferred) args.baseObjectName = inferred;
+        }
       }
     }
 
@@ -406,7 +416,8 @@ export async function checkObjectNaming(
           // would not make. Skipped once an error stands, so a rejected name is not
           // also told what it would have been written as.
           if (!explicitPrefix && resolution.prefix && errors.length === 0) {
-            const wouldWrite = normalizeObjectName(name, 'class-extension', modelName || undefined);
+            // The base is known here, as it is to the writer from [ExtensionOf].
+            const wouldWrite = normalizeObjectName(name, 'class-extension', modelName || undefined, undefined, { extendedBase: baseObjectName });
             if (wouldWrite !== name) {
               warnings.push(
                 `The write path will not use this name as given.
