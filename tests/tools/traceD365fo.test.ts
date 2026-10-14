@@ -4,10 +4,20 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { traceD365foTool } from '../../src/tools/sdlc/traceD365fo.js';
 import { TraceInputSchema } from '../../src/tools/sdlc/trace/contract.js';
-import { accessDenied, captureFileName, isInside, sizeLimitMB, requiredFreeMB } from '../../src/tools/sdlc/trace/capture.js';
+import { accessDenied, captureFileName, isInside, readState, sizeLimitMB, requiredFreeMB, stopOwnCapture, writeState } from '../../src/tools/sdlc/trace/capture.js';
 import { analysisFiles, analysisState, boundedAnalysis } from '../../src/tools/sdlc/trace/analysis.js';
 import { readRememberedOutputDir, rememberOutputDir, resolveTraceConfig } from '../../src/config/trace.js';
 import { isToolEnabled } from '../../src/server/serverMode.js';
+
+// logman stands in for the machine: these tests never touch a real ETW session.
+const logman = vi.hoisted(() => ({ running: false }));
+vi.mock('../../src/tools/sdlc/trace/capture.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../src/tools/sdlc/trace/capture.js')>()),
+  isSessionRunning: vi.fn(async () => logman.running),
+  stopCapture: vi.fn(async () => ({ code: 0, output: '' })),
+  startCapture: vi.fn(async () => ({ code: 0, output: '' })),
+  listDrives: vi.fn(() => [{ drive: 'E:/', freeGB: 500 }]),
+}));
 
 const parse = (r: { content: Array<{ text: string }> }) => JSON.parse(r.content[0].text);
 
@@ -18,6 +28,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  logman.running = false;
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -73,7 +84,43 @@ describe('trace_d365fo', () => {
     expect(sizeLimitMB(60, 4096)).toBe(3000);
     expect(sizeLimitMB(120, 4096)).toBe(4096);
     expect(sizeLimitMB(1, 4096)).toBe(200);
+    // The 200 MB floor never overrides a lower setup limit.
+    expect(sizeLimitMB(1, 100)).toBe(100);
     expect(requiredFreeMB(3000)).toBe(4024);
+  });
+
+  describe.runIf(process.platform === 'win32')('on the VM', () => {
+    beforeEach(() => vi.stubEnv('D365FO_TRACE_ENABLED', 'true'));
+
+    it('asks for a folder instead of writing to the system drive when none is set', async () => {
+      const r = parse(await traceD365foTool({ action: 'start', mode: 'auto', seconds: 30 }, {}));
+      expect(r.code).toBe('TRACE_LOCATION_NEEDED');
+      expect(r.message).toMatch(/No trace folder is set/);
+      expect(r.drives).toEqual([{ drive: 'E:/', freeGB: 500 }]);
+    });
+
+    it("does not stop a session another instance started", async () => {
+      logman.running = true;
+      const r = await traceD365foTool({ action: 'stop' }, {});
+      expect(parse(r).code).toBe('TRACE_NOT_OURS');
+      // Nor one this instance already recorded as ended.
+      writeState({ file: 'E:/t/a.etl', outputDir: 'E:/t', mode: 'auto', startedAt: new Date().toISOString(),
+        deadline: new Date(Date.now() + 60_000).toISOString(), maxSizeMB: 200, stoppedAt: new Date().toISOString(), stopReason: 'stop' });
+      expect(parse(await traceD365foTool({ action: 'stop' }, {})).code).toBe('TRACE_NOT_OURS');
+    });
+  });
+
+  it('stops its own capture when the server shuts down, and only a running one', async () => {
+    const stop = vi.fn(async () => ({ code: 0, output: '' }));
+    await stopOwnCapture(stop);
+    expect(stop).not.toHaveBeenCalled();
+    writeState({ file: 'E:/t/a.etl', outputDir: 'E:/t', mode: 'manual', startedAt: new Date().toISOString(),
+      deadline: new Date(Date.now() + 60_000).toISOString(), maxSizeMB: 3000 });
+    await stopOwnCapture(stop);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(readState()).toMatchObject({ stopReason: 'server shut down' });
+    await stopOwnCapture(stop);
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 
   it('recognises a refused logman by its exit code, whatever the language', () => {

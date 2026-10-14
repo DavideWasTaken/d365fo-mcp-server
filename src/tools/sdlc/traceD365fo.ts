@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { isTraceEnabled, rememberOutputDir, resolveTraceConfig } from '../../config/trace.js';
 import { TraceInputSchema, traceContract, type TraceInput } from './trace/contract.js';
@@ -17,7 +16,7 @@ const reply = (data: unknown, isError = false) => ({
 });
 const fail = (code: string, message: string, extra: Record<string, unknown> = {}) => reply({ code, message, ...extra }, true);
 const ACCESS = 'logman was refused: capturing ETW needs MCP to run under an account in Administrators or Performance Log Users. Ask the user to fix the account and restart MCP; do not fall back to timer code without telling them.';
-const DEFAULT_DIR = join(tmpdir(), 'd365fo-mcp-trace');
+const NOT_OURS = `An ETW session named ${SESSION} is running that this server did not start: another MCP instance on this VM, or a logman command. Only one capture runs at a time on the VM.`;
 
 function captureView(state: CaptureState | undefined, running: boolean) {
   if (!state) return undefined;
@@ -36,17 +35,21 @@ async function start(input: Extract<TraceInput, { action: 'start' }>) {
   const config = resolveTraceConfig();
   const current = await settleExpired();
   if (current && !current.stoppedAt) return fail('TRACE_ALREADY_RUNNING', 'A capture is running. Call stop (or wait for it to end) before starting another.', { capture: captureView(current, true) });
-  if (await isSessionRunning()) return fail('TRACE_ALREADY_RUNNING', `An ETW session named ${SESSION} runs outside this server. Call stop to end it.`);
+  if (await isSessionRunning()) return fail('TRACE_ALREADY_RUNNING', `${NOT_OURS} Wait for it to end, or ask the user to end it (logman stop ${SESSION} -ets).`);
 
   const seconds = Math.min(input.seconds ?? 60, config.maxSeconds);
   const limitMB = sizeLimitMB(seconds, config.maxSizeMB);
-  const dir = resolve(input.outputDir ?? config.outputDir ?? DEFAULT_DIR);
-  const free = freeBytes(dir);
   const needMB = requiredFreeMB(limitMB);
+  const neededGB = Math.ceil(needMB / 1024);
+  const askFolder = (why: string) => fail('TRACE_LOCATION_NEEDED',
+    `${why}; a ${seconds} s capture needs about ${neededGB} GB. Ask the user which folder to use (suggest the drive with most space, not the system drive), then call start again with outputDir. The folder will be remembered.`,
+    { drives: listDrives(), neededGB });
+  const chosen = input.outputDir ?? config.outputDir;
+  if (!chosen) return askFolder('No trace folder is set yet');
+  const dir = resolve(chosen);
+  const free = freeBytes(dir);
   if (free === undefined || free / 2 ** 20 < needMB) {
-    return fail('TRACE_LOCATION_NEEDED',
-      `${dir} has ${free === undefined ? 'no readable volume' : `${Math.round(free / 2 ** 30 * 10) / 10} GB free`}; a ${seconds} s capture needs about ${Math.ceil(needMB / 1024)} GB. Ask the user which folder to use (suggest the drive with most space, not the system drive), then call start again with outputDir. The folder will be remembered.`,
-      { drives: listDrives(), neededGB: Math.ceil(needMB / 1024) });
+    return askFolder(`${dir} has ${free === undefined ? 'no readable volume' : `${Math.round(free / 2 ** 30 * 10) / 10} GB free`}`);
   }
 
   fs.mkdirSync(dir, { recursive: true });
@@ -83,6 +86,8 @@ async function stop() {
     if (!settled) return fail('TRACE_NOT_RUNNING', 'No capture to stop.');
     return reply({ stopped: true, alreadyEnded: true, capture: captureView(settled, false), nextStep: 'Call analyze.' });
   }
+  // The session name is the same for every instance on the VM; the state file is this one's.
+  if (!state || state.stoppedAt) return fail('TRACE_NOT_OURS', `${NOT_OURS} Do not stop it from here; if it is left over, the user can end it with: logman stop ${SESSION} -ets`);
   const result = await stopCapture();
   if (result.code !== 0) {
     if (accessDenied(result)) return fail('TRACE_ACCESS_DENIED', ACCESS);

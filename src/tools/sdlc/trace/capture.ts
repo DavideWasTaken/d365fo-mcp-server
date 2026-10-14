@@ -4,7 +4,8 @@
  * The session is a real-time ("-ets") one, so nothing persists in the Data Collector Sets and the
  * file name is exactly the one passed. logman itself stops it when the file reaches the size limit
  * (-max); the duration limit is ours — a timer in this process plus a deadline in the state file,
- * checked on every call, so a capture outlives neither its time nor a restart of the server.
+ * checked on every call and re-armed when the server starts. The server also stops its capture when
+ * it shuts down, so a capture does not outlive the session that started it.
  */
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -34,7 +35,7 @@ export interface CaptureState {
   deadline: string;
   maxSizeMB: number;
   stoppedAt?: string;
-  stopReason?: 'stop' | 'time limit' | 'size limit or ended outside MCP';
+  stopReason?: 'stop' | 'time limit' | 'size limit or ended outside MCP' | 'server shut down';
 }
 
 const stateFile = () => join(traceStateDir(), 'trace-session.json');
@@ -98,9 +99,9 @@ export function listDrives(): Array<{ drive: string; freeGB: number }> {
   return drives.sort((a, b) => b.freeGB - a.freeGB);
 }
 
-/** Size limit for one capture: enough for the time asked, never more than the setup allows. */
+/** Size limit for one capture: enough for the time asked (at least 200 MB), never more than the setup allows. */
 export function sizeLimitMB(seconds: number, maxSizeMB: number): number {
-  return Math.max(200, Math.min(maxSizeMB, seconds * MB_PER_SECOND));
+  return Math.min(maxSizeMB, Math.max(200, seconds * MB_PER_SECOND));
 }
 export const requiredFreeMB = (limitMB: number) => limitMB + MARGIN_MB;
 
@@ -154,6 +155,29 @@ export async function settleExpired(): Promise<CaptureState | undefined> {
 
 export function clearTimer(): void {
   if (timer) { clearTimeout(timer); timer = undefined; }
+}
+
+/**
+ * Server start: a capture an earlier run of this installation left running gets its timer back,
+ * and one already past its deadline is stopped at once.
+ */
+export function resumeTimer(): void {
+  const state = readState();
+  if (state && !state.stoppedAt) armTimer(state);
+}
+
+/**
+ * Server shutdown: stop the capture this installation started. Without it, a client closed
+ * mid-capture leaves the ETW session writing until the next call to the tool.
+ */
+export async function stopOwnCapture(stop: () => Promise<LogmanResult> = stopCapture): Promise<void> {
+  const state = readState();
+  if (!state || state.stoppedAt) return;
+  clearTimer();
+  await stop();
+  state.stoppedAt = new Date().toISOString();
+  state.stopReason = 'server shut down';
+  writeState(state);
 }
 
 /**

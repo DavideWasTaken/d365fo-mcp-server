@@ -585,6 +585,15 @@ async function main() {
   onShutdown('symbol index', () => serverState.symbolIndex?.close?.());
   shutdownCoordinator.registerSignalHandlers({ stdio: isStdioMode });
 
+  // An ETW capture keeps its deadline across a restart, and stops with the server
+  // that started it — see src/tools/sdlc/trace/capture.ts.
+  const { isTraceEnabled } = await import('./config/trace.js');
+  if (isTraceEnabled() && process.platform === 'win32') {
+    const { resumeTimer, stopOwnCapture } = await import('./tools/sdlc/trace/capture.js');
+    resumeTimer();
+    onShutdown('ETW capture', () => stopOwnCapture());
+  }
+
   // Start the AosService drive scan now, off the event loop, in both transports.
   // Every path that needs a packages path reads a cache, and whoever fills it
   // pays for the probes — on a machine with a disconnected mapped network drive
