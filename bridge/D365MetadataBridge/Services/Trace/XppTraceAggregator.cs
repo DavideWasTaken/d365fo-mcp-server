@@ -46,9 +46,10 @@ namespace D365MetadataBridge.Services.Trace
     /// Turns a stream of X++ enter/exit and SQL events into per-method and per-statement totals.
     ///
     /// Accuracy rules, each one stated in the result:
-    /// - Frames pair per thread (process id + thread id) on a stack. ETW gives no event for an
-    ///   exception unwinding a method, so an exit whose method is deeper in the stack closes the
-    ///   frames above it at that exit's time (an upper bound) and counts them.
+    /// - Frames pair per thread (process id + thread id) on a stack. An exception unwinding X++
+    ///   methods still logs their exits, caught or not (measured on a dev VM, 7.0.7858.111). An
+    ///   exit whose method is deeper in the stack (a lost event) closes the frames above it at
+    ///   that exit's time (an upper bound) and counts them.
     /// - An exit with no matching frame belongs to a frame entered before the capture started: it
     ///   is counted and ignored, never guessed. Frames still open at the end are not added to the
     ///   totals; the longest ones are listed with their time so far (a lower bound).
@@ -113,6 +114,8 @@ namespace D365MetadataBridge.Services.Trace
             public int FocusDepth;
             public bool MatchedFocus;
             public readonly Dictionary<string, int> RootCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            /// <summary>Roots a focus method ran under, listed first in threads[].roots.</summary>
+            public readonly HashSet<string> FocusRoots = new HashSet<string>(StringComparer.Ordinal);
         }
 
         private readonly XppTraceOptions options;
@@ -169,6 +172,7 @@ namespace D365MetadataBridge.Services.Trace
             if (focus) { ts.MatchedFocus = true; ts.FocusDepth++; }
             var frame = new Frame { Method = m, Start = e.Ticks, IsFocus = focus, InScope = !options.SubtreeOnly || ts.FocusDepth > 0 };
             ts.Stack.Push(frame);
+            if (focus && ts.FocusRoots.Count < 8) ts.FocusRoots.Add(ts.Stack.Last().Method); // Last() is the bottom
             ts.OnStack[m] = ts.OnStack.TryGetValue(m, out var d) ? d + 1 : 1;
             if (frame.InScope) Stat(ts.Methods, m).Calls++;
         }
@@ -285,7 +289,9 @@ namespace D365MetadataBridge.Services.Trace
                 {
                     ProcessId = t.ProcessId, ThreadId = t.ThreadId, Selected = selected.Contains(t),
                     XppEnters = t.Enters, SqlStatements = t.SqlEvents, SpanSeconds = Seconds(t.Last - t.First),
-                    Roots = t.RootCounts.OrderByDescending(r => r.Value).Take(3).Select(r => r.Key).ToList(),
+                    Roots = t.FocusRoots.OrderByDescending(r => t.RootCounts.TryGetValue(r, out var c) ? c : 0)
+                        .Concat(t.RootCounts.Where(r => !t.FocusRoots.Contains(r.Key)).OrderByDescending(r => r.Value).Select(r => r.Key))
+                        .Take(3).ToList(),
                     Sessions = t.Sessions.Take(3).ToList(), Users = t.Users.Take(3).ToList(),
                 }).ToList();
             if (selected.Count == 0)
@@ -413,7 +419,7 @@ namespace D365MetadataBridge.Services.Trace
             if (result.Pairing.FramesOpenAtEnd > 0)
                 result.Caveats.Add($"{result.Pairing.FramesOpenAtEnd} frames were still open at the end; they are not in the totals, see openAtEnd for their time so far.");
             if (result.Pairing.FramesClosedByOuterExit > 0)
-                result.Caveats.Add($"{result.Pairing.FramesClosedByOuterExit} frames had no exit of their own and were closed by an outer method's exit (an exception unwinding, or a lost event); their time is an upper bound.");
+                result.Caveats.Add($"{result.Pairing.FramesClosedByOuterExit} frames had no exit of their own and were closed by an outer method's exit (a lost event); their time is an upper bound.");
             if (options.Focus.Count > 0 && methods.Keys.Any(m => m == "Batch::insert" || m == "BatchHeader::save")
                 && !selected.Any(t => t.RootCounts.Keys.Any(r => r.StartsWith("BatchRun::", StringComparison.Ordinal))))
                 result.Caveats.Add("The focus threads scheduled batch tasks (Batch::insert / BatchHeader::save) and none was seen running under BatchRun::. If this is the dialog or controller (a short thread in the web process), the work runs later in Batch.exe: analyse again with focus on the task's class and pid set to Batch.exe, whose threads[].roots start with BatchRun:: when the task began inside the capture.");

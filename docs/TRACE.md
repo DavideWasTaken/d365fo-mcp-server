@@ -88,8 +88,9 @@ its callers. What it cannot know is stated, not guessed:
   methods. Rankings and ratios are reliable; absolute seconds are not the untraced run's.
 - Exits whose enter came before the capture are counted and ignored; frames still open at the end
   are listed in `openAtEnd` with their time so far (a lower bound); a frame closed by an outer
-  method's exit (an exception unwinding, or a lost event) is counted and its time is an upper
-  bound.
+  method's exit (a lost event) is counted and its time is an upper bound. An exception does not
+  cause this: unwinding X++ methods still log their exits, whether the exception is caught or
+  reaches the infolog (measured on a development VM).
 - The share of SQL is computed over `busySeconds`: the time the selected threads spent inside X++
   frames, plus SQL issued outside any frame. Not the wall-clock span, and not the threads' spans,
   which an idle pool thread would dilute. In a capture taken mid-run, time in the outer method's own
