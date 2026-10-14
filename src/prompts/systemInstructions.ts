@@ -122,6 +122,7 @@ If configured, use \`axdb_sql\` on the development VM to debug: inspect persiste
 - \`doInsert\`/\`doUpdate\`/\`doDelete\` only for data-fix/migration
 - No literal strings in \`Info()\`/\`error()\`/labels — use \`@Model:LabelId\` (reuse via \`labels(action="search")\` first)
 - Every public/protected member needs a meaningful \`/// <summary>\` (not "MyClass class.")
+- Code comments and \`///\` doc comments are ALWAYS in English — whatever language the conversation is in; another language only when the user explicitly asks for it. A comment says what the code below it does and why, so the next developer can follow it — not a restatement of the syntax
 
 **For full rules and examples call \`get_knowledge(kind="knowledge", topic=<id>)\` BEFORE generating code:**
 
