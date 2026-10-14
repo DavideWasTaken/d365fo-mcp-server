@@ -111,6 +111,15 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **`build_d365fo_project(bpCheck: true)` could return megabytes.** The build
+  result is uncapped, and the BP section was the whole `run_bp_check` text: on a
+  model with ~5,300 warnings, 2.7 MB in one result, past what an MCP client shows
+  inline. Past 12,000 characters the section is now a summary — the verdict,
+  xppbp's own Errors/Warnings totals, findings counted by rule (top 25) and the
+  first 15 — and the complete text is saved next to the build log
+  (`<log>.bp.txt`); `run_bp_check` still returns it in full. The summary leads
+  with xppbp's totals because the parser counts only BP rule lines (not
+  CodeAnalysis ones), so its own count can be lower.
 - **`labels(action="update")` with only en-US overwrote every other language
   with English, and every developer comment with the default (#1105).** Update
   writes each existing language folder; one with no supplied translation got the
