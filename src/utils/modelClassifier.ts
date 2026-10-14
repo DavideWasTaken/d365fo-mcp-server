@@ -354,12 +354,20 @@ export function tokenFollowsBase(stem: string, base: string, tokens: string[]): 
  * Each place a token starts as its own word inside the stem splits it into a
  * candidate base; the longest candidate `isKnownObject` accepts wins. Undefined
  * when none is known — the stem is then left to the end-of-stem rules.
+ *
+ * Also undefined when the WHOLE stem is a known object: then it is the base, and
+ * the token inside it is part of that base's own name. AgreementAutolinkHelper and
+ * AgreementAutolinkHelperSalesLine both ship, so under the token "Sales" the shorter
+ * one read as the base, the bare AgreementAutolinkHelperSalesLine_Extension as
+ * already prefixed — and prepare predicted a name create (which reads the real base
+ * from [ExtensionOf]) does not write.
  */
 export function inferBaseBeforeToken(
   stem: string,
   tokens: string[],
   isKnownObject: (name: string) => boolean,
 ): string | undefined {
+  if (isKnownObject(stem)) return undefined;
   let best: string | undefined;
   for (const token of tokens) {
     if (!token) continue;
