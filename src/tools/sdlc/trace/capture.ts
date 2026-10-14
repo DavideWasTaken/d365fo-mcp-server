@@ -8,7 +8,7 @@
  */
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
-import { dirname, join, parse, resolve } from 'node:path';
+import { dirname, join, parse, resolve, win32 } from 'node:path';
 import { traceStateDir } from '../../../config/trace.js';
 
 export const SESSION = 'd365fo-mcp-trace';
@@ -156,11 +156,14 @@ export function clearTimer(): void {
   if (timer) { clearTimeout(timer); timer = undefined; }
 }
 
-/** Whether file lies inside dir (case-insensitive, as on Windows). */
+/**
+ * Whether file lies inside dir (case-insensitive, as on Windows). Windows path rules on every
+ * platform: elsewhere "\" is not a separator, so "K:\t\..\a.etl" would stay one name inside dir.
+ */
 export function isInside(file: string, dir: string): boolean {
-  const f = resolve(file).toLowerCase();
-  const d = resolve(dir).toLowerCase().replace(/[\\/]+$/, '');
-  return f.startsWith(`${d}\\`) || f.startsWith(`${d}/`);
+  const f = win32.resolve(file).toLowerCase();
+  const d = win32.resolve(dir).toLowerCase().replace(/[\\/]+$/, '');
+  return f.startsWith(`${d}\\`);
 }
 
 export function captures(dir: string): Array<{ file: string; sizeMB: number; modified: string }> {
