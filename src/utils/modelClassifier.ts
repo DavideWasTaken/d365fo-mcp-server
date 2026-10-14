@@ -76,6 +76,19 @@ export function getObjectSuffix(): string {
 }
 
 /**
+ * True when the operator chose NO prefix at all (naming.prefixSource=none, env
+ * EXTENSION_PREFIX_SOURCE=none) — the setting for suffix-based conventions
+ * (issue #1085). New objects, fields and methods then keep the name as given:
+ * nothing is inferred from the model, EXTENSION_PREFIX is ignored, and the model
+ * name is NOT used as a fallback prefix. Extension elements and classes still
+ * need a collision-avoiding token, so they embed the model name (the Visual
+ * Studio default) — see getExtensionNamingStyle / getExtensionClassNamingStyle.
+ */
+export function isNoPrefixMode(): boolean {
+  return process.env.EXTENSION_PREFIX_SOURCE?.trim().toLowerCase() === 'none';
+}
+
+/**
  * Resolve the extension-naming style from the environment.
  *
  *  - 'prefix' (default): extension elements and extension classes embed the
@@ -92,6 +105,8 @@ export function getObjectSuffix(): string {
  * (including unset) resolves to 'prefix' so existing setups are unchanged.
  */
 export function getExtensionNamingStyle(): 'prefix' | 'model-name' {
+  // With no prefix there is no infix to embed: the model name is the token.
+  if (isNoPrefixMode()) return 'model-name';
   return process.env.EXTENSION_NAMING_STYLE?.trim().toLowerCase() === 'model-name'
     ? 'model-name'
     : 'prefix';
@@ -123,6 +138,8 @@ export function getExtensionNamingStyle(): 'prefix' | 'model-name' {
  * infix there would not parse as an AOT name.
  */
 export function getExtensionClassNamingStyle(): 'prefix' | 'model-name' | 'prefix-leading' {
+  // Both prefix styles embed a prefix that does not exist under naming.prefixSource=none.
+  if (isNoPrefixMode()) return 'model-name';
   const configured = process.env.EXTENSION_CLASS_NAMING_STYLE?.trim().toLowerCase();
   if (configured === 'prefix') return 'prefix';
   if (configured === 'model-name') return 'model-name';
@@ -203,9 +220,11 @@ export function applyObjectSuffix(objectName: string, suffix: string): string {
  *    to learn from, e.g. one that is still empty.
  * 3. modelName itself, when nothing else is configured.
  *
- * Set EXTENSION_PREFIX_SOURCE=config to pin step 2 above step 1.
+ * Set EXTENSION_PREFIX_SOURCE=config to pin step 2 above step 1, or
+ * EXTENSION_PREFIX_SOURCE=none for no prefix at all (all three steps skipped).
  */
 function resolveRawPrefix(modelName: string): string {
+  if (isNoPrefixMode()) return '';
   const learned = modelName ? getInferredModelPrefix(modelName) : null;
   if (learned?.regular) return learned.regular;
 
@@ -478,7 +497,10 @@ export function applyObjectPrefix(
   modelName?: string,
   options?: ApplyObjectPrefixOptions,
 ): string {
-  if (!prefix) return objectName;
+  // No prefix: a new object keeps its name. An extension still gets the model-name
+  // token when the operator chose no prefix on purpose (naming.prefixSource=none) —
+  // the branches below handle that, and leave regular objects untouched.
+  if (!prefix && !(modelName && isNoPrefixMode())) return objectName;
 
   // model-name style embeds the model name instead of the prefix infix for extension
   // elements/classes only (VS default); regular new objects are unaffected.

@@ -328,9 +328,10 @@ export const SETTINGS: Setting[] = [
       'Your ISV/customer prefix. Prepended to every generated object, field and method name and enforced by the ' +
       'naming validator, so BP checks pass on the first build. Used as the **fallback**: when the active model\'s ' +
       'existing objects already show a prefix, that one wins — see ' +
-      '[Where the prefix comes from](CUSTOM_EXTENSIONS.md#where-the-prefix-comes-from).',
+      '[Where the prefix comes from](CUSTOM_EXTENSIONS.md#where-the-prefix-comes-from). ' +
+      'No prefix at all (a suffix convention)? Leave it empty and set `naming.prefixSource` to `none`; empty ' +
+      'on its own still falls back to the model name.',
     placeholder: 'ISV_',
-    required: true,
   },
   {
     path: 'naming.prefixSource',
@@ -342,12 +343,15 @@ export const SETTINGS: Setting[] = [
     description:
       'Whether the effective prefix is learned from the active model\'s own objects or pinned to the configured ' +
       '`naming.prefix`. Pin it when one model carries several feature prefixes that share a stem — inference learns ' +
-      'the shared stem, while the objects you write need the full one. See ' +
+      'the shared stem, while the objects you write need the full one. `none` is for teams that use no prefix ' +
+      '(e.g. a suffix convention with `naming.suffix`): new objects, fields and methods keep the name as given, ' +
+      'and extension elements/classes embed the model name (CustTable.MyModel, CustTable_MyModel_Extension). See ' +
       '[Where the prefix comes from](CUSTOM_EXTENSIONS.md#where-the-prefix-comes-from).',
     default: 'model',
     choices: [
       { value: 'model', hint: 'the model\'s own objects decide, falling back to naming.prefix' },
       { value: 'config', hint: 'always naming.prefix, inference off (pre-1.8.2 behaviour)' },
+      { value: 'none', hint: 'no prefix at all — names as given; extensions embed the model name' },
     ],
   },
   {
