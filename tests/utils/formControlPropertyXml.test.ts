@@ -132,6 +132,13 @@ describe('upsertFormControlProperty — a control of the agent\'s own form', () 
     expect(r.xml).toContain('<Text>A &amp; &lt;B&gt;</Text>');
   });
 
+  it('sees an escaped value as the same value, so setting it again writes nothing', () => {
+    const once = ok(upsertFormControlProperty(FORM, 'PlainButton', 'Text', 'A & <B>')).xml;
+    const again = ok(upsertFormControlProperty(once, 'PlainButton', 'Text', 'A & <B>'));
+    expect(again.changed).toBe(false);
+    expect(again.xml).toBe(once);
+  });
+
   it('keeps CRLF files CRLF', () => {
     const crlf = FORM.replace(/\n/g, '\r\n');
     const r = ok(upsertFormControlProperty(crlf, 'PostButton', 'NeedsRecord', 'Yes'));
