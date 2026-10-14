@@ -478,6 +478,26 @@ function layoutChecks(inst: Instance): CheckResult[] {
 }
 
 /**
+ * A SQL server configured while SQL itself stays off.
+ *
+ * axdb_sql is published only when sql.enabled is true AND a server is set
+ * (isAxDbConfigured). The wizard writes both together, but a config edited by
+ * hand can carry the server alone — and then the tool is simply absent, with
+ * nothing saying why.
+ */
+export function checkSqlSwitch(store: SettingsStore, label: string): CheckResult | null {
+  const server = readSetting(store, settingByPath('sql.server')!);
+  const enabled = readSetting(store, settingByPath('sql.enabled')!);
+  if (typeof server !== 'string' || !server.trim()) return null;
+  if (enabled === true || /^(true|1|yes|on)$/i.test(String(enabled ?? '').trim())) return null;
+  return {
+    severity: 'warn',
+    message: `${label}: sql.server is set (${server}) but sql.enabled is not true — axdb_sql is not published`,
+    fix: `set sql.enabled to true in ${store.configPath}, or run: d365fo-mcp config sql`,
+  };
+}
+
+/**
  * The symbol index is SQLite, served by node:sqlite — core since Node 22, and
  * the reason this package has no native dependency and installs without
  * lifecycle scripts. Two things can still be absent on an unusual runtime: the
@@ -532,24 +552,6 @@ export function checkCheckoutFreshness(version: string, status: BranchStatus | n
   return {
     severity: 'ok',
     message: `d365fo-mcp ${version} (git checkout) — ${status.branch} is up to date with ${status.upstream} as of the last fetch`,
-  };
-}
-
-/**
- * A SQL server configured while SQL itself stays off.
- *
- * The runtime publishes axdb_sql only when sql.enabled is true AND a server is
- * set. The wizard writes both together, but a config edited by hand can carry
- * the server alone — and then the tool is simply absent, with nothing saying why.
- */
-export function checkSqlSwitch(store: SettingsStore, label: string): CheckResult | null {
-  const server = readSetting(store, settingByPath('sql.server')!);
-  const enabled = readSetting(store, settingByPath('sql.enabled')!);
-  if (typeof server !== 'string' || !server.trim() || enabled === true) return null;
-  return {
-    severity: 'warn',
-    message: `${label}: sql.server is set (${server}) but sql.enabled is not true — axdb_sql is not published`,
-    fix: `set sql.enabled to true in ${store.configPath}, or: ${cliCommand('config sql')}`,
   };
 }
 
