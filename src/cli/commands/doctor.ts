@@ -12,6 +12,7 @@ import { settingByPath } from '../../config/settings.js';
 import { bridgeBuildCommand, cliCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { bridgeFreshness, type BridgeFreshness } from '../bridgeSources.js';
 import { commandExists } from '../exec.js';
+import { freeBytes } from '../../tools/sdlc/trace/capture.js';
 import { isLegacyInstanceLayout, listInstances, type Instance } from '../instances.js';
 import { branchStatus, type BranchStatus } from '../gitState.js';
 import { checkRelease } from '../npmRegistry.js';
@@ -553,6 +554,29 @@ export function checkSqlSwitch(store: SettingsStore, label: string): CheckResult
 }
 
 /**
+ * Tracing switched on: where captures will go and whether that drive can take one.
+ *
+ * A capture of a busy batch grows by tens of MB per second; the tool refuses to start
+ * without room, so a full drive is better said here than discovered mid-investigation.
+ */
+export function checkTrace(store: SettingsStore, label: string, free: (dir: string) => number | undefined = freeBytes): CheckResult | null {
+  if (readSetting(store, settingByPath('trace.enabled')!) !== true) return null;
+  if (!isWindows) {
+    return { severity: 'warn', message: `${label}: trace.enabled is true, but ETW capture runs only on the Windows D365FO VM — trace_d365fo will refuse`, fix: `set trace.enabled to false in ${store.configPath}` };
+  }
+  const dir = readSetting(store, settingByPath('trace.outputDir')!);
+  if (typeof dir !== 'string' || !dir.trim()) {
+    return { severity: 'ok', message: `${label}: tracing enabled — no trace.outputDir; the first capture proposes a drive with space and remembers it. Needs Administrators or Performance Log Users.` };
+  }
+  const bytes = free(dir);
+  const gb = bytes === undefined ? undefined : Math.round(bytes / 2 ** 30 * 10) / 10;
+  if (gb === undefined || gb < 4) {
+    return { severity: 'warn', message: `${label}: trace.outputDir ${dir} has ${gb === undefined ? 'no readable volume' : `${gb} GB free`} — a one-minute capture of a busy batch can take 3 GB`, fix: `point trace.outputDir at a drive with space: ${cliCommand('config trace')}` };
+  }
+  return { severity: 'ok', message: `${label}: tracing enabled — captures in ${dir} (${gb} GB free). Needs Administrators or Performance Log Users.` };
+}
+
+/**
  * A built bridge, and whether it was compiled from the sources now on disk.
  *
  * `git pull` or an npm update moves the sources without touching the binary,
@@ -676,6 +700,8 @@ export async function doctorCommand(): Promise<void> {
   for (const r of checkPackagesRoot(root.store, 'Root')) emit(r);
   for (const r of checkPathSetting(root.store, 'Root', 'environment.customPackagesPath')) emit(r);
   for (const r of checkPathSetting(root.store, 'Root', 'environment.microsoftPackagesPath')) emit(r);
+  const rootTrace = checkTrace(root.store, 'Root');
+  if (rootTrace) emit(rootTrace);
   const rootSql = checkSqlSwitch(root.store, 'Root');
   if (rootSql) emit(rootSql);
 
@@ -743,6 +769,8 @@ export async function doctorCommand(): Promise<void> {
       for (const r of checkPathSetting(target.store, `Instance '${inst.name}'`, 'environment.microsoftPackagesPath')) emit(r);
       const instanceSql = checkSqlSwitch(target.store, `Instance '${inst.name}'`);
       if (instanceSql) emit(instanceSql);
+      const instanceTrace = checkTrace(target.store, `Instance '${inst.name}'`);
+      if (instanceTrace) emit(instanceTrace);
       emit(checkDb(target.store, resolve(inst.dir, 'data', 'xpp-metadata.db'), `Instance '${inst.name}'`));
       if (isWindows && isXppConfigStale(target.store)) {
         emit({

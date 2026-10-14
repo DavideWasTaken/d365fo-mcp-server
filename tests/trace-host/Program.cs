@@ -27,7 +27,9 @@ internal static class Program
         ProcessFilter();
         StatementNormalisation();
         BindIsCountedOnly();
-        ShareUsesThreadSpans();
+        ShareUsesBusyTime();
+        TempTablesNormalised();
+        BatchDispatcherCaveat();
         ResultSerialises();
 
         Console.WriteLine(failures == 0 ? "PASS: trace aggregation" : "FAIL: " + failures + " check(s)");
@@ -121,6 +123,7 @@ internal static class Program
         Check(r.TopSqlByTime.Count == 1 && r.TopSqlByTime[0].Callers[0].Method == "B", "sql: caller is the top of the stack");
         Near(r.TopSqlByTime[0].ExecutionSeconds, 0.5, "sql: execution seconds");
         Near(r.TopSqlByTime[0].PreparationSeconds, 0.1, "sql: preparation seconds");
+        Near(r.TopSqlByTime[0].Callers[0].Seconds ?? -1, 0.6, "sql: caller carries its seconds");
     }
 
     private static void RepeatedSql()
@@ -156,7 +159,7 @@ internal static class Program
         Check(r.TopInclusive.Any(x => x.Method == "X"), "subtree: work inside focus counted");
         Check(!r.TopInclusive.Any(x => x.Method == "Y" || x.Method == "BatchRun::run"), "subtree: work outside focus excluded");
         Check(r.TopSqlByTime.Count == 1 && r.TopSqlByTime[0].Statement == "SELECT IN", "subtree: only SQL inside focus");
-        Near(r.Totals!.SqlShareOfTime ?? -1, 0.2 / 3, "subtree: share over time inside focus");
+        Near(r.Totals!.SqlShareOfTime ?? -1, Math.Round(0.2 / 3, 4), "subtree: share over time inside focus (rounded to 4 places)");
     }
 
     private static void ProcessFilter()
@@ -182,17 +185,46 @@ internal static class Program
         Check(!JsonSerializer.Serialize(r).Contains("parameterValue"), "bind: no value field in the result");
     }
 
-    private static void ShareUsesThreadSpans()
+    private static void ShareUsesBusyTime()
     {
-        // Two threads of 10 s each, 1 s of SQL each: 2 / 20 = 10 %, not 2 / 10 (wall span).
+        // Thread 1 works for 10 s; thread 2 spans 10 s but works 1 s + 1 s, with 0.5 s of SQL
+        // between its calls. SQL 2.5 s over busy 12.5 s = 20 %, not 2.5 / 20 thread-seconds.
         var r = Run(new[]
         {
             Enter(0, "A", tid: 1), Sql(5, "S1", 1, tid: 1), Exit(10, "A", tid: 1),
-            Enter(0, "B", tid: 2), Sql(5, "S2", 1, tid: 2), Exit(10, "B", tid: 2),
+            Enter(0, "B", tid: 2), Sql(0.5, "S2", 1, tid: 2), Exit(1, "B", tid: 2),
+            Sql(5, "S3", 0.5, tid: 2),
+            Enter(9, "C", tid: 2), Exit(10, "C", tid: 2),
         });
         Near(r.Totals!.ThreadSeconds, 20, "share: thread seconds summed");
-        Near(r.Totals!.SqlShareOfTime ?? -1, 0.1, "share: SQL over thread seconds");
+        Near(r.Totals!.BusySeconds, 12.5, "share: busy = root frames + SQL outside frames");
+        Near(r.Totals!.SqlShareOfTime ?? -1, 0.2, "share: SQL over busy time");
         Near(r.Span!.WallSeconds, 10, "share: wall span reported separately");
+        Check(r.TopSqlByTime.Any(x => x.Statement == "S3" && x.Callers[0].Method == XppTraceAggregator.NoFrame), "share: frameless SQL attributed to no frame");
+    }
+
+    private static void TempTablesNormalised()
+    {
+        // One statement on a session's temp table, run by two sessions: one row, table id kept.
+        var r = Run(new[]
+        {
+            Enter(0, "A"),
+            Sql(1, "INSERT INTO tempdb.\"DBO\".t18093BatchHOST01_15772_0123abcd (X) VALUES (?)", 0.1),
+            Sql(2, "INSERT INTO tempdb.\"DBO\".t18093BatchHOST01_9944_89ef4567 (X) VALUES (?)", 0.1),
+            Exit(3, "A"),
+        });
+        Check(r.TopSqlByCount.Count == 1 && r.TopSqlByCount[0].Executions == 2, "tempdb: sessions merged into one statement");
+        Check(r.TopSqlByCount[0].Statement == "INSERT INTO tempdb.\"DBO\".t18093_* (X) VALUES (?)", "tempdb: normalised to the table id, got " + r.TopSqlByCount[0].Statement);
+    }
+
+    private static void BatchDispatcherCaveat()
+    {
+        var dialog = Run(new[] { Enter(0, "MyJob::run"), Enter(1, "BatchHeader::save"), Exit(2, "BatchHeader::save"), Exit(3, "MyJob::run") },
+            new XppTraceOptions { Focus = new[] { "MyJob" } });
+        Check(dialog.Caveats.Any(c => c.Contains("Batch.exe")), "batch: a focus that only schedules tasks points at Batch.exe");
+        var task = Run(new[] { Enter(0, "BatchRun::runJobStaticCodeFromBuffer"), Enter(1, "MyJob::run"), Enter(2, "Batch::insert"), Exit(3, "Batch::insert"), Exit(4, "MyJob::run"), Exit(5, "BatchRun::runJobStaticCodeFromBuffer") },
+            new XppTraceOptions { Focus = new[] { "MyJob" } });
+        Check(!task.Caveats.Any(c => c.Contains("Batch.exe")), "batch: no hint when the task itself runs under BatchRun");
     }
 
     private static void ResultSerialises()

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace D365MetadataBridge.Services.Trace
 {
@@ -105,6 +106,10 @@ namespace D365MetadataBridge.Services.Trace
             public long First = long.MaxValue, Last, Enters, Exits, SqlEvents, BindEvents;
             public long ExitsWithoutFrame, FramesClosedByOuterExit;
             public long FocusTicks;
+            /// <summary>Time inside closed root frames: the thread running X++, not idling between calls.</summary>
+            public long BusyTicks;
+            /// <summary>SQL issued with no X++ frame on the stack, which BusyTicks cannot contain.</summary>
+            public double SqlWithoutFrame;
             public int FocusDepth;
             public bool MatchedFocus;
             public readonly Dictionary<string, int> RootCounts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -210,14 +215,23 @@ namespace D365MetadataBridge.Services.Trace
                 parent.ChildTicks += inclusive;
                 parent.SqlChildren += f.SqlSelf + f.SqlChildren;
             }
+            else if (f.InScope)
+            {
+                ts.BusyTicks += inclusive;
+            }
         }
 
         private bool SqlInScope(ThreadState ts) => !options.SubtreeOnly || ts.FocusDepth > 0;
+
+        private static readonly Regex TempTable = new Regex(@"(tempdb\.""?dbo""?\.""?)(t\d+)[\w-]*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         private string Normalize(string? statement)
         {
             if (string.IsNullOrEmpty(statement)) return "";
             var collapsed = string.Join(" ", statement!.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            // A temp table's name carries the session that made it (t18093Batch<machine>_<pid>_<guid>),
+            // which would split one statement into one row per session: keep the table id only.
+            collapsed = TempTable.Replace(collapsed, "$1$2_*");
             return collapsed.Length > options.StatementLength ? collapsed.Substring(0, options.StatementLength) + "…" : collapsed;
         }
 
@@ -228,6 +242,7 @@ namespace D365MetadataBridge.Services.Trace
             double seconds = Math.Max(0, e.ExecutionSeconds) + Math.Max(0, e.PreparationSeconds);
             string caller = ts.Stack.Count > 0 ? ts.Stack.Peek().Method : NoFrame;
             if (ts.Stack.Count > 0) ts.Stack.Peek().SqlSelf += seconds;
+            else ts.SqlWithoutFrame += seconds;
             Stat(ts.Methods, caller).SqlStatements++;
             string key = caller + "\u0001" + Normalize(e.SqlStatement);
             if (!ts.Sql.TryGetValue(key, out var s)) { s = new SqlStat(); ts.Sql[key] = s; }
@@ -285,13 +300,18 @@ namespace D365MetadataBridge.Services.Trace
             var sql = new Dictionary<string, SqlStat>(StringComparer.Ordinal);
             var fetch = new Dictionary<string, SqlStat>(StringComparer.Ordinal);
             var open = new Dictionary<string, (int Count, long Max)>(StringComparer.Ordinal);
-            long first = long.MaxValue, last = 0, threadTicks = 0, focusTicks = 0;
+            long first = long.MaxValue, last = 0, threadTicks = 0, focusTicks = 0, busyTicks = 0;
+            double sqlWithoutFrame = 0;
             foreach (var t in selected)
             {
                 first = Math.Min(first, t.First);
                 last = Math.Max(last, t.Last);
                 threadTicks += t.Last - t.First;
                 focusTicks += t.FocusTicks;
+                busyTicks += t.BusyTicks;
+                sqlWithoutFrame += t.SqlWithoutFrame;
+                // A root frame still open at the end was busy until the thread's last event.
+                if (t.Stack.Count > 0 && t.Stack.Last().InScope) busyTicks += Math.Max(0, t.Last - t.Stack.Last().Start);
                 result.Pairing.Enters += t.Enters;
                 result.Pairing.Exits += t.Exits;
                 result.Pairing.ExitsWithoutFrame += t.ExitsWithoutFrame;
@@ -318,16 +338,22 @@ namespace D365MetadataBridge.Services.Trace
             double sqlExecution = sql.Values.Sum(s => s.Execution), sqlPreparation = sql.Values.Sum(s => s.Preparation);
             double rowFetch = fetch.Values.Sum(s => s.Execution);
             result.Span = new XppTraceSpan { FirstUtc = new DateTime(first, DateTimeKind.Utc), LastUtc = new DateTime(last, DateTimeKind.Utc), WallSeconds = Seconds(last - first) };
-            double denominator = options.SubtreeOnly ? Seconds(focusTicks) : Seconds(threadTicks);
+            // Not the threads' spans: a pool thread idle for most of the capture would dilute the share
+            // (two batch threads, one idle: 10.6% of the spans against 23.9% of the time doing work).
+            double busySeconds = busyTicks / 1e7 + sqlWithoutFrame;
+            double denominator = options.SubtreeOnly ? focusTicks / 1e7 : busySeconds;
             result.Totals = new XppTraceTotals
             {
                 ThreadSeconds = Seconds(threadTicks),
+                BusySeconds = Round(busySeconds),
                 FocusSeconds = options.Focus.Count > 0 ? Seconds(focusTicks) : (double?)null,
                 SqlExecutionSeconds = Round(sqlExecution), SqlPreparationSeconds = Round(sqlPreparation), RowFetchSeconds = Round(rowFetch),
                 SqlStatements = sql.Values.Sum(s => s.Count),
                 SqlShareOfTime = denominator > 0 ? Round((sqlExecution + sqlPreparation) / denominator) : (double?)null,
                 RowFetchShareOfTime = denominator > 0 ? Round(rowFetch / denominator) : (double?)null,
-                ShareBasis = options.SubtreeOnly ? "time inside closed focus frames" : "sum of the selected threads' spans",
+                ShareBasis = options.SubtreeOnly
+                    ? "time inside closed focus frames"
+                    : "busySeconds: time the selected threads spent inside X++ root frames, plus SQL issued outside any frame; idle gaps excluded",
             };
 
             int top = Math.Max(1, options.Top);
@@ -343,23 +369,25 @@ namespace D365MetadataBridge.Services.Trace
             result.TopInclusive = named.OrderByDescending(kv => kv.Value.InclusiveTicks).Take(top).Select(toMethod).ToList();
             result.TopCalls = named.OrderByDescending(kv => kv.Value.Calls).Take(top).Select(toMethod).ToList();
 
-            var byStatement = new Dictionary<string, (SqlStat Total, Dictionary<string, long> Callers)>(StringComparer.Ordinal);
+            var byStatement = new Dictionary<string, (SqlStat Total, Dictionary<string, SqlStat> Callers)>(StringComparer.Ordinal);
             foreach (var kv in sql)
             {
                 int split = kv.Key.IndexOf('\u0001');
                 string caller = kv.Key.Substring(0, split), statement = kv.Key.Substring(split + 1);
-                if (!byStatement.TryGetValue(statement, out var entry)) { entry = (new SqlStat(), new Dictionary<string, long>(StringComparer.Ordinal)); byStatement[statement] = entry; }
+                if (!byStatement.TryGetValue(statement, out var entry)) { entry = (new SqlStat(), new Dictionary<string, SqlStat>(StringComparer.Ordinal)); byStatement[statement] = entry; }
                 entry.Total.Count += kv.Value.Count; entry.Total.Execution += kv.Value.Execution; entry.Total.Preparation += kv.Value.Preparation;
                 entry.Total.Max = Math.Max(entry.Total.Max, kv.Value.Max);
-                entry.Callers[caller] = (entry.Callers.TryGetValue(caller, out var c) ? c : 0) + kv.Value.Count;
+                if (!entry.Callers.TryGetValue(caller, out var c)) { c = new SqlStat(); entry.Callers[caller] = c; }
+                c.Count += kv.Value.Count; c.Execution += kv.Value.Execution; c.Preparation += kv.Value.Preparation;
             }
-            Func<KeyValuePair<string, (SqlStat Total, Dictionary<string, long> Callers)>, XppTraceStatement> toStatement = kv => new XppTraceStatement
+            Func<KeyValuePair<string, (SqlStat Total, Dictionary<string, SqlStat> Callers)>, XppTraceStatement> toStatement = kv => new XppTraceStatement
             {
                 Statement = kv.Key, Executions = kv.Value.Total.Count,
                 TotalSeconds = Round(kv.Value.Total.Execution + kv.Value.Total.Preparation),
                 ExecutionSeconds = Round(kv.Value.Total.Execution), PreparationSeconds = Round(kv.Value.Total.Preparation),
                 MaxSeconds = Round(kv.Value.Total.Max),
-                Callers = kv.Value.Callers.OrderByDescending(c => c.Value).Take(3).Select(c => new XppTraceCaller { Method = c.Key, Executions = c.Value }).ToList(),
+                Callers = kv.Value.Callers.OrderByDescending(c => c.Value.Execution + c.Value.Preparation).ThenByDescending(c => c.Value.Count).Take(3)
+                    .Select(c => new XppTraceCaller { Method = c.Key, Executions = c.Value.Count, Seconds = Round(c.Value.Execution + c.Value.Preparation) }).ToList(),
             };
             result.TopSqlByTime = byStatement.OrderByDescending(kv => kv.Value.Total.Execution + kv.Value.Total.Preparation).Take(Math.Min(top, 20)).Select(toStatement).ToList();
             result.TopSqlByCount = byStatement.OrderByDescending(kv => kv.Value.Total.Count).Take(Math.Min(top, 20)).Select(toStatement).ToList();
@@ -386,6 +414,9 @@ namespace D365MetadataBridge.Services.Trace
                 result.Caveats.Add($"{result.Pairing.FramesOpenAtEnd} frames were still open at the end; they are not in the totals, see openAtEnd for their time so far.");
             if (result.Pairing.FramesClosedByOuterExit > 0)
                 result.Caveats.Add($"{result.Pairing.FramesClosedByOuterExit} frames had no exit of their own and were closed by an outer method's exit (an exception unwinding, or a lost event); their time is an upper bound.");
+            if (options.Focus.Count > 0 && methods.Keys.Any(m => m == "Batch::insert" || m == "BatchHeader::save")
+                && !selected.Any(t => t.RootCounts.Keys.Any(r => r.StartsWith("BatchRun::", StringComparison.Ordinal))))
+                result.Caveats.Add("The focus threads scheduled batch tasks (Batch::insert / BatchHeader::save) and none was seen running under BatchRun::. If this is the dialog or controller (a short thread in the web process), the work runs later in Batch.exe: analyse again with focus on the task's class and pid set to Batch.exe, whose threads[].roots start with BatchRun:: when the task began inside the capture.");
             if (options.SubtreeOnly && focusTicks == 0)
                 result.Caveats.Add("Subtree scope counted nothing closed: the focus method may have started before the capture. Use thread scope for a window taken mid-run.");
             return result;
@@ -464,6 +495,7 @@ namespace D365MetadataBridge.Services.Trace
     public sealed class XppTraceTotals
     {
         public double ThreadSeconds { get; set; }
+        public double BusySeconds { get; set; }
         public double? FocusSeconds { get; set; }
         public double SqlExecutionSeconds { get; set; }
         public double SqlPreparationSeconds { get; set; }
