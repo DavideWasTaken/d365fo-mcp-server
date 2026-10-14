@@ -959,6 +959,7 @@ async function main() {
           { name: 'build_d365fo_project',         desc: 'Compile the model locally; bpCheck/dbSync fold the BP check and the database sync into the same call' },
           { name: 'run_bp_check',                 desc: 'Run Microsoft Best Practices (xppbp.exe) analysis' },
           { name: 'axdb_sql',                     desc: 'Optional: query AxDB on the dev VM (shown only when SQL is configured)' },
+          { name: 'trace_d365fo',                 desc: 'Optional: ETW trace of X++/SQL time on the dev VM (shown only when tracing is enabled)' },
           { name: 'run_systest_class',            desc: 'Execute unit tests using SysTestConsole.exe' },
         ]},
         { icon: '🧪', category: 'Code Quality & Grounding', tools: [

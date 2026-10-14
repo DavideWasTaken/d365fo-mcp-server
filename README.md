@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**21 AI tools that know every X++ class, table, form, and EDT in your D365FO codebase**
+**22 AI tools that know every X++ class, table, form, and EDT in your D365FO codebase**
 
 > **This fork extends the existing build tool.** Builds run in the background and return a log path plus a result you collect later. With `restartAos:true`, `build_d365fo_project` completes compilation, runtime metadata generation and any requested database sync, then restarts the matching local IIS/IIS Express AOS and checks readiness, so new objects are loaded without a manual refresh or a second Visual Studio build. If restart/readiness cannot be confirmed, the tool tells the client AI to notify the user. [Build changes and usage](docs/BUILD_FEEDBACK.md#why-this-fork-changes-the-build-workflow)
 
@@ -31,7 +31,7 @@
 
 AI assistants excel at C#, Python, and JavaScript. X++ is different: your D365FO codebase is private, deeply customized, and invisible to every model — so AI confidently generates code that doesn't compile.
 
-This server pre-indexes your entire D365FO installation (580 000+ symbols across standard, ISV, and custom models) and exposes it as 21 specialized MCP tools (`axdb_sql` only once SQL is configured). Every signature, every CoC wrapper, every label, every form pattern — verified against your real metadata **before** the AI writes a single line.
+This server pre-indexes your entire D365FO installation (580 000+ symbols across standard, ISV, and custom models) and exposes it as 22 specialized MCP tools (`axdb_sql` and `trace_d365fo` only once configured). Every signature, every CoC wrapper, every label, every form pattern — verified against your real metadata **before** the AI writes a single line.
 
 ![Solution Architecture](docs/img/solution-architecture-diagram.svg)
 
@@ -169,7 +169,7 @@ Deployment guide: [docs/SETUP_AZURE.md](docs/SETUP_AZURE.md) — includes CI/CD 
 
 | Getting started | Reference | Operations |
 |-----------------|-----------|------------|
-| [Install/update this fork](#quick-start) | [All 21 tools](docs/MCP_TOOLS.md) | [Azure deployment](docs/SETUP_AZURE.md) |
+| [Install/update this fork](#quick-start) | [All 22 tools](docs/MCP_TOOLS.md) | [Azure deployment](docs/SETUP_AZURE.md) |
 | [Upstream setup guide](docs/QUICK_START.md) | [Optional AxDB SQL](docs/AXDB_SQL.md) | [Build workflow](docs/BUILD_FEEDBACK.md) |
 | [Setup scenarios A–F](docs/SETUP.md) | [`.mcp.json` reference](docs/MCP_CONFIG.md) | [DevOps pipelines](docs/SETUP_AZURE.md#azure-devops-pipelines) |
 | [Claude Code setup](docs/SETUP.md#claude-code-cli) | [Configuration](docs/CONFIGURATION.md) | [Testing](docs/TESTING.md) |

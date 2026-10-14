@@ -270,6 +270,7 @@ describe('BRIDGE_BACKED_TOOLS coverage', () => {
     run_bp_check: 'tools/runBpCheck.ts',
     run_systest_class: 'tools/sysTestRunner.ts',
     axdb_sql: 'tools/sdlc/axdbSql.ts',
+    trace_d365fo: 'tools/sdlc/traceD365fo.ts',
     review_workspace_changes: 'tools/reviewWorkspaceChanges.ts',
     undo_last_modification: 'tools/undoLastModification.ts',
     get_knowledge: 'tools/getKnowledge.ts',

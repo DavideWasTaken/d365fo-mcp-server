@@ -17,6 +17,7 @@
  */
 
 import { SQL_SETTINGS } from './sqlSettings.js';
+import { TRACE_SETTINGS } from './traceSettings.js';
 
 export type SettingType = 'string' | 'path' | 'boolean' | 'int' | 'list' | 'enum';
 
@@ -35,6 +36,7 @@ export type SectionId =
   | 'server'
   | 'bridge'
   | 'sql'
+  | 'trace'
   | 'behavior'
   | 'azure';
 
@@ -124,6 +126,11 @@ export const SECTIONS: Section[] = [
     id: 'sql',
     title: 'AxDB SQL (optional)',
     description: 'Windows-authenticated SQL access to AxDB on a development VM, for debugging.',
+  },
+  {
+    id: 'trace',
+    title: 'ETW performance trace (optional)',
+    description: 'Capture and analyse an ETW trace of X++ methods and SQL on this D365FO VM.',
   },
   {
     id: 'behavior',
@@ -554,15 +561,15 @@ export const SETTINGS: Setting[] = [
     type: 'enum',
     label: 'Tool profile',
     description:
-      'How many tools this server advertises. "full" publishes all 21 (axdb_sql only once SQL is configured). "core" publishes only the plan → discover → ' +
-      'write → build → verify loop (16 tools) and leaves out the specialist ones (extension_info, analyze_code, ' +
+      'How many tools this server advertises. "full" publishes all 22 (axdb_sql and trace_d365fo only once configured). "core" publishes only the plan → discover → ' +
+      'write → build → verify loop (17 tools) and leaves out the specialist ones (extension_info, analyze_code, ' +
       'validate_code, security_info, run_systest_class). Worth switching ' +
       'when the workspace runs several MCP servers at once: hosts stop sending the tool catalogue inline past a ' +
       'limit (VS Code: ~100 tools) and make the model search for tools first, which costs a round trip per tool.',
     default: 'full',
     choices: [
-      { value: 'full', hint: 'all 21 tools' },
-      { value: 'core', hint: '16-tool create-and-build loop' },
+      { value: 'full', hint: 'all 22 tools' },
+      { value: 'core', hint: '17-tool create-and-build loop' },
     ],
   },
   {
@@ -996,6 +1003,8 @@ export const SETTINGS: Setting[] = [
   },
   // ── sql ──────────────────────────────────────────────────────────────────
   ...SQL_SETTINGS,
+  // ── trace ────────────────────────────────────────────────────────────────
+  ...TRACE_SETTINGS,
 ];
 
 const BY_PATH = new Map(SETTINGS.flatMap(s => (s.path ? [[s.path, s] as const] : [])));

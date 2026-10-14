@@ -29,6 +29,17 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Added
+- **Optional `trace_d365fo`: measure X++ and SQL time with ETW instead of timer
+  code.** Published only when `trace.enabled` is true (`config trace`). `start`
+  runs a `logman` capture of the AOS's X++ method and SQL latency events — the
+  agent reproduces the scenario itself (`mode: auto`, e.g. through a browser
+  extension) or asks the user to (`mode: manual`) — and it stops by itself at a
+  time and size limit. `analyze` reads the `.etl` in the bridge binary
+  (`--analyze-trace`, its own process): enter/exit paired per thread,
+  exclusive/inclusive time, SQL by statement and by caller, statements repeated
+  in loops; parameter values are never returned. When the drive lacks space,
+  `start` lists the drives and remembers the folder chosen. See
+  [docs/TRACE.md](docs/TRACE.md).
 - **No prefix at all: `naming.prefixSource=none` (#1085).** For teams on a
   suffix convention (`CustomerSettings_ABC`). An empty `naming.prefix` never
   meant "no prefix": the server inferred one from the model's objects, then fell
