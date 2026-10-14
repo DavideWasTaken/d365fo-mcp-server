@@ -1132,7 +1132,10 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
       ?? translationsByLocale.get(translations[0].language.replace(/_/g, '-').toLowerCase()))?.language;
     let lastResortSourceText: string | undefined;
     if (args.overwriteExisting && lastResortSource) {
-      const sourceFolder = existingLanguages.find(l => l.toLowerCase() === lastResortSource.toLowerCase());
+      // Every folder on disk, not only the targeted ones: a `languages` scope that leaves
+      // en-US out must still recognise a copy of it.
+      const sourceFolder = [...existingLanguages, ...discoveredLanguages]
+        .find(l => l.toLowerCase() === lastResortSource.toLowerCase());
       if (sourceFolder) {
         try {
           const sourceContent = await fs.readFile(path.join(labelResourcesDir, sourceFolder, `${labelFileId}.${sourceFolder}.label.txt`), 'utf-8');

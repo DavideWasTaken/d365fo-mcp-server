@@ -119,6 +119,13 @@ describe('labels(action="update") on an existing label', () => {
     expect(reply).toContain('⚠ Kept existing text in it ("Ciao")');
   });
 
+  it('recognises a fallback copy even when the languages scope leaves en-US out', async () => {
+    await seed('it', 'Greeting=Helo\r\n ;Copied\r\n');
+    await update([{ language: 'en-US', text: 'Hello' }], { languages: ['it'] });
+    expect(await read('it')).toContain('Greeting=Hello\r\n ;Copied\r\n');
+    expect(await read('en-US')).toContain('Greeting=Helo');
+  });
+
   it('says the label was left unchanged when every targeted folder kept its text', async () => {
     const reply = await update([{ language: 'en-US', text: 'Hello' }], { languages: ['it'] });
     expect(reply).toContain('left unchanged');
