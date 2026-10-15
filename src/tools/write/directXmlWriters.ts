@@ -20,7 +20,8 @@ import { withFileLock, writeFileAtomic } from '../../utils/atomicFileWrite.js';
 import { normalizeD365Xml } from '../../utils/d365XmlNormalizer.js';
 import { insertFormExtensionControl } from '../../utils/formExtensionControlXml.js';
 import { removeFormControl } from '../../utils/formControlRemoval.js';
-import { checkNewControlPosition, formDefinesControl, placeFormControl, type PlaceFormControlSpec } from '../../utils/formControlPlacement.js';
+import { findBaseObjectXml } from '../../utils/baseObjectXml.js';
+import { checkNewControlPosition, findFormControl, formDefinesControl, placeFormControl, type PlaceFormControlSpec } from '../../utils/formControlPlacement.js';
 import { addSecurityEntryPoint, removeSecurityEntryPoint } from '../xml/securityPrivilegeXml.js';
 import { removeDiagnosticSuppression, addDiagnosticSuppression, emptySuppressionListXml } from '../../utils/ignoreDiagnosticListXml.js';
 import { buildSuppressionXml } from '../../knowledge/bpMonikers/index.js';
@@ -442,6 +443,8 @@ export const directXmlAddControl = serializedOnFile(async (
   label?: string,
   previousSibling?: string,
   positionType?: string,
+  /** What the CALLER passed (controlType above is already defaulted), for the note on a control that exists. */
+  asked?: ControlCreationArgs,
 ): Promise<{ success: boolean; message: string; skipped?: boolean } | null> => {
   try {
     const rawContent = await fs.readFile(filePath, 'utf-8');
@@ -464,14 +467,18 @@ export const directXmlAddControl = serializedOnFile(async (
         // "skipped" with a ✅ would leave it where it was while saying all is well.
         if (previousSibling || positionType) {
           // Awaited, so a throw inside it reaches the catch below like every other failure here.
-          return await placeInFile(filePath, content, { controlName, parentControl, previousSibling, positionType });
+          return withIgnoredOnExisting(
+            await placeInFile(filePath, content, { controlName, parentControl, previousSibling, positionType }),
+            asked,
+          );
         }
-        return {
+        return withIgnoredOnExisting({
           success: true,
           skipped: true,
-          message: `✅ Control '${controlName}' already present in ${filePath} — skipped (idempotent). ` +
+          message: `ℹ️ Control '${controlName}' already present${elsewhereNote(content, controlName, parentControl)} ` +
+            `in ${filePath} — skipped (idempotent). ` +
             `To move it, call add-control again with previousSibling or positionType.`,
-        };
+        }, asked);
       case 'refused':
         return { success: false, message: outcome.message };
     }
@@ -496,6 +503,69 @@ export const directXmlAddControl = serializedOnFile(async (
     return null;
   }
 });
+
+/** What add-control CREATES a control with; none of it applies to a control that already exists. */
+export interface ControlCreationArgs {
+  controlType?: string;
+  controlDataSource?: string;
+  controlDataField?: string;
+  controlLabel?: string;
+}
+
+const CREATION_ARG_NAMES = ['controlType', 'controlDataSource', 'controlDataField', 'controlLabel'] as const;
+
+/**
+ * Append the creation arguments a call on an EXISTING control did not apply. The
+ * reply used to read "✅ moved" while a controlType/controlDataField in the same call
+ * was dropped without a word — read as a re-typed or re-bound control.
+ */
+function withIgnoredOnExisting<T extends { success: boolean; message: string }>(
+  result: T,
+  asked: ControlCreationArgs | undefined,
+): T {
+  const ignored = CREATION_ARG_NAMES.filter(k => {
+    const v = asked?.[k];
+    return typeof v === 'string' && v.trim() !== '';
+  });
+  if (!result.success || ignored.length === 0) return result;
+  return {
+    ...result,
+    message:
+      `${result.message}\n⚠️ Not applied: ${ignored.map(k => `${k}="${asked?.[k]}"`).join(', ')} — the control ` +
+      `already exists, so add-control only positions it. DataSource, DataField and Label are set on an ` +
+      `existing control with modify-property and controlName; another control type needs remove-control, ` +
+      `then add-control.`,
+  };
+}
+
+/**
+ * Whether this add-control MOVES a control the form (or extension) file already
+ * defines: a position is given and the control exists. Such a call creates nothing
+ * (addBaseFormControl / directXmlAddControl), so the DataGroup and sub-pattern
+ * pre-flights — which judge a NEW control by its controlType/controlDataField —
+ * must not refuse it over arguments it never applies. One read, and only for a
+ * positioned add-control.
+ */
+export async function addControlMovesExisting(
+  args: { controlName?: string; previousSibling?: string; positionType?: string },
+  objectType: string,
+  objectName: string,
+  explicitFilePath: string | undefined,
+  symbolIndex: unknown,
+): Promise<boolean> {
+  if (objectType !== 'form' && objectType !== 'form-extension') return false;
+  if (!args.controlName || !(args.previousSibling?.trim() || args.positionType?.trim())) return false;
+  let ownXml: string | null = null;
+  if (explicitFilePath) ownXml = await fs.readFile(explicitFilePath, 'utf-8').catch(() => null);
+  ownXml ??= await findBaseObjectXml(objectType, objectName, symbolIndex).catch(() => null);
+  return !!ownXml && formDefinesControl(ownXml, args.controlName);
+}
+
+/** " (in 'Grp', not 'Design')" when the control lives under another parent than the one named. */
+function elsewhereNote(xml: string, controlName: string, parentControl: string | undefined): string {
+  const found = findFormControl(xml, controlName, parentControl);
+  return found && !found.inRequestedParent ? ` (in '${found.parentName}', not '${parentControl}')` : '';
+}
 
 /** Move a control the file defines; shared by the two writers below, which hold the file lock. */
 async function placeInFile(
@@ -548,27 +618,36 @@ export const directXmlPlaceControl = serializedOnFile(async (
  */
 export async function addBaseFormControl(
   filePath: string,
-  spec: PlaceFormControlSpec & { parentControl: string },
+  spec: PlaceFormControlSpec & { parentControl: string } & ControlCreationArgs,
   addViaBridge: () => Promise<{ success: boolean; message: string } | null>,
 ): Promise<{ success: boolean; message: string; viaXmlFallback?: boolean; skipped?: boolean } | null> {
   const positioned = !!(spec.previousSibling || spec.positionType);
   let existing = '';
   try { existing = (await fs.readFile(filePath, 'utf-8')).replace(/\r\n/g, '\n'); } catch { /* the bridge resolves the form itself */ }
   if (existing && formDefinesControl(existing, spec.controlName)) {
-    return viaXmlFallback(positioned
+    return viaXmlFallback(withIgnoredOnExisting(positioned
       ? await directXmlPlaceControl(filePath, spec)
       : {
           success: true,
           skipped: true,
-          message: `ℹ️ Control '${spec.controlName}' is already on the form — nothing added. ` +
+          message: `ℹ️ Control '${spec.controlName}' is already on the form` +
+            `${elsewhereNote(existing, spec.controlName, spec.parentControl)} — nothing added. ` +
             `To move it, call add-control again with previousSibling or positionType. File: ${filePath}`,
-        });
+        }, spec));
   }
   const refusal = positioned ? checkNewControlPosition(existing, spec) : undefined;
   if (refusal) return viaXmlFallback({ success: false, message: refusal });
   const added = await addViaBridge();
   if (!added?.success || !positioned) return added;
-  const placed = await directXmlPlaceControl(filePath, spec);
+  // The bridge has saved the control: from here every outcome is a success that says
+  // where the control is. A throw (a locked file, say) must not become ❌ over a
+  // control that IS on the form.
+  let placed: { success: boolean; message: string };
+  try {
+    placed = await directXmlPlaceControl(filePath, spec);
+  } catch (err) {
+    placed = { success: false, message: err instanceof Error ? err.message : String(err) };
+  }
   return {
     success: true,
     message: placed.success
@@ -1420,8 +1499,10 @@ export const directXmlSetFormDataSourceInsertIfEmpty = serializedOnFile(async (
 ): Promise<{ success: boolean; message: string; changed?: boolean }> => {
   const content = (await fs.readFile(filePath, 'utf-8')).replace(/^﻿/, '').replace(/\r\n/g, '\n');
   const escaped = dataSourceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Case-insensitive, like the bridge's own "already exists" check: a call naming
+  // "custtable" is skipped there as the existing CustTable, and must then find it here.
   const block = new RegExp(
-    `^(\\t+)<AxFormDataSource xmlns="">\\n\\1\\t<Name>${escaped}</Name>\\n[\\s\\S]*?^\\1</AxFormDataSource>`, 'm',
+    `^(\\t+)<AxFormDataSource xmlns="">\\n\\1\\t<Name>${escaped}</Name>\\n[\\s\\S]*?^\\1</AxFormDataSource>`, 'mi',
   ).exec(content);
   if (!block) {
     return { success: false, message: `InsertIfEmpty not set: data source '${dataSourceName}' was not found in ${filePath}.` };

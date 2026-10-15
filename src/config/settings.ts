@@ -1027,6 +1027,9 @@ export function serializeValue(setting: Setting, value: unknown): string | null 
   if (value === undefined || value === null) return null;
   switch (setting.type) {
     case 'boolean':
+      // A hand-edited `"enabled": "false"` is a non-empty string, so truthiness read it as
+      // true — and switched on what the user had written off. Text reads as parseValue reads it.
+      if (typeof value === 'string') return parseValue(setting, value) ? 'true' : 'false';
       return value ? 'true' : 'false';
     case 'int':
       return String(value);
