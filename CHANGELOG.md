@@ -124,6 +124,11 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
+  off.** The tool is published only when `sql.enabled` is true and `sql.server`
+  is set. The wizard writes both, but a hand-edited config can carry the server
+  alone, and then `axdb_sql` is simply absent. `doctor` now warns about it for
+  the root config and for each instance, and names the fix.
 - **`labels(action="update")` with only en-US overwrote every other language
   with English, and every developer comment with the default (#1105).** Update
   writes each existing language folder; one with no supplied translation got the
