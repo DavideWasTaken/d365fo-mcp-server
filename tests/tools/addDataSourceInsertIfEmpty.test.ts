@@ -196,11 +196,40 @@ describe('add-data-source — insertIfEmpty', () => {
     expect(writtenXml()).toBeUndefined();
   });
 
-  it('a skipped add (data source already there) sets nothing', async () => {
+  it('a skipped add (data source already there) still sets it on that data source', async () => {
+    // The only way to set InsertIfEmpty on an existing data source, and the way a retry
+    // finishes a call whose setter failed after the bridge had added the data source.
+    mockBridgeAddDataSource.mockResolvedValue({ success: true, skipped: true, message: 'already exists' });
+    const r = await modifyD365FileTool(addDataSource({ insertIfEmpty: false }), buildContext());
+    expect(textOf(r)).not.toContain('SKIPPED');
+    expect(textOf(r)).toContain('InsertIfEmpty=No set on the data source.');
+    expect(writtenXml()).toContain('<InsertIfEmpty>No</InsertIfEmpty>');
+  });
+
+  it('a skipped add whose data source already says it stays a skip', async () => {
+    fixture.xml = AFTER_BRIDGE_XML.replace(
+      '<LinkType>OuterJoin</LinkType>', '<LinkType>OuterJoin</LinkType>\r\n\t\t\t<InsertIfEmpty>No</InsertIfEmpty>');
     mockBridgeAddDataSource.mockResolvedValue({ success: true, skipped: true, message: 'already exists' });
     const r = await modifyD365FileTool(addDataSource({ insertIfEmpty: false }), buildContext());
     expect(textOf(r)).toContain('SKIPPED');
+    expect(textOf(r)).toContain('InsertIfEmpty is already No.');
     expect(writtenXml()).toBeUndefined();
+  });
+
+  it('a setter that cannot place it fails the call, and says a retry finishes it', async () => {
+    // No element InsertIfEmpty may precede: nowhere to put it.
+    fixture.xml = AFTER_BRIDGE_XML.replace('\t\t\t<DataSourceLinks />\r\n\t\t\t<DerivedDataSources />\r\n', '');
+    const r = await modifyD365FileTool(addDataSource({ insertIfEmpty: false }), buildContext());
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain('no insertion point');
+    expect(textOf(r)).toContain('retry the same call');
+  });
+
+  it('is refused on a data entity too, instead of being ignored', async () => {
+    const r = await modifyD365FileTool(
+      addDataSource({ objectType: 'data-entity', objectName: 'CRJournalEntity', insertIfEmpty: false }), buildContext());
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toMatch(/insertIfEmpty applies to form data sources only/);
   });
 
   it('is refused on a query, before the bridge adds anything', async () => {
