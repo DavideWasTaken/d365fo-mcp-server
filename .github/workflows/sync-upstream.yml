@@ -374,3 +374,28 @@ jobs:
           name: sync-notes
           path: ${{ runner.temp }}/sync/
           if-no-files-found: ignore
+
+  # Deletes fork branches whose work is finished: a pull request from the branch
+  # (on upstream or on this fork) was merged or closed, and the branch still
+  # points at the commit that pull request ended with. A branch with commits
+  # after its PR, with an open PR, or with no PR at all is kept; branches without
+  # a PR are listed in the run summary so they can be looked at. main and the
+  # sync's own sync/upstream-* branches are never touched. A deleted branch can
+  # be restored from its PR page.
+  prune-branches:
+    if: github.repository != 'dynamics365ninja/d365fo-mcp-server' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          sparse-checkout: .github/scripts
+
+      - name: Delete branches whose PR is merged or closed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # A test run of the sync only reports what it would delete.
+          DRY_RUN: ${{ inputs.dry_run_from != '' }}
+        run: bash .github/scripts/prune-fork-branches.sh
