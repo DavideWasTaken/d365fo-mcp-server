@@ -13,7 +13,7 @@ import path from 'path';
 import { parseStringPromise } from '../../utils/xml.js';
 import { sayOncePerSession, resetRepeatedNoteMemory } from '../../utils/repeatedNotes.js';
 import {
-  planRecoverableModification, keptBackupNote, discardBackup, settleFailedModification, type BackupSlot,
+  planRecoverableModification, keptBackupNote, discardBackup, settleFailedModification, fileUnchangedSince, type BackupSlot,
 } from './modifyBackup.js';
 import { getConfigManager, extractModelFromFilePath } from '../../utils/configManager.js';
 import { isStandardModel, resolveRegularObjectPrefixToken, resolveObjectPrefix, deriveExtensionInfix } from '../../utils/modelClassifier.js';
@@ -3007,19 +3007,19 @@ async function runModify(
         break;
       }
       case 'add-data-source': {
-        // An entity's datasource is an embedded QUERY datasource the bridge cannot add.
-        if (objectType === 'data-entity') {
-          bridgeResult = await entityAddDataSource(actualFilePath, args as any);
-          break;
-        }
-        // InsertIfEmpty is a FORM data-source property: on a query or a view the
-        // bridge would add the data source and the setter would then report it
-        // "not found" — refuse before anything is written instead.
+        // InsertIfEmpty is a FORM data-source property: on a query, a view or an entity
+        // the data source would be added and the setter would then report it "not
+        // found" (or, on an entity, never run) — refuse before anything is written instead.
         if ((args as any).insertIfEmpty !== undefined && objectType !== 'form' && objectType !== 'form-extension') {
           bridgeResult = {
             success: false,
             message: `insertIfEmpty applies to form data sources only, not to objectType "${objectType}". Omit it and retry.`,
           };
+          break;
+        }
+        // An entity's datasource is an embedded QUERY datasource the bridge cannot add.
+        if (objectType === 'data-entity') {
+          bridgeResult = await entityAddDataSource(actualFilePath, args as any);
           break;
         }
         if ((args as any).dataSourceName && (args as any).dataSourceTable) {
@@ -3033,11 +3033,20 @@ async function runModify(
             (args as any).linkType,
           );
           // The bridge's AddDataSource takes no InsertIfEmpty, so it is set on the
-          // file it just wrote. A skip added nothing, so there is nothing to set.
+          // file it just wrote. On a skip too: the data source of that name is already
+          // there, and this is the only way to set the property on it — and the way a
+          // retry finishes a call whose setter failed after the data source was added.
           const insertIfEmpty = (args as any).insertIfEmpty as boolean | undefined;
-          if (insertIfEmpty !== undefined && bridgeResult?.success && !bridgeResult.skipped) {
+          if (insertIfEmpty !== undefined && bridgeResult?.success) {
             const set = await directXmlSetFormDataSourceInsertIfEmpty(actualFilePath, (args as any).dataSourceName, insertIfEmpty);
-            bridgeResult = { ...bridgeResult, message: `${bridgeResult.message} ${set.success ? set.message : `⚠️ ${set.message}`}` };
+            bridgeResult = set.success
+              ? { ...bridgeResult, skipped: bridgeResult.skipped && !set.changed, message: `${bridgeResult.message} ${set.message}` }
+              : {
+                  success: false,
+                  message:
+                    `${bridgeResult.message} — but ${set.message} The data source is in the file; ` +
+                    `retry the same call to set InsertIfEmpty on it.`,
+                };
           }
         }
         break;
@@ -3395,10 +3404,13 @@ async function runModify(
     // describe one that did not happen (runModifyBatch drops them the same way).
     const wasSkipped = bridgeResult.skipped === true;
 
-    // Settled here, so the failure path in modifyD365FileTool leaves it alone.
+    // Settled here, so the failure path in modifyD365FileTool leaves it alone. A success
+    // can still have changed nothing (a value already set, an idempotent writer that
+    // does not say skipped): the bytes decide, as they do on the failure path.
     backup.settled = true;
-    if (backup.pending && wasSkipped) await discardBackup(backup.pending);
-    const backupNote = backup.pending && !wasSkipped ? keptBackupNote(backup.pending) : '';
+    const keepBackup = !!backup.pending && !wasSkipped && !(await fileUnchangedSince(backup.pending));
+    if (backup.pending && !keepBackup) await discardBackup(backup.pending);
+    const backupNote = keepBackup ? keptBackupNote(backup.pending!) : '';
 
     let addFieldBpNote = '';
     if (!wasSkipped && operation === 'add-field' && (objectType === 'table' || objectType === 'table-extension')) {

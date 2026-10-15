@@ -39,7 +39,7 @@ those are called out explicitly below.
   `CustTable_ABC_Extension`), since they still need a collision-avoiding token.
   `validate_object_naming` stops asking for a prefix, `generate_object` stops
   warning "No prefix resolved", and `get_workspace_info` / `doctor` report the
-  choice (doctor warns when it ignores a `naming.prefix` that is still set). The
+  choice (including the model-name class style it forces) (doctor warns when it ignores a `naming.prefix` that is still set). The
   cross-model refusal suggests the model-name extension, modify can auto-create
   a missing `Base_Model_Extension` class, report copies from `generate_object`
   carry the model token trailing (`SalesInvoiceABC`), and the type checks read
@@ -56,17 +56,22 @@ those are called out explicitly below.
   census in `formControlElementOrder.generated.ts`), since the deserializer
   drops an out-of-order element silently (#979); a property the type never
   carries (MenuItemName on a plain Button) is refused, an empty value removes
-  the element, and an ambiguous or unknown control name writes nothing.
+  the element, and an ambiguous or unknown control name writes nothing. That
+  holds for a dotted path too: its first segment must be `Design` or a control
+  of the form, so a misspelt `PostButon.Caption` is refused instead of setting
+  the form's own caption. A value that is already set is reported as a skip.
 - **Optional `axdb_sql`: read-only, live SQL against AxDB on the development VM,
   for debugging.** Off by default, and not published at all until a SQL server
   is configured, so a default install's tool list is unchanged. Setup offers it
   only on a classic AOSService VM whose `AosService\WebRoot\web.config` names
-  the AOS database (`DataAccess.DbServer` / `DataAccess.Database`), proposing
-  those values; UDE skips it, and `d365fo-mcp config sql` configures it by hand.
+  the AOS database server (`DataAccess.DbServer`; the database is
+  `DataAccess.Database`, AxDB when it is absent), proposing those values; UDE
+  skips it, and `d365fo-mcp config sql` configures it by hand.
   The bridge runs it with Windows authentication over an encrypted connection,
   opened on demand. Actions: `contract`, `status`, `schema` (columns, keys,
   defaults of a physical table) and `query` (one parameterized SELECT, bounded
-  rows and bytes). Two guards, because the dev-VM account is normally sysadmin:
+  rows and bytes, counted cell by cell as the rows stream in; a capped answer
+  cancels the rest of the result set instead of reading it to the end). Two guards, because the dev-VM account is normally sysadmin:
   the statement must be exactly one SELECT on the ScriptDom syntax tree, and
   every operation runs in a transaction that is always rolled back. Catalog
   reads are limited to database-scoped sys views (no `sys.sql_logins`,
@@ -89,6 +94,11 @@ those are called out explicitly below.
   Yes is never serialized), `true` removes it. The data source's `<Fields>` list
   stays empty: the designer fills it on save, but Microsoft ships a view data
   source with an empty one whose controls bind to its fields, so it is not needed.
+  When a data source of that name is already there (the bridge skips the add),
+  it is set on that one, which is the only way to set it on an existing data
+  source. If it cannot be placed, the call fails and says that the same call,
+  retried, finishes it. On any other type, data entities included, it is
+  refused before anything is written.
 
 ### Changed
 - **Code comments are written in English.** Neither the system instructions nor
@@ -107,10 +117,18 @@ those are called out explicitly below.
   The folder of a configured `workspace.projectPath` / `D365FO_PROJECT_PATH`
   counts as a root, a project activated with `get_workspace_info(projectPath=…)`
   does not — set `workspace.solutionsPath` to the folder holding your projects.
+  That switch now says so at once (new objects are written but not added to the
+  project) instead of leaving it to a "failed to add to project" on every later
+  create. Activating the project the server itself detected keeps its root.
   `delete` still removes its own entry from any project listing it, since a
   dangling include stops the project loading.
 
 ### Fixed
+- **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
+  off.** The tool is published only when `sql.enabled` is true and `sql.server`
+  is set. The wizard writes both, but a hand-edited config can carry the server
+  alone, and then `axdb_sql` is simply absent. `doctor` now warns about it for
+  the root config and for each instance, and names the fix.
 - **`axdb_sql` refused `maxRows` and `parameters` a client sent as text.** The
   MCP inputSchema declares only `action` (the strict schema is the contract), so
   a client has no type for the other parameters and may send `maxRows: "50"` or
@@ -124,16 +142,23 @@ those are called out explicitly below.
   (the VS project name, else the labelFileId) as its comment. Now, for a label that
   already exists in a folder, update writes the text only where the call supplies
   a translation (exact, parent or regional match) — a folder that would only get
-  the fallback keeps its text, unless that text is a copy of the fallback source's
-  current text, which follows the update — and replaces the comment only with a
-  `comment`, `defaultComment` or `description` the call states. The reply lists
+  the fallback keeps its text, unless that text is a copy of the current en-US
+  text, which follows the update. Only en-US counts as a copy source: when a call
+  leaves en-US out, en-US is never taken for a copy of the language it supplies,
+  although two languages often share a word (Status, Name, Filter). A genuine
+  translation that reads exactly like the old English cannot be told apart from
+  such a copy, and follows it too. Update replaces the comment only with a
+  `comment`, `defaultComment` or `description` the call states, and adds none to
+  a label that had none; text and comment come from the same entry when a locale
+  is given twice. The reply lists
   the kept folders with their text (bulk mode too). A folder where the label is
   missing still gets it, and create is unchanged.
 - **Modify no longer leaves `.backup-*` files for calls that changed nothing.**
   Outside git the pre-modify copy was taken before the operation was validated,
   so every refused call left a copy of an unchanged file beside the AOT source —
   on a TFVC workspace, a pending add each. The copy is still taken first, and is
-  now removed when the call ends without changing the file (refusal or skip). A
+  now removed when the call ends without changing the file: a refusal, a skip,
+  or a success that changed nothing, such as a value that was already set. A
   file created in the same session gets none (undo deletes it), so `create` with
   `operations[]` no longer leaves one per operation. `createBackup=true` now
   names its copy in the response (and, like the forced copy, it is removed when
@@ -174,7 +199,12 @@ those are called out explicitly below.
   symbol index stands in: the longest known table/class/form/view/query/entity/map
   the token follows is the base, and with none known nothing changes.
   `validate_object_naming`, `prepare(mode="create")` and create all derive the
-  base the same way, so they predict and write the same name. Found by the model ×
+  base the same way, and try the same tokens (the learned infix and the raw
+  prefix), so they predict and write the same name. A stem that is itself a known
+  object is its own base: `AgreementAutolinkHelperSalesLine_Extension` under the
+  token `Sales` is not read as `AgreementAutolinkHelper` already prefixed, which
+  matters for model names that are ordinary D365 words (Sales, Invent, Tax,
+  Ledger) and most under `naming.prefixSource=none`. Found by the model ×
   MCP benchmark (`ref-credit-hold-extension`), where it cost three with-MCP runs
   a check the runs without MCP passed.
 - **Form and form-extension XML passed as `xmlContent` gets the metadata
@@ -210,7 +240,8 @@ those are called out explicitly below.
   reports the project as still being detected; the scan finishes in the
   background. When nothing names the model the call still waits, since the scan
   is how the model is found. The fallback scan itself now covers only the
-  detected model's package instead of the whole root.
+  package whose descriptor declares the detected model instead of the whole
+  root, so it also holds when the package and model names differ (#1086).
 - **The form element-order check no longer reports an empty element as unknown
   (#1093).** Microsoft's own `CustInvoiceJournal.ApplicationSuite_Extension`
   (ApplicationSuite 10.36) writes an empty `<Items />` on a string control, so

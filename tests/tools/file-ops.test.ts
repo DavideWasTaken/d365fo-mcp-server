@@ -1946,6 +1946,38 @@ describe('modify_d365fo_file', () => {
       expect(written).toHaveLength(0);
     });
 
+    it('refuses a dotted path naming a control the form does not have, instead of setting the form caption', async () => {
+      // The Design writer keeps only the last segment: "PostButon.Caption" used to set
+      // the form's own Caption and report ✅.
+      for (const propertyPath of ['PostButon.Caption', 'PostButon.Caption.Text']) {
+        const { result, written } = await modify('form', 'MyForm', FORM_PATH, FORM, { propertyPath, propertyValue: 'Post now' });
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain("no control named 'PostButon'");
+        expect(written).toHaveLength(0);
+      }
+    });
+
+    it('a value already set is a skip, and writes nothing', async () => {
+      // The backup side of a no-op is in modifyArgNormalization.test.ts, which pins
+      // the "outside git" answer this file inherits from wherever the suite runs.
+      const { result, written } = await modify('form', 'MyForm', FORM_PATH, FORM, {
+        controlName: 'PostButton', propertyPath: 'MenuItemName', propertyValue: 'MyPostAction',
+      });
+      expect(result.isError).toBeFalsy();
+      expect(written).toHaveLength(0);
+      const text = String(result.content[0].text);
+      expect(text).toContain('SKIPPED, nothing was written');
+      expect(text).not.toContain('kept a copy of the original');
+    });
+
+    it('still sets a Design property through the dotted Design spelling', async () => {
+      const { result, written } = await modify('form', 'MyForm', FORM_PATH, FORM, {
+        propertyPath: 'Design.Caption', propertyValue: 'Post now',
+      });
+      expect(result.isError).toBeFalsy();
+      expect(written.at(-1)[1].replace(/\r\n/g, '\n')).toContain('<Design>\n\t\t<Caption xmlns="">Post now</Caption>');
+    });
+
     it('writes on a control a form extension ADDS, not in <ControlModifications>', async () => {
       const ext =
         `<?xml version="1.0" encoding="utf-8"?>\n` +

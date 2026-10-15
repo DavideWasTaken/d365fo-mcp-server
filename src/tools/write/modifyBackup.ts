@@ -144,6 +144,15 @@ export function keptBackupNote(pending: PendingBackup): string {
   );
 }
 
+/** Whether the file still holds the bytes it had when the backup was taken. */
+export async function fileUnchangedSince(pending: PendingBackup): Promise<boolean> {
+  try {
+    return asBuffer(await fs.readFile(pending.filePath)).equals(pending.original);
+  } catch {
+    return false; // gone — that is a change
+  }
+}
+
 /** The call wrote nothing (a skip): the copy is of an unchanged file. */
 export async function discardBackup(pending: PendingBackup): Promise<void> {
   try { await fs.rm(pending.backupPath, { force: true }); } catch { /* best effort — a stray copy is harmless */ }
@@ -155,9 +164,7 @@ export async function discardBackup(pending: PendingBackup): Promise<void> {
  * the file as it was.
  */
 export async function settleFailedModification(pending: PendingBackup): Promise<string> {
-  let current: Buffer | null = null;
-  try { current = asBuffer(await fs.readFile(pending.filePath)); } catch { /* gone — that is a change */ }
-  if (current && current.equals(pending.original)) {
+  if (await fileUnchangedSince(pending)) {
     await discardBackup(pending);
     return '';
   }
