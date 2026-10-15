@@ -32,6 +32,19 @@ describe('AxDB SQL tool', () => {
     expect(SqlInputSchema.safeParse({ action: 'execute', statements: [{ sql: 'DELETE FROM dbo.T' }] }).success).toBe(false);
     expect(SqlInputSchema.safeParse({ action: 'query', sql: 'SELECT 1', server: 'elsewhere' }).success).toBe(false);
   });
+
+  it('reads maxRows and parameters a client sent as text, never the parameter values', () => {
+    // The MCP inputSchema types only `action`, so a client may send the rest as strings.
+    const asText = { action: 'query', sql: 'SELECT @p', maxRows: '50', parameters: '[{"name":"p","type":"bigint","value":"9007199254740993"}]' };
+    expect(SqlInputSchema.parse(asText)).toEqual({
+      action: 'query', sql: 'SELECT @p', maxRows: 50, parameters: [{ name: 'p', type: 'bigint', value: '9007199254740993' }],
+    });
+    expect(SqlInputSchema.safeParse({ action: 'query', sql: 'SELECT 1', maxRows: '5000' }).success).toBe(false);
+    expect(SqlInputSchema.safeParse({ action: 'query', sql: 'SELECT 1', maxRows: '50 rows' }).success).toBe(false);
+    expect(SqlInputSchema.safeParse({ action: 'query', sql: 'SELECT 1', parameters: '[{"name":"p"' }).success).toBe(false);
+    // A value keeps its own type: an int sent as text is still refused.
+    expect(SqlInputSchema.safeParse({ action: 'query', sql: 'SELECT @p', parameters: [{ name: 'p', type: 'int', value: '5' }] }).success).toBe(false);
+  });
   it('reads the bridge anew on identical requests', async () => {
     enable();
     const call = vi.fn().mockResolvedValueOnce({ success: true, rows: [{ value: 1 }] }).mockResolvedValueOnce({ success: true, rows: [{ value: 2 }] });

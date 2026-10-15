@@ -73,10 +73,17 @@ public class ConProbeTable extends common
 \t<StateMachines />
 </AxTable>`;
 
-const { mockWriteFile } = vi.hoisted(() => ({ mockWriteFile: vi.fn(async () => {}) }));
+// What this test has written, by path: a write (temp file + rename) is read back, so
+// "did the call change the file" — which decides whether a backup is kept — has an
+// honest answer.
+const { mockWriteFile, disk } = vi.hoisted(() => {
+  const disk = new Map<string, string>();
+  return { disk, mockWriteFile: vi.fn(async (p: string, data: string) => { disk.set(String(p), String(data)); }) };
+});
 
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async (p: string) => {
+    if (typeof p === 'string' && disk.has(p)) return disk.get(p);
     if (typeof p === 'string' && p.endsWith('.xml')) return TABLE_XML;
     throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
   }),
@@ -86,7 +93,9 @@ vi.mock('fs/promises', () => ({
   stat: vi.fn(async () => ({ isFile: () => true, isDirectory: () => false, size: 1234 })),
   readdir: vi.fn(async () => []),
   copyFile: vi.fn(async () => {}),
-  rename: vi.fn(async () => {}),
+  rename: vi.fn(async (from: string, to: string) => {
+    if (disk.has(from)) { disk.set(to, disk.get(from)!); disk.delete(from); }
+  }),
   rm: vi.fn(async () => {}),
 }));
 
@@ -194,6 +203,7 @@ const writtenIndexXml = (): string | undefined =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  disk.clear();
   // Bridge cannot resolve it → the direct-XML fallback runs and the XML is
   // observable. Exactly the same-session situation the live probe hits.
   mockBridgeAddIndex.mockResolvedValue({ success: false, message: "Table 'ConProbeTable' not found" });
@@ -460,6 +470,28 @@ describe('a modify outside git keeps a copy only when it changed the file', () =
     );
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain('nothing was written');
+    expect(copiesTaken()).toHaveLength(1);
+    expect(copiesRemoved()).toEqual(copiesTaken());
+    expect(textOf(r)).not.toContain('Backup:');
+  });
+
+  it('a call that succeeded without changing the file removes its copy', async () => {
+    // The idempotent index writer answers "already present — skipped" as a plain
+    // success; the bytes, not the wording, say nothing changed.
+    disk.set(FILE_PATH, TABLE_XML.replace(
+      '\t<Indexes />',
+      '\t<Indexes>\n\t\t<AxTableIndex>\n\t\t\t<Name>IdxKeep</Name>\n\t\t\t<Fields>\n\t\t\t\t<AxTableIndexField>\n' +
+      '\t\t\t\t\t<DataField>ProbeId</DataField>\n\t\t\t\t</AxTableIndexField>\n\t\t\t</Fields>\n\t\t</AxTableIndex>\n\t</Indexes>',
+    ));
+    const r = await modifyD365FileTool(
+      req({
+        objectType: 'table', objectName: 'ConProbeTable', operation: 'add-index',
+        indexName: 'IdxKeep', indexFields: [{ fieldName: 'ProbeId' }], filePath: FILE_PATH,
+      }),
+      ctx(),
+    );
+    expect(r.isError, textOf(r)).toBeFalsy();
+    expect(textOf(r)).toContain('already present');
     expect(copiesTaken()).toHaveLength(1);
     expect(copiesRemoved()).toEqual(copiesTaken());
     expect(textOf(r)).not.toContain('Backup:');

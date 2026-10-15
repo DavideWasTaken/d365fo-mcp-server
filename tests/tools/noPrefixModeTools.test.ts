@@ -23,6 +23,19 @@ vi.mock('../../src/utils/configManager', () => ({
     getRawAutoDetectedModelName: () => MODEL,
     getAllDetectedProjects: () => [],
     getToolProjectSwitch: () => null,
+    // What get_workspace_info reads besides the above.
+    ensureLoaded: async () => {},
+    getAmbiguousProjectPaths: () => [],
+    getDevEnvironmentType: async () => 'local',
+    getMicrosoftPackagesPath: async () => null,
+    getCustomPackagesPath: async () => null,
+    getPackagePath: () => null,
+    forceProject: async () => null,
+    getWorkspaceInfoDiagnostics: async () => ({
+      modelName: MODEL, modelSource: 'test', isModelSourceAutoDetected: false,
+      projectPath: null, projectSource: 'not selected', ambiguousProjects: [],
+      packagePath: null, packageSource: 'test', customPackagesPath: null, customPackagesSource: 'test',
+    }),
   })),
 }));
 
@@ -152,5 +165,41 @@ describe('review follow-ups', () => {
     const r = checkPrefixResolution('XY', MODEL, [], 'Naming', false, true);
     expect(r[0].severity).toBe('warn');
     expect(r[0].message).toMatch(/ignores naming\.prefix "XY"/);
+  });
+});
+
+/**
+ * get_workspace_info(diagnostics=true) reported the configured class style under
+ * none, which forces model-name — EXTENSION_CLASS_NAMING_STYLE: prefix-leading, above
+ * samples in the model-name shape — called a misspelled style "treated as prefix"
+ * when none ignores it, and still said any embedded infix is normalised, which
+ * {Base}{Token}{Feature}_Extension names no longer are (#1103).
+ */
+describe('get_workspace_info naming report under none', () => {
+  const report = async (): Promise<string> => {
+    const { getWorkspaceInfoTool } = await import('../../src/tools/readers/getWorkspaceInfo.js');
+    const r = await getWorkspaceInfoTool(
+      { method: 'tools/call', params: { name: 'get_workspace_info', arguments: { diagnostics: true } } } as any,
+      buildContext(),
+    );
+    return String(r.content[0].text);
+  };
+
+  it('states the class style none forces, not the configured one', async () => {
+    process.env.EXTENSION_CLASS_NAMING_STYLE = 'prefix-leading';
+    const text = await report();
+    expect(text).toContain('EXTENSION_CLASS_NAMING_STYLE: model-name (forced by naming.prefixSource=none)');
+    expect(text).toContain('Extension class  → CustTable_ABC_Extension');
+  });
+
+  it('does not call a style setting it ignores "treated as prefix"', async () => {
+    process.env.EXTENSION_NAMING_STYLE = 'prefx';
+    expect(await report()).not.toMatch(/treated as "prefix"/);
+  });
+
+  it('no longer says every embedded token is normalised', async () => {
+    const text = await report();
+    expect(text).not.toContain('any infix you embed will be normalised');
+    expect(text).toContain('CustTableABCCredit_Extension) is kept');
   });
 });
