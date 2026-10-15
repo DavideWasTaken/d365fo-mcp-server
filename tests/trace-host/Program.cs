@@ -29,6 +29,8 @@ internal static class Program
         SubtreeOpenFocusInShare();
         ProcessFilter();
         StatementNormalisation();
+        WideStatementsKeptApart();
+        SubtreeBusyTime();
         BindIsCountedOnly();
         ShareUsesBusyTime();
         TempTablesNormalised();
@@ -225,6 +227,35 @@ internal static class Program
         var longStmt = "SELECT " + new string('x', 500);
         var t = Run(new[] { Enter(0, "A"), Sql(1, longStmt, 0.1), Exit(2, "A") }, new XppTraceOptions { StatementLength = 50 });
         Check(t.TopSqlByCount[0].Statement.Length == 51, "sql: statement truncated");
+    }
+
+    private static void WideStatementsKeptApart()
+    {
+        // The kernel lists every column, so on a wide table FROM starts past the display length: two queries
+        // on the same table with different WHERE clauses share their first 300 characters.
+        string columns = string.Join(",", Enumerable.Range(1, 60).Select(i => "T1.FIELD" + i));
+        string byAccount = "SELECT " + columns + " FROM CUSTTABLE T1 WHERE ((T1.PARTITION=?) AND (T1.ACCOUNTNUM=?))";
+        string byParty = "SELECT " + columns + " FROM CUSTTABLE T1 WHERE ((T1.PARTITION=?) AND (T1.PARTY=?))";
+        Check(byAccount.Substring(0, 300) == byParty.Substring(0, 300), "wide: the fixture shares its first 300 characters");
+        var events = new List<XppTraceEvent> { Enter(0, "Loop") };
+        for (int i = 0; i < 30; i++) events.Add(Sql(0.01 * (i + 1), byAccount, 0.001));
+        for (int i = 0; i < 30; i++) events.Add(Sql(1 + 0.01 * i, byParty, 0.001));
+        events.Add(Exit(2, "Loop"));
+        var r = Run(events);
+        Check(r.TopSqlByCount.Count == 2 && r.TopSqlByCount.All(s => s.Executions == 30), "wide: two statements of 30 executions, got " + string.Join(", ", r.TopSqlByCount.Select(s => s.Executions)));
+        Check(r.RepeatedSql.Count == 0, "wide: neither reaches the repeated threshold of 50");
+        Check(r.TopSqlByCount.Any(s => s.Statement.Contains("FROM CUSTTABLE T1 WHERE") && s.Statement.Contains("ACCOUNTNUM"))
+            && r.TopSqlByCount.Any(s => s.Statement.Contains("PARTY=?")), "wide: the shown text keeps FROM … WHERE");
+        Check(r.TopSqlByCount.All(s => s.Statement.StartsWith("SELECT T1.FIELD1,") && s.Statement.Length <= 301), "wide: head kept, length bounded");
+    }
+
+    private static void SubtreeBusyTime()
+    {
+        // In subtree scope the root sits above the focus: the thread was still busy for its 10 s.
+        var r = Run(new[] { Enter(0, "Root"), Enter(1, "Foo"), Exit(5, "Foo"), Exit(10, "Root") },
+            new XppTraceOptions { Focus = new[] { "Foo" }, SubtreeOnly = true });
+        Near(r.Totals!.BusySeconds, 10, "subtree: busy time counts the root frame");
+        Near(r.Totals!.FocusSeconds ?? -1, 4, "subtree: focus time");
     }
 
     private static void BindIsCountedOnly()

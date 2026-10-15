@@ -235,8 +235,10 @@ namespace D365MetadataBridge.Services.Trace
                 parent.ChildTicks += inclusive;
                 parent.SqlChildren += f.SqlSelf + f.SqlChildren;
             }
-            else if (f.InScope)
+            else
             {
+                // A root frame is the thread working, in either scope: in subtree scope the root is
+                // usually above the focus (out of scope), and skipping it reported busySeconds = 0.
                 ts.BusyTicks += inclusive;
             }
         }
@@ -245,14 +247,37 @@ namespace D365MetadataBridge.Services.Trace
 
         private static readonly Regex TempTable = new Regex(@"(tempdb\.""?dbo""?\.""?)(t\d+)[\w-]*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-        private string Normalize(string? statement)
+        /// <summary>
+        /// The grouping key of a statement: the WHOLE statement, whitespace collapsed. It is never
+        /// truncated: the kernel lists every column (SELECT T1.A,T1.B,… FROM …), so on a wide table
+        /// FROM and WHERE start well past any display length, and a key cut there would merge
+        /// every query on that table into one row (and flag them as one repeated statement).
+        /// </summary>
+        private static string Normalize(string? statement)
         {
             if (string.IsNullOrEmpty(statement)) return "";
             var collapsed = string.Join(" ", statement!.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             // A temp table's name carries the session that made it (t18093Batch<machine>_<pid>_<guid>),
             // which would split one statement into one row per session: keep the table id only.
-            collapsed = TempTable.Replace(collapsed, "$1$2_*");
-            return collapsed.Length > options.StatementLength ? collapsed.Substring(0, options.StatementLength) + "…" : collapsed;
+            return TempTable.Replace(collapsed, "$1$2_*");
+        }
+
+        /// <summary>
+        /// The statement as shown, at most StatementLength characters (plus the ellipsis). When FROM lies
+        /// beyond that, the head of the column list is kept short and the rest shows FROM … WHERE, which
+        /// names the table and the filter: the part that tells two statements apart.
+        /// </summary>
+        internal string Display(string statement)
+        {
+            int limit = Math.Max(20, options.StatementLength);
+            if (statement.Length <= limit) return statement;
+            int from = statement.IndexOf(" FROM ", StringComparison.OrdinalIgnoreCase);
+            if (from < 0 || from + 6 <= limit) return statement.Substring(0, limit) + "…";
+            const string gap = " … ";
+            int head = Math.Min(from, limit / 4);
+            string tail = statement.Substring(from + 1);
+            int room = limit - head - gap.Length;
+            return statement.Substring(0, head) + gap + (tail.Length > room ? tail.Substring(0, room) + "…" : tail);
         }
 
         private void Sql(ThreadState ts, XppTraceEvent e)
@@ -333,7 +358,7 @@ namespace D365MetadataBridge.Services.Trace
                 busyTicks += t.BusyTicks;
                 sqlWithoutFrame += t.SqlWithoutFrame;
                 // A root frame still open at the end was busy until the thread's last event.
-                if (t.Stack.Count > 0 && t.Stack.Last().InScope) busyTicks += Math.Max(0, t.Last - t.Stack.Last().Start);
+                if (t.Stack.Count > 0) busyTicks += Math.Max(0, t.Last - t.Stack.Last().Start);
                 // Likewise an outermost focus frame still open: its SQL is in the numerator, so its time
                 // so far belongs in the denominator, or the share can exceed 1.
                 var openFocus = t.Stack.LastOrDefault(f => f.IsFocus);
@@ -408,7 +433,7 @@ namespace D365MetadataBridge.Services.Trace
             }
             Func<KeyValuePair<string, (SqlStat Total, Dictionary<string, SqlStat> Callers)>, XppTraceStatement> toStatement = kv => new XppTraceStatement
             {
-                Statement = kv.Key, Executions = kv.Value.Total.Count,
+                Statement = Display(kv.Key), Executions = kv.Value.Total.Count,
                 TotalSeconds = Round(kv.Value.Total.Execution + kv.Value.Total.Preparation),
                 ExecutionSeconds = Round(kv.Value.Total.Execution), PreparationSeconds = Round(kv.Value.Total.Preparation),
                 MaxSeconds = Round(kv.Value.Total.Max),
@@ -424,7 +449,7 @@ namespace D365MetadataBridge.Services.Trace
                     int split = kv.Key.IndexOf('\u0001');
                     return new XppTraceRepeated
                     {
-                        Caller = kv.Key.Substring(0, split), Statement = kv.Key.Substring(split + 1), Executions = kv.Value.Count,
+                        Caller = kv.Key.Substring(0, split), Statement = Display(kv.Key.Substring(split + 1)), Executions = kv.Value.Count,
                         TotalSeconds = Round(kv.Value.Execution + kv.Value.Preparation),
                     };
                 }).ToList();

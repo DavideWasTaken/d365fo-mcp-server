@@ -7,7 +7,7 @@ import {
   isSessionRunning, listDrives, readState, requiredFreeMB, sameFile, settleExpired, sizeLimitMB, startCapture, stopCapture,
   writeState, type CaptureState,
 } from './trace/capture.js';
-import { analysisFiles, analysisState, boundedAnalysis, startAnalysis, waitForAnalysis } from './trace/analysis.js';
+import { analysisFiles, analysisState, boundedAnalysis, clearAnalysis, startAnalysis, waitForAnalysis } from './trace/analysis.js';
 import { locateBridgeExe } from '../../bridge/bridgeClient.js';
 
 export interface TraceContext { bridge?: { exePath?: string } }
@@ -51,10 +51,17 @@ async function start(input: Extract<TraceInput, { action: 'start' }>) {
   const neededGB = Math.ceil(needMB / 1024);
   // A configured trace.outputDir always wins: the agent cannot move captures (and what delete may remove) elsewhere.
   const configured = config.outputDirSource === 'config';
-  const askFolder = (why: string) => fail('TRACE_LOCATION_NEEDED', configured
-    ? `${why}; a ${seconds} s capture needs about ${neededGB} GB. trace.outputDir is set in the configuration: ask the user to free space there or to change it (d365fo-mcp config trace, then restart MCP), or start a shorter capture.`
-    : `${why}; a ${seconds} s capture needs about ${neededGB} GB. Ask the user which folder to use (suggest the drive with most space, not the system drive), then call start again with outputDir. The folder will be remembered.`,
-    { drives: listDrives(), neededGB });
+  const askFolder = async (why: string) => {
+    const { drives, skipped } = await listDrives();
+    return fail('TRACE_LOCATION_NEEDED', configured
+      ? `${why}; a ${seconds} s capture needs about ${neededGB} GB. trace.outputDir is set in the configuration: ask the user to free space there or to change it (d365fo-mcp config trace, then restart MCP), or start a shorter capture.`
+      : `${why}; a ${seconds} s capture needs about ${neededGB} GB. Ask the user which folder to use (suggest the drive with most space, not the system drive), then call start again with outputDir. The folder will be remembered.`,
+      { drives, neededGB, ...(skipped.length ? { drivesNotProbed: `${skipped.join(', ')} (a slow drive used up the probe budget; D365FO_SCAN_DRIVES pins the letters)` } : {}) });
+  };
+  // A relative folder would land wherever the MCP host started the server, then be remembered there.
+  if (!configured && input.outputDir && !/^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(input.outputDir)) {
+    return askFolder(`${input.outputDir} is not an absolute path (e.g. E:\\Traces)`);
+  }
   const chosen = configured ? config.outputDir : input.outputDir ?? config.outputDir;
   if (!chosen) return askFolder('No trace folder is set yet');
   const dir = resolve(chosen);
@@ -79,7 +86,19 @@ async function start(input: Extract<TraceInput, { action: 'start' }>) {
     file, outputDir: dir, mode: input.mode, label: input.label, startedAt: startedAt.toISOString(),
     deadline: new Date(startedAt.getTime() + seconds * 1000).toISOString(), maxSizeMB: limitMB, ownerPid: process.pid,
   };
-  writeState(state);
+  try {
+    writeState(state);
+  } catch (error) {
+    // Without its state file the capture has no owner, no deadline and nothing that would stop it:
+    // every later stop would call it another instance's. Stop it now rather than leave it writing.
+    const why = String(error instanceof Error ? error.message : error).slice(0, 600);
+    const stopped = await stopCapture();
+    const stillRunning = stopped.code !== 0 && await isSessionRunning();
+    return fail('TRACE_STATE_FAILED', stillRunning
+      ? `The capture started, but its state file could not be written (${why}), and stopping it failed too (${stopped.output.slice(0, 300)}). Ask the user to end it with: logman stop ${SESSION} -ets, and to fix the folder of the index database.`
+      : `The capture was started and stopped again at once: its state file could not be written (${why}), so nothing could have stopped it later. Ask the user to fix write access to the folder of the index database (trace-session.json lives there).`,
+      { file, stillRunning });
+  }
   armTimer(state);
   return reply({
     started: true, capture: captureView(state, true),
@@ -103,7 +122,13 @@ async function stop() {
   if (!state || state.stoppedAt || !isOurs(state)) return fail('TRACE_NOT_OURS', `${NOT_OURS} Do not stop it from here; if it is left over, the user can end it with: logman stop ${SESSION} -ets`);
   const result = await stopCapture();
   if (result.code !== 0) {
+    // Denied first: a query without the right fails as well and would read as "already ended".
     if (accessDenied(result)) return fail('TRACE_ACCESS_DENIED', ACCESS);
+    if (!(await isSessionRunning())) {
+      // It ended while we asked (the size limit, or the deadline timer stopping it first): not a failure.
+      const settled = await settleExpired();
+      return reply({ stopped: true, alreadyEnded: true, capture: captureView(settled ?? state, false), nextStep: 'Call analyze.' });
+    }
     return fail('TRACE_STOP_FAILED', `logman stop failed (${result.code}): ${result.output.slice(0, 1200)}`);
   }
   clearTimer();
@@ -137,7 +162,7 @@ async function analyze(input: Extract<TraceInput, { action: 'analyze' }>, contex
   const files = analysisFiles(etl, options);
   let current = analysisState(files);
   if (current?.state === 'failed') {
-    fs.rmSync(files.result, { force: true });
+    clearAnalysis(files);
     return fail('TRACE_ANALYSIS_FAILED', current.error.slice(0, 1500));
   }
   if (!current) {
@@ -150,7 +175,7 @@ async function analyze(input: Extract<TraceInput, { action: 'analyze' }>, contex
   current = await waitForAnalysis(files, input.waitSeconds ?? 25);
   if (current?.state === 'done') return reply(boundedAnalysis(current.result, files.result));
   if (current?.state === 'failed') {
-    fs.rmSync(files.result, { force: true });
+    clearAnalysis(files);
     return fail('TRACE_ANALYSIS_FAILED', current.error.slice(0, 1500));
   }
   return reply({

@@ -156,6 +156,13 @@ describe('labels(action="update") on an existing label', () => {
     expect(reply.match(/✔ en-US/g)).toHaveLength(1);
   });
 
+  it('names a folder listed twice by its FIRST spelling, as translations do', async () => {
+    await update([{ language: 'en-US', text: 'Hello' }], { languages: ['en-US', 'fr-FR', 'FR-fr'] });
+    const folders = await fs.readdir(resources);
+    expect(folders).toContain('fr-FR');
+    expect(folders).not.toContain('FR-fr');
+  });
+
   it('says the label was left unchanged when every targeted folder kept its text', async () => {
     const reply = await update([{ language: 'en-US', text: 'Hello' }], { languages: ['it'] });
     expect(reply).toContain('left unchanged');

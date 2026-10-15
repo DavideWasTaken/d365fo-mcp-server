@@ -102,6 +102,7 @@ import {
   directXmlDeleteAction,
   directXmlRemoveControl,
   addBaseFormControl,
+  addControlMovesExisting,
   directXmlAddEntryPoint,
   directXmlRemoveEntryPoint,
   directXmlRemoveDiagnosticSuppression,
@@ -1471,12 +1472,17 @@ async function runModify(
       // null → form not found or no match; proceed with original value (compiler will catch it)
     }
 
+    // A move (see addControlMovesExisting) uses neither argument the pre-flights below judge.
+    const isControlMove = operation === 'add-control'
+      && await addControlMovesExisting(args as any, objectType, objectName, explicitFilePath, symbolIndex);
+
     // ── DataGroup pre-flight for add-control ──────────────────────────────────
     // A parent carrying <DataGroup> is filled by the compiler from that table
     // field group. A hand-added bound control there duplicates the generated
     // one — an error that exists only after compilation, so it cannot be found
     // by inspecting the XML on disk.
     if (
+      !isControlMove &&
       operation === 'add-control' &&
       (objectType === 'form' || objectType === 'form-extension') &&
       args.parentControl &&
@@ -1539,6 +1545,7 @@ async function runModify(
     // verify the new control's type is allowed there. Blocking when
     // FORM_PATTERN_ENFORCE is enabled (default); advisory note otherwise.
     if (
+      !isControlMove &&
       operation === 'add-control' &&
       (objectType === 'form' || objectType === 'form-extension') &&
       args.parentControl &&
@@ -2896,6 +2903,7 @@ async function runModify(
               (args as any).controlLabel,
               (args as any).previousSibling,
               (args as any).positionType,
+              args as any,
             );
             if (xmlFallbackResult) bridgeResult = viaXmlFallback(xmlFallbackResult);
           }
@@ -3042,14 +3050,17 @@ async function runModify(
           const insertIfEmpty = (args as any).insertIfEmpty as boolean | undefined;
           if (insertIfEmpty !== undefined && bridgeResult?.success) {
             const set = await directXmlSetFormDataSourceInsertIfEmpty(actualFilePath, (args as any).dataSourceName, insertIfEmpty);
+            // Credit the writer that changed the file; a setter failure is never the bridge's.
+            const xmlOnly = !!bridgeResult.skipped && !!set.changed;
             bridgeResult = set.success
-              ? { ...bridgeResult, skipped: bridgeResult.skipped && !set.changed, message: `${bridgeResult.message} ${set.message}` }
-              : {
+              ? { ...bridgeResult, skipped: bridgeResult.skipped && !set.changed, ...(xmlOnly ? { viaXmlFallback: true } : {}),
+                  message: `${bridgeResult.message} ${set.message}` }
+              : viaXmlFallback({
                   success: false,
                   message:
                     `${bridgeResult.message} — but ${set.message} The data source is in the file; ` +
                     `retry the same call to set InsertIfEmpty on it.`,
-                };
+                });
           }
         }
         break;

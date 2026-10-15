@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { traceD365foTool } from '../../src/tools/sdlc/traceD365fo.js';
 import { TraceInputSchema } from '../../src/tools/sdlc/trace/contract.js';
-import { accessDenied, captureFileName, isInside, readState, sizeLimitMB, requiredFreeMB, stopOwnCapture, writeState } from '../../src/tools/sdlc/trace/capture.js';
+import { accessDenied, captureFileName, isInside, readState, sizeLimitMB, requiredFreeMB, stopCapture, stopOwnCapture, writeState } from '../../src/tools/sdlc/trace/capture.js';
 import { analysisFiles, analysisState, boundedAnalysis } from '../../src/tools/sdlc/trace/analysis.js';
 import { readRememberedOutputDir, rememberOutputDir, resolveTraceConfig } from '../../src/config/trace.js';
 import { isToolEnabled } from '../../src/server/serverMode.js';
@@ -16,7 +16,7 @@ vi.mock('../../src/tools/sdlc/trace/capture.js', async importOriginal => ({
   isSessionRunning: vi.fn(async () => logman.running),
   stopCapture: vi.fn(async () => ({ code: 0, output: '' })),
   startCapture: vi.fn(async () => ({ code: 0, output: '' })),
-  listDrives: vi.fn(() => [{ drive: 'E:/', freeGB: 500 }]),
+  listDrives: vi.fn(async () => ({ drives: [{ drive: 'E:/', freeGB: 500 }], skipped: [] })),
   freeBytes: vi.fn(() => 500 * 2 ** 30),
 }));
 
@@ -150,6 +150,62 @@ describe('trace_d365fo', () => {
       const r = parse(await traceD365foTool({ action: 'analyze', file: etl, waitSeconds: 20 }, {}));
       expect(r.code).toBe('TRACE_ANALYSIS_FAILED');
       expect(r.message).toMatch(/exited with code/);
+    });
+
+    it('starts a new analysis after a failed one, not "still analysing" from its progress file', async () => {
+      vi.stubEnv('D365FO_TRACE_DIR', path.join(dir, 'traces'));
+      const etl = path.join(dir, 'traces', 'd365fo-a.etl');
+      fs.mkdirSync(path.dirname(etl), { recursive: true });
+      fs.writeFileSync(etl, 'x');
+      // The analysis read 250,000 events, wrote its progress, then failed.
+      const files = analysisFiles(etl, {});
+      fs.writeFileSync(files.progress, JSON.stringify({ eventsRead: 250000, elapsedSeconds: 17 }));
+      fs.writeFileSync(files.result, JSON.stringify({ error: 'EventLogException: corrupt' }));
+      expect(parse(await traceD365foTool({ action: 'analyze', file: etl, waitSeconds: 0 }, {})).message).toMatch(/corrupt/);
+      expect(fs.existsSync(files.progress)).toBe(false);
+      // Asked again: a new run starts (node stands in for the binary and rejects --analyze-trace).
+      bridgeExe.path = process.execPath;
+      const r = parse(await traceD365foTool({ action: 'analyze', file: etl, waitSeconds: 10 }, {}));
+      expect(r.analysing).toBeUndefined();
+      expect(r.message).toMatch(/exited with code/);
+    });
+
+    it('stops a capture whose state file cannot be written, and says so', async () => {
+      vi.stubEnv('D365FO_TRACE_DIR', path.join(dir, 'traces'));
+      fs.writeFileSync(path.join(dir, 'blocker'), 'a file where the index folder should be');
+      vi.stubEnv('DB_PATH', path.join(dir, 'blocker', 'index', 'symbols.db'));
+      vi.mocked(stopCapture).mockClear();
+      const r = await traceD365foTool({ action: 'start', mode: 'auto', seconds: 10 }, {});
+      expect(r.isError).toBe(true);
+      expect(parse(r)).toMatchObject({ code: 'TRACE_STATE_FAILED', stillRunning: false });
+      expect(stopCapture).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a capture that ended while stop was asked as stopped, not as a failed stop', async () => {
+      logman.running = true;
+      running(path.join(dir, 'traces', 'a.etl'), { ownerPid: process.pid });
+      // The size limit ends it just before logman stop runs: stop then fails with "not found".
+      vi.mocked(stopCapture).mockImplementationOnce(async () => { logman.running = false; return { code: 2150694914, output: 'Data Collector Set was not found.' }; });
+      const r = await traceD365foTool({ action: 'stop' }, {});
+      expect(r.isError).toBeUndefined();
+      expect(parse(r)).toMatchObject({ stopped: true, alreadyEnded: true });
+      expect(readState()?.stoppedAt).toBeDefined();
+    });
+
+    it('reports a denied stop as denied, not as a capture that already ended', async () => {
+      logman.running = true;
+      running(path.join(dir, 'traces', 'a.etl'), { ownerPid: process.pid });
+      vi.mocked(stopCapture).mockImplementationOnce(async () => ({ code: 0x80070005, output: 'Access is denied.' }));
+      const r = await traceD365foTool({ action: 'stop' }, {});
+      expect(parse(r).code).toBe('TRACE_ACCESS_DENIED');
+      expect(readState()?.stoppedAt).toBeUndefined();
+    });
+
+    it('refuses a relative trace folder from the agent', async () => {
+      const r = parse(await traceD365foTool({ action: 'start', mode: 'auto', seconds: 10, outputDir: 'traces' }, {}));
+      expect(r.code).toBe('TRACE_LOCATION_NEEDED');
+      expect(r.message).toMatch(/not an absolute path/);
+      expect(readRememberedOutputDir()).toBeUndefined();
     });
 
     it('recognises the running capture whatever the letter case', async () => {
