@@ -16,6 +16,7 @@ import type { SectionId } from '../../config/settings.js';
 import { settingByPath } from '../../config/settings.js';
 import { commandExists, runExe, runShell } from '../exec.js';
 import { pinBridgeExe } from '../bridgePath.js';
+import { bridgeFreshness } from '../bridgeSources.js';
 import { maybePrepareCopilotInstructions } from '../copilotFiles.js';
 import { mcpJsonNote, placementNote, stdioServer } from '../mcpJson.js';
 import { checkRelease } from '../npmRegistry.js';
@@ -105,8 +106,17 @@ async function maybeBuildBridge(scenario: Scenario): Promise<boolean> {
     p.log.info('C# bridge skipped — it only builds on Windows D365FO VMs (writes stay unavailable here).');
     return true;
   }
-  if (fs.existsSync(paths.bridgeExe)) {
-    if (!await askConfirm('C# bridge already built — rebuild it?', false)) {
+  const freshness = bridgeFreshness();
+  if (freshness !== 'missing') {
+    // A bridge built from older sources is not "already built" for this
+    // version (#1115): default to rebuilding it, and say why.
+    const outdated = freshness !== 'current';
+    if (!await askConfirm(
+      outdated
+        ? 'C# bridge built from older or unrecorded sources — rebuild it for this version?'
+        : 'C# bridge already built — rebuild it?',
+      outdated,
+    )) {
       return true;
     }
     // user confirmed rebuild — skip the second confirmation

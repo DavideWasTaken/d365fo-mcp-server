@@ -142,6 +142,17 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **`update` left an old bridge binary in place when the bridge's sources changed
+  (#1115).** It judged the bridge only by whether the exe survived, and `git pull`
+  never touches `bin\Release` while `npm install -g` never touches the data
+  directory, so the rebuild was offered as "recommended after a D365FO version
+  upgrade" and the server could run new TypeScript against an old bridge without a
+  word. Every bridge build now writes `D365MetadataBridge.sources.json` next to the
+  exe (an MSBuild target, the same source hash `bridgeAttest.mjs` computes);
+  `update` requires the rebuild when that stamp is missing or differs from the
+  sources, `doctor` warns, and `setup` defaults to rebuilding such a bridge. A
+  bridge built before the stamp existed is asked about once. The D365FO-upgrade
+  prompt is unchanged for a bridge that matches its sources.
 - **`trace_d365fo(action="analyze")` refused when the bridge had not started.** The
   analysis runs the bridge binary as a separate `--analyze-trace` process and needs no
   D365FO assembly, but it took the binary's path from the running bridge only, so a
