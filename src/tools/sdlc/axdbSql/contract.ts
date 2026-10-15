@@ -13,13 +13,25 @@ export const SqlParameterSchema = z.discriminatedUnion('type', [
   z.object({ ...fields, type: z.literal('date'), value: z.iso.date().nullable() }).strict(),
   z.object({ ...fields, type: z.literal('datetime2'), value: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?$/).nullable() }).strict(),
 ]);
-const parameters = z.array(SqlParameterSchema).max(100).refine(values =>
-  new Set(values.map(p => p.name.toLowerCase())).size === values.length, 'Parameter names must be unique').optional();
+/**
+ * The MCP inputSchema declares only `action` (the strict schema is this contract), so a client
+ * has no type for the other parameters and may send them as text: maxRows "50", parameters as
+ * JSON. Read text back only for those two; parameter values themselves are never converted.
+ */
+const fromText = (v: unknown): unknown => {
+  if (typeof v !== 'string') return v;
+  const s = v.trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  if (s.startsWith('[')) { try { return JSON.parse(s); } catch { return v; } }
+  return v;
+};
+const parameters = z.preprocess(fromText, z.array(SqlParameterSchema).max(100).refine(values =>
+  new Set(values.map(p => p.name.toLowerCase())).size === values.length, 'Parameter names must be unique')).optional();
 export const SqlInputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('contract') }).strict(),
   z.object({ action: z.literal('status') }).strict(),
   z.object({ action: z.literal('schema'), table: name, schema: name.optional() }).strict(),
-  z.object({ action: z.literal('query'), sql, parameters, maxRows: z.number().int().min(1).max(1000).optional() }).strict(),
+  z.object({ action: z.literal('query'), sql, parameters, maxRows: z.preprocess(fromText, z.number().int().min(1).max(1000)).optional() }).strict(),
 ]);
 
 export function sqlContract() {

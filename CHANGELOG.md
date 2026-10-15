@@ -135,6 +135,26 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
+  off.** The tool is published only when `sql.enabled` is true and `sql.server`
+  is set. The wizard writes both, but a hand-edited config can carry the server
+  alone, and then `axdb_sql` is simply absent. `doctor` now warns about it for
+  the root config and for each instance, and names the fix.
+- **`axdb_sql` refused `maxRows` and `parameters` a client sent as text.** The
+  MCP inputSchema declares only `action` (the strict schema is the contract), so
+  a client has no type for the other parameters and may send `maxRows: "50"` or
+  `parameters` as a JSON string, which failed with "expected number, received
+  string". Those two are now read back from text; limits still apply, and a
+  parameter's value is never converted (an `int` sent as `"5"` is still refused).
+- **`build_d365fo_project(bpCheck: true)` could return megabytes.** The build
+  result is uncapped, and the BP section was the whole `run_bp_check` text: on a
+  model with ~5,300 warnings, 2.7 MB in one result, past what an MCP client shows
+  inline. Past 12,000 characters the section is now a summary — the verdict,
+  xppbp's own Errors/Warnings totals, findings counted by rule (top 25) and the
+  first 15 — and the complete text is saved next to the build log
+  (`<log>.bp.txt`); `run_bp_check` still returns it in full. The summary leads
+  with xppbp's totals because the parser counts only BP rule lines (not
+  CodeAnalysis ones), so its own count can be lower.
 - **`labels(action="update")` with only en-US overwrote every other language
   with English, and every developer comment with the default (#1105).** Update
   writes each existing language folder; one with no supplied translation got the
