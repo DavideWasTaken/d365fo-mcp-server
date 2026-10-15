@@ -585,6 +585,15 @@ async function main() {
   onShutdown('symbol index', () => serverState.symbolIndex?.close?.());
   shutdownCoordinator.registerSignalHandlers({ stdio: isStdioMode });
 
+  // An ETW capture keeps its deadline across a restart, and stops with the server
+  // that started it — see src/tools/sdlc/trace/capture.ts.
+  const { isTraceEnabled } = await import('./config/trace.js');
+  if (isTraceEnabled() && process.platform === 'win32') {
+    const { resumeTimer, stopOwnCapture } = await import('./tools/sdlc/trace/capture.js');
+    resumeTimer();
+    onShutdown('ETW capture', () => stopOwnCapture());
+  }
+
   // Start the AosService drive scan now, off the event loop, in both transports.
   // Every path that needs a packages path reads a cache, and whoever fills it
   // pays for the probes — on a machine with a disconnected mapped network drive
@@ -959,6 +968,7 @@ async function main() {
           { name: 'build_d365fo_project',         desc: 'Compile the model locally; bpCheck/dbSync fold the BP check and the database sync into the same call' },
           { name: 'run_bp_check',                 desc: 'Run Microsoft Best Practices (xppbp.exe) analysis' },
           { name: 'axdb_sql',                     desc: 'Optional: query AxDB on the dev VM (shown only when SQL is configured)' },
+          { name: 'trace_d365fo',                 desc: 'Optional: ETW trace of X++/SQL time on the dev VM (shown only when tracing is enabled)' },
           { name: 'run_systest_class',            desc: 'Execute unit tests using SysTestConsole.exe' },
         ]},
         { icon: '🧪', category: 'Code Quality & Grounding', tools: [

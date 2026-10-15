@@ -1369,7 +1369,7 @@ async function finishRestartWorkflow(
   // with nothing in the result to say so.
   workflow.stage = 'prerequisites';
   await persistIntent();
-  workflow.bpSection = await runPostBuildBpCheck(workflow.request, state.targetModel, context);
+  workflow.bpSection = await runPostBuildBpCheck(workflow.request, state.targetModel, context, `${state.logFile}.bp.txt`);
   workflow.sync = await runPostBuildDbSync(workflow.request, state.targetModel, context);
   const syncRequested = workflow.request.dbSync === true || Array.isArray(workflow.request.dbSync);
   if (reportedErrors) {
@@ -1502,7 +1502,8 @@ async function renderFinishedBuildResult(
   // sampled sessions (10 build -> run_bp_check hand-offs). Opt-in, and only on a
   // green build: when the compile failed, the compiler errors ARE the answer and
   // a BP report on half-built metadata is noise.
-  const bpSection = workflow ? workflow.bpSection ?? '' : succeeded ? await runPostBuildBpCheck(params, targetModel, context) : '';
+  const bpSection = workflow ? workflow.bpSection ?? ''
+    : succeeded ? await runPostBuildBpCheck(params, targetModel, context, `${finalState.logFile}.bp.txt`) : '';
   // Same shape, same reason, for the database sync: a table change is not
   // finished until AxDB is synchronised, and that sync always follows a
   // successful build. Gated on `succeeded` for the same reason bpCheck is —
@@ -1528,6 +1529,62 @@ async function renderFinishedBuildResult(
 }
 
 /**
+ * Past this size a build result carries a summary of the BP check, not its text.
+ *
+ * run_bp_check prints xppbp's raw output, then every finding again as a
+ * moniker-checked list — on a model with ~5,000 warnings that put 2.7 MB into
+ * one build result (build_d365fo_project is uncapped), past what an MCP client
+ * shows inline, burying the compile verdict. The complete text is kept in a file
+ * next to the build log, and run_bp_check returns it on request.
+ */
+const BP_SECTION_CHAR_LIMIT = 12_000;
+const BP_SUMMARY_RULES = 25;
+const BP_SAMPLE_FINDINGS = 15;
+
+export function summarizeBpOutput(
+  text: string,
+  findings: Array<{ moniker: string | null; target: string; severity?: string; path?: string }>,
+  savedTo?: string,
+): string {
+  const verdict = text.split('\n')[0].trim();
+  const byRule = new Map<string, { count: number; severity?: string }>();
+  for (const f of findings) {
+    const rule = f.moniker ?? '(rule not named on the line)';
+    const entry = byRule.get(rule) ?? { count: 0, severity: f.severity };
+    entry.count++;
+    entry.severity ??= f.severity;
+    byRule.set(rule, entry);
+  }
+  const rules = [...byRule.entries()].sort((a, b) => b[1].count - a[1].count);
+  // xppbp's own tally is the total; the parser recognises only BP-moniker lines
+  // (not CodeAnalysis ones, for instance), so its count can be lower.
+  const total = (label: string) => [...text.matchAll(new RegExp(`^\\s*${label}\\s*:\\s*(\\d+)\\s*$`, 'gim'))].at(-1)?.[1];
+  const totals = [['Errors', total('Errors')], ['Warnings', total('Warnings')]]
+    .filter(([, n]) => n !== undefined).map(([label, n]) => `${label} ${n}`).join(', ');
+  const lines = [
+    verdict,
+    '',
+    ...(totals ? [`xppbp totals: ${totals}.`] : []),
+    `Counted below: ${findings.length} finding(s) the parser recognises (BP rule lines), across ${rules.length} rule(s). ` +
+      `The full output (${text.split('\n').length} lines) is too large for a build result` +
+      (savedTo ? ` and is saved to: ${savedTo}` : '') +
+      '. For the complete list, call run_bp_check with this modelName.',
+  ];
+  if (rules.length > 0) {
+    lines.push('', 'Findings by rule:');
+    for (const [rule, { count, severity }] of rules.slice(0, BP_SUMMARY_RULES)) {
+      lines.push(`  ${count} × ${rule}${severity ? ` (${severity})` : ''}`);
+    }
+    if (rules.length > BP_SUMMARY_RULES) lines.push(`  … and ${rules.length - BP_SUMMARY_RULES} more rule(s)`);
+    lines.push('', `First ${Math.min(BP_SAMPLE_FINDINGS, findings.length)} finding(s):`);
+    for (const f of findings.slice(0, BP_SAMPLE_FINDINGS)) {
+      lines.push(`  • ${f.moniker ?? '(rule not named)'}: ${f.path ?? f.target}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
  * Model-wide BP check appended to a successful build when bpCheck:true.
  *
  * Advisory by construction: any failure here is reported as a line, never as a
@@ -1537,11 +1594,13 @@ async function runPostBuildBpCheck(
   params: any,
   targetModel: string,
   context: any,
+  /** Where to keep the complete output when the build result carries only a summary. */
+  fullOutputFile?: string,
 ): Promise<string> {
   if (params?.bpCheck !== true && params?.bpCheck !== 'true') return '';
   try {
-    const { runBpCheckTool } = await import('./runBpCheck.js');
-    const result: any = await runBpCheckTool(
+    const bp = await import('./runBpCheck.js');
+    const result: any = await bp.runBpCheckTool(
       { modelName: targetModel, projectPath: params?.projectPath, packagePath: params?.packagePath },
       context,
     );
@@ -1550,7 +1609,15 @@ async function runPostBuildBpCheck(
       .map((c: any) => c.text)
       .join('\n')
       .trim();
-    return text ? `\n\n--- Best practices (bpCheck=true) ---\n${text}` : '';
+    if (!text) return '';
+    if (text.length <= BP_SECTION_CHAR_LIMIT) return `\n\n--- Best practices (bpCheck=true) ---\n${text}`;
+    let saved: string | undefined;
+    if (fullOutputFile) {
+      saved = await writeFile(fullOutputFile, text, 'utf-8').then(() => fullOutputFile, () => undefined);
+    }
+    let findings: ReturnType<typeof bp.parseBpFindings> = [];
+    try { findings = bp.parseBpFindings(text); } catch { /* the summary still gives the verdict and the file */ }
+    return `\n\n--- Best practices (bpCheck=true) — summary ---\n${summarizeBpOutput(text, findings, saved)}`;
   } catch (e: any) {
     return `\n\n⚠️ bpCheck requested but could not run: ${e?.message ?? e}`;
   }

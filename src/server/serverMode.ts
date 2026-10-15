@@ -33,9 +33,11 @@
  * created without an Azure re-deploy.
  */
 import { isAxDbConfigured } from '../config/axdbSql.js';
+import { isTraceEnabled } from '../config/trace.js';
 
 export const LOCAL_TOOLS = new Set([
   'axdb_sql',
+  'trace_d365fo',
   'verify_d365fo_project',
   'update_symbol_index',
   'build_d365fo_project',
@@ -197,6 +199,7 @@ export const CORE_TOOLS = new Set([
   'run_bp_check',
   'verify_d365fo_project',
   'axdb_sql',
+  'trace_d365fo',
 ]);
 
 /**
@@ -249,7 +252,7 @@ export function isToolEnabled(
   profile: ToolProfile = TOOL_PROFILE,
   extras: ReadonlySet<string> = EXTRA_TOOLS,
 ): boolean {
-  // axdb_sql is published only once SQL is configured: an unconfigured install pays nothing for it.
-  return (toolName !== 'axdb_sql' || isAxDbConfigured())
+  // axdb_sql and trace_d365fo are published only once configured: an install without them pays nothing.
+  return (toolName !== 'axdb_sql' || isAxDbConfigured()) && (toolName !== 'trace_d365fo' || isTraceEnabled())
     && isToolAllowedInMode(mode, toolName) && isToolInProfile(profile, toolName, extras);
 }
