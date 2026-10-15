@@ -14,7 +14,9 @@ analyses the `.etl` file in the bridge binary. Trace Parser is not needed.
 - MCP running under an account allowed to start ETW sessions: a member of **Administrators** or
   **Performance Log Users**. Otherwise `start` answers `TRACE_ACCESS_DENIED`.
 - The bridge built from these sources (`dotnet build bridge/D365MetadataBridge -c Release`): the
-  analysis runs as `D365MetadataBridge.exe --analyze-trace` in its own process.
+  analysis runs as `D365MetadataBridge.exe --analyze-trace` in its own process. It needs only the
+  binary, so it works even when the long-running bridge did not start (no packages path, a start-up
+  timeout on a cold VM).
 - Disk space: a capture grows by roughly 2 MB/s on an idle AOS and **40–50 MB/s** under a busy
   batch job. A 60-second capture of a heavy job can take 3 GB.
 
