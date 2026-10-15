@@ -1,6 +1,6 @@
 name: Sync upstream
 
-# Merges upstream main into this fork's main every evening, keeping the fork's
+# Merges upstream main into this fork's main every night, keeping the fork's
 # own commits.
 #
 # 1. Merge upstream (no commit yet) and run the VM-free checks
@@ -21,8 +21,10 @@ name: Sync upstream
 
 on:
   schedule:
-    # Off the top of the hour, when GitHub delays scheduled runs the most.
-    - cron: '17 20 * * *'
+    # 02:17 Rome, when the Claude subscription is least likely to be at its limit;
+    # off the top of the hour,
+    # when GitHub delays scheduled runs the most.
+    - cron: '17 2 * * *'
       timezone: Europe/Rome
   workflow_dispatch:
     inputs:
