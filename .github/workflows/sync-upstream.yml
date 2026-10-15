@@ -25,6 +25,13 @@ on:
     - cron: '17 20 * * *'
       timezone: Europe/Rome
   workflow_dispatch:
+    inputs:
+      dry_run_from:
+        description: >-
+          Test run: start from this older fork commit instead of main (for example
+          one before an upstream merge that conflicted), and push nothing.
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -53,6 +60,19 @@ jobs:
           # For upstream workflow edits, use a token limited to this fork with
           # Contents and Workflows write permissions; otherwise fail safely.
           token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+
+      # Run from a copy taken before anything changes the tree, so neither the
+      # merge nor Claude can alter the checks that decide the push.
+      - name: Keep a copy of the checks
+        run: cp .github/scripts/upstream-sync-gate.sh "$RUNNER_TEMP/upstream-sync-gate.sh"
+
+      - name: Start from an older fork commit (test run)
+        if: inputs.dry_run_from != ''
+        env:
+          FROM: ${{ inputs.dry_run_from }}
+        run: |
+          git reset --hard "$FROM"
+          echo "Test run from $(git log --oneline -1): nothing will be pushed." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fetch upstream main
         id: fetch
@@ -104,6 +124,8 @@ jobs:
             exit 1
           fi
           conflicts=$(git diff --name-only --diff-filter=U)
+          mkdir -p "$RUNNER_TEMP/sync"
+          echo "$conflicts" > "$RUNNER_TEMP/sync/conflicts.txt"
           if [ -n "$conflicts" ]; then
             echo 'conflicts=true' >> "$GITHUB_OUTPUT"
             { echo '### Conflicts'; echo "$conflicts" | sed 's/^/- /'; } >> "$GITHUB_STEP_SUMMARY"
@@ -115,7 +137,7 @@ jobs:
         id: precheck
         if: steps.merge.outputs.conflicts == 'false'
         continue-on-error: true
-        run: bash .github/scripts/upstream-sync-gate.sh .sync/precheck.log
+        run: bash "$RUNNER_TEMP/upstream-sync-gate.sh" .sync/precheck.log
 
       - name: Look for a Claude credential
         id: auth
@@ -141,7 +163,7 @@ jobs:
           claude_args: |
             --model claude-opus-5-5
             --max-turns 120
-            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git grep:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(git checkout --conflict=diff3:*),Bash(npm run:*),Bash(npx vitest:*),Bash(npx tsc:*),Bash(npm ci:*),Bash(npm install --package-lock-only:*),Bash(bash .github/scripts/upstream-sync-gate.sh:*),Bash(grep:*),Bash(sed -n:*),Bash(wc:*)"
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git grep:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(git checkout --conflict=diff3:*),Bash(npm run:*),Bash(npx vitest:*),Bash(npx tsc:*),Bash(npm ci:*),Bash(npm install --package-lock-only:*),Bash(bash ${{ runner.temp }}/upstream-sync-gate.sh:*),Bash(grep:*),Bash(sed -n:*),Bash(wc:*)"
           prompt: |
             You are finishing an automatic merge of upstream main
             (${{ env.UPSTREAM_REPO }} at ${{ steps.fetch.outputs.upstream_sha }})
@@ -156,7 +178,7 @@ jobs:
             (log in .sync/precheck.log when they ran).
 
             Goal: a tree that has every upstream change, keeps every fork feature
-            working, and passes `bash .github/scripts/upstream-sync-gate.sh .sync/gate.log`.
+            working, and passes `bash ${{ runner.temp }}/upstream-sync-gate.sh .sync/gate.log`.
 
             How to resolve:
             1. Upstream wins on what upstream changed. When upstream removed,
@@ -231,7 +253,7 @@ jobs:
           # A clean merge that already passed the checks has nothing new to check.
           if [ "$PRECHECK" = success ]; then
             cp "$RUNNER_TEMP/sync/precheck.log" "$RUNNER_TEMP/sync/gate.log"
-          elif ! bash .github/scripts/upstream-sync-gate.sh "$RUNNER_TEMP/sync/gate.log"; then
+          elif ! bash "$RUNNER_TEMP/upstream-sync-gate.sh" "$RUNNER_TEMP/sync/gate.log"; then
             ok=false
           fi
           [ "$ok" = true ]
@@ -242,6 +264,7 @@ jobs:
         env:
           UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
           VERIFIED: ${{ steps.verify.outcome }}
+          DRY_RUN: ${{ inputs.dry_run_from != '' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -252,6 +275,23 @@ jobs:
             echo
             if [ -s "$summary" ]; then cat "$summary"; else echo 'Merged without changes beyond the upstream commits.'; fi
           } > "$RUNNER_TEMP/sync/message.txt"
+
+          if [ "$DRY_RUN" = true ]; then
+            {
+              echo "### Test run: verification $VERIFIED (nothing pushed)"
+              echo
+              if [ -s "$summary" ]; then cat "$summary"; else echo '(no Claude summary)'; fi
+              echo
+              echo '### Files that conflicted, as resolved (diff against upstream)'
+              echo '```diff'
+              while read -r f; do
+                [ -n "$f" ] && git diff --cached MERGE_HEAD -- "$f"
+              done < "$RUNNER_TEMP/sync/conflicts.txt" | head -n 600 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            [ "$VERIFIED" = success ]
+            exit
+          fi
 
           open_sync_prs() {
             gh pr list -R "$GITHUB_REPOSITORY" --state open --json number,headRefName \
@@ -308,3 +348,12 @@ jobs:
           cat "$RUNNER_TEMP/sync/pr.md" >> "$GITHUB_STEP_SUMMARY"
           echo "::error::Upstream merge needs review: $url"
           exit 1
+
+      # The merge notes, Claude's summary and the check logs, for a run that needs a look.
+      - name: Keep the sync notes
+        if: ${{ !cancelled() && steps.merge.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: sync-notes
+          path: ${{ runner.temp }}/sync/
+          if-no-files-found: ignore
