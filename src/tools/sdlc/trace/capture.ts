@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import { dirname, join, parse, resolve, win32 } from 'node:path';
 import { traceStateDir } from '../../../config/trace.js';
+import { DRIVE_SCAN_BUDGET_MS, driveLettersToProbe } from '../../../utils/packagesRoot.js';
 
 export const SESSION = 'd365fo-mcp-trace';
 
@@ -89,16 +90,40 @@ export function freeBytes(path: string): number | undefined {
   }
 }
 
-export function listDrives(): Array<{ drive: string; freeGB: number }> {
-  const drives: Array<{ drive: string; freeGB: number }> = [];
-  for (let c = 65; c <= 90; c++) {
-    const root = `${String.fromCharCode(c)}:\\`;
+export interface DriveList { drives: Array<{ drive: string; freeGB: number }>; skipped: string[] }
+
+export interface DriveProbe {
+  statfs?: (root: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
+  clock?: () => number;
+  budgetMs?: number;
+  /** Overrides D365FO_SCAN_DRIVES. */
+  letters?: string;
+}
+
+/**
+ * Every drive with its free space, for the agent to offer. The same letters and time budget as the
+ * packages-root scan (D365FO_SCAN_DRIVES pins them): a stat on a disconnected mapped network drive
+ * stalls for the SMB timeout, so it runs on the threadpool, never on the event loop (which would stop
+ * the server answering), one letter at a time; the letters left once the budget is spent are skipped
+ * and named rather than waited for.
+ */
+export async function listDrives(probe: DriveProbe = {}): Promise<DriveList> {
+  const statfs = probe.statfs ?? ((root: string) => fs.promises.statfs(root));
+  const clock = probe.clock ?? Date.now;
+  const budget = probe.budgetMs ?? DRIVE_SCAN_BUDGET_MS;
+  const { letters, pinned } = driveLettersToProbe(probe.letters ?? process.env.D365FO_SCAN_DRIVES);
+  const drives: DriveList['drives'] = [];
+  const skipped: string[] = [];
+  const start = clock();
+  for (const letter of letters) {
+    if (!pinned && clock() - start > budget) { skipped.push(letter); continue; }
+    const root = `${letter}:\\`;
     try {
-      const s = fs.statfsSync(root);
+      const s = await statfs(root);
       drives.push({ drive: root, freeGB: Math.round((Number(s.bavail) * Number(s.bsize)) / 2 ** 30 * 10) / 10 });
     } catch { /* no such drive */ }
   }
-  return drives.sort((a, b) => b.freeGB - a.freeGB);
+  return { drives: drives.sort((a, b) => b.freeGB - a.freeGB), skipped };
 }
 
 /** Size limit for one capture: enough for the time asked (at least 200 MB), never more than the setup allows. */

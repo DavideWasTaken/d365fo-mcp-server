@@ -28,6 +28,8 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+## [1.21.0] — 2026-10-15
+
 ### Added
 - **Optional `trace_d365fo`: measure X++ and SQL time with ETW instead of timer
   code.** Published only when `trace.enabled` is true (`config trace`). `start`
@@ -39,7 +41,15 @@ those are called out explicitly below.
   exclusive/inclusive time, SQL by statement and by caller, statements repeated
   in loops; parameter values are never returned. When no folder is set, or it
   lacks space, `start` lists the drives and remembers the folder chosen. See
-  [docs/TRACE.md](docs/TRACE.md).
+  [docs/TRACE.md](docs/TRACE.md). Statements are grouped by their whole text — the
+  kernel lists every column, so FROM and WHERE often start past the 300 characters
+  shown, and a cut key merged different queries on a table into one "repeated"
+  row; the shown text keeps `FROM … WHERE`. The drive list is probed off the event
+  loop with the packages-root scan's budget and `D365FO_SCAN_DRIVES` (a dead mapped
+  drive cannot stall the server), a relative `outputDir` is refused, a failed
+  analysis no longer reads as "analysing" on the retry, a capture whose state file
+  cannot be written is stopped at once (`TRACE_STATE_FAILED`), and a capture that
+  ended while `stop` was asked is reported stopped, not `TRACE_STOP_FAILED`.
 - **No prefix at all: `naming.prefixSource=none` (#1085).** For teams on a
   suffix convention (`CustomerSettings_ABC`). An empty `naming.prefix` never
   meant "no prefix": the server inferred one from the model's objects, then fell
@@ -109,7 +119,9 @@ those are called out explicitly below.
   it is set on that one, which is the only way to set it on an existing data
   source. If it cannot be placed, the call fails and says that the same call,
   retried, finishes it. On any other type, data entities included, it is
-  refused before anything is written.
+  refused before anything is written. The existing data source is found whatever
+  the case of the name (as the bridge's skip does), and the reply credits the XML
+  writer when that is what changed the file.
 
 ### Changed
 - **`build_d365fo_project` no longer carries the multi-model build queue (#1122).**
@@ -142,6 +154,13 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **A boolean written as text in the config file was always on.** A hand-edited
+  `"enabled": "false"` (or `"no"`, `"off"`, `"0"`) is a non-empty string, and the
+  projection onto the environment read it by truthiness — so, for example,
+  `sql.enabled: "false"` published `axdb_sql`. Text is now read the way `.env`
+  values are (`true`/`1`/`yes`/`on`), for every boolean setting. `doctor`'s
+  `sql.enabled` check reads it the same way and, like the server, lets a variable
+  set in the real environment outrank the config file.
 - **`update` left an old bridge binary in place when the bridge's sources changed
   (#1115).** It judged the bridge only by whether the exe survived, and `git pull`
   never touches `bin\Release` while `npm install -g` never touches the data
@@ -171,7 +190,11 @@ those are called out explicitly below.
   is refused before the bridge writes the control, the design-root names the
   bridge accepts (`FormDesign`, `Root`, `<Form>Design`) work for placement too,
   and a move or refusal the bridge took no part in no longer reads as
-  "applied via IMetadataProvider.Update()" / "Bridge operation failed".
+  "applied via IMetadataProvider.Update()" / "Bridge operation failed". A move
+  names the creation arguments it did not apply (`controlType`,
+  `controlDataSource`, `controlDataField`, `controlLabel`) instead of dropping them
+  silently, and is not refused by the DataGroup or pattern pre-flight over them;
+  "already on the form" names the parent the control is really in.
 - **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
   off.** The tool is published only when `sql.enabled` is true and `sql.server`
   is set. The wizard writes both, but a hand-edited config can carry the server
@@ -183,6 +206,8 @@ those are called out explicitly below.
   `parameters` as a JSON string, which failed with "expected number, received
   string". Those two are now read back from text; limits still apply, and a
   parameter's value is never converted (an `int` sent as `"5"` is still refused).
+  Blank text counts as omitted, and a whole number written `"1e3"` or `"50.0"` is
+  read as one.
 - **`build_d365fo_project(bpCheck: true)` could return megabytes.** The build
   result is uncapped, and the BP section was the whole `run_bp_check` text: on a
   model with ~5,300 warnings, 2.7 MB in one result, past what an MCP client shows
@@ -191,7 +216,10 @@ those are called out explicitly below.
   first 15 — and the complete text is saved next to the build log
   (`<log>.bp.txt`); `run_bp_check` still returns it in full. The summary leads
   with xppbp's totals because the parser counts only BP rule lines (not
-  CodeAnalysis ones), so its own count can be lower.
+  CodeAnalysis ones), so its own count can be lower. Error rules and error
+  findings come first whatever their count — one error among thousands of
+  warnings is the finding that fails a pipeline — and `run_bp_check`'s
+  label-compile caveat is kept.
 - **`labels(action="update")` with only en-US overwrote every other language
   with English, and every developer comment with the default (#1105).** Update
   writes each existing language folder; one with no supplied translation got the

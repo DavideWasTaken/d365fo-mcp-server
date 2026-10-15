@@ -106,10 +106,31 @@ function locateControls(xml: string, root: XmlNode): Located[] {
 
 /** Whether the file defines a live control of this name — what add-control asks before adding. */
 export function formDefinesControl(xml: string, controlName: string): boolean {
+  return !!findFormControl(xml, controlName);
+}
+
+/**
+ * The live control of this name the file defines: its own spelling, its parent, and
+ * whether that parent is the one the caller named (`requestedParent`; a design-root
+ * name such as "FormDesign" counts as "Design"). Undefined when there is none.
+ */
+export function findFormControl(
+  xml: string,
+  controlName: string,
+  requestedParent?: string,
+): { name: string; parentName: string; inRequestedParent: boolean } | undefined {
   const root = parseNodes(xml);
-  if (!root || !SUPPORTED_ROOTS.has(root.name)) return false;
+  if (!root || !SUPPORTED_ROOTS.has(root.name)) return undefined;
   const wanted = controlName.trim().toLowerCase();
-  return locateControls(xml, root).some(c => !c.discarded && c.name.toLowerCase() === wanted);
+  const entry = locateControls(xml, root).find(c => !c.discarded && c.name.toLowerCase() === wanted);
+  if (!entry) return undefined;
+  const asked = requestedParent?.trim() ?? '';
+  const formNameNode = firstChild(root, 'Name');
+  const formName = formNameNode ? textValueOf(xml, formNameNode) : '';
+  const inRequestedParent = !asked
+    || asked.toLowerCase() === entry.parentName.toLowerCase()
+    || (entry.parentName === DESIGN && !entry.envelope && isDesignRoot(asked, formName));
+  return { name: entry.name, parentName: entry.parentName, inRequestedParent };
 }
 
 /** The node's own lines: from the start of its line through the newline that ends it. */

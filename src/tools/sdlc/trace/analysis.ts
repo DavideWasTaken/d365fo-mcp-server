@@ -48,6 +48,17 @@ export function analysisState(files: ReturnType<typeof analysisFiles>): Analysis
   return undefined;
 }
 
+/**
+ * Forget a failed analysis: its result, and its progress file too — a progress file under a minute
+ * old reads as a run still going (one started by an earlier server process), so leaving it would
+ * answer "analysing" for a run that has already died, instead of starting a new one.
+ */
+export function clearAnalysis(files: ReturnType<typeof analysisFiles>): void {
+  for (const f of [files.result, files.progress, files.log]) {
+    try { fs.rmSync(f, { force: true }); } catch { /* a log still held open is harmless */ }
+  }
+}
+
 export function startAnalysis(exe: string, etl: string, options: AnalysisOptions, files: ReturnType<typeof analysisFiles>): void {
   for (const f of [files.result, files.progress]) fs.rmSync(f, { force: true });
   const args = ['--analyze-trace', etl, '--out', files.result, '--progress', files.progress];

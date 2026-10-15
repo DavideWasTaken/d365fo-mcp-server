@@ -206,6 +206,33 @@ describe('add-data-source — insertIfEmpty', () => {
     expect(writtenXml()).toContain('<InsertIfEmpty>No</InsertIfEmpty>');
   });
 
+  it('a skipped add credits the XML writer, not IMetadataProvider, for what it wrote', async () => {
+    mockBridgeAddDataSource.mockResolvedValue({ success: true, skipped: true, message: 'already exists' });
+    const r = await modifyD365FileTool(addDataSource({ insertIfEmpty: false }), buildContext());
+    expect(textOf(r)).toContain("applied via this server's XML writer");
+    expect(textOf(r)).not.toContain('IMetadataProvider.Update()');
+  });
+
+  it('a skipped add finds the data source when the call spells its name in another case', async () => {
+    // The bridge's "already exists" check ignores case; the setter has to find the same one.
+    mockBridgeAddDataSource.mockResolvedValue({
+      success: true, skipped: true, message: "data source 'critemfieldsview' already exists",
+    });
+    const r = await modifyD365FileTool(
+      addDataSource({ dataSourceName: 'critemfieldsview', insertIfEmpty: false }), buildContext());
+    expect(r.isError, textOf(r)).toBeFalsy();
+    expect(writtenXml()).toContain(
+      '\t\t\t<LinkType>OuterJoin</LinkType>\r\n\t\t\t<InsertIfEmpty>No</InsertIfEmpty>\r\n',
+    );
+  });
+
+  it('a setter failure is not reported as a bridge failure', async () => {
+    fixture.xml = AFTER_BRIDGE_XML.replace('\t\t\t<DataSourceLinks />\r\n\t\t\t<DerivedDataSources />\r\n', '');
+    const r = await modifyD365FileTool(addDataSource({ insertIfEmpty: false }), buildContext());
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).not.toContain('Bridge operation');
+  });
+
   it('a skipped add whose data source already says it stays a skip', async () => {
     fixture.xml = AFTER_BRIDGE_XML.replace(
       '<LinkType>OuterJoin</LinkType>', '<LinkType>OuterJoin</LinkType>\r\n\t\t\t<InsertIfEmpty>No</InsertIfEmpty>');

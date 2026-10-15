@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { p } from '../ui.js';
-import { settingByPath } from '../../config/settings.js';
+import { serializeValue, settingByPath } from '../../config/settings.js';
 import { bridgeFreshness, type BridgeFreshness } from '../bridgeSources.js';
 import { bridgeBuildCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { commandExists } from '../exec.js';
@@ -482,16 +482,35 @@ function layoutChecks(inst: Instance): CheckResult[] {
  * (isAxDbConfigured). The wizard writes both together, but a config edited by
  * hand can carry the server alone — and then the tool is simply absent, with
  * nothing saying why.
+ *
+ * Same precedence the server applies (loadEnv): a variable the real environment
+ * defines — even as empty — outranks the config file. A config value is read the
+ * way the server projects it onto the environment (serializeValue), so a quoted
+ * `"false"` is off here exactly as it is at runtime.
  */
-export function checkSqlSwitch(store: SettingsStore, label: string): CheckResult | null {
-  const server = readSetting(store, settingByPath('sql.server')!);
-  const enabled = readSetting(store, settingByPath('sql.enabled')!);
-  if (typeof server !== 'string' || !server.trim()) return null;
-  if (enabled === true || /^(true|1|yes|on)$/i.test(String(enabled ?? '').trim())) return null;
+export function checkSqlSwitch(
+  store: SettingsStore,
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CheckResult | null {
+  const effective = (settingPath: string): { value: string; fromEnv: boolean } => {
+    const setting = settingByPath(settingPath)!;
+    if (env[setting.env] !== undefined) return { value: env[setting.env]!.trim(), fromEnv: true };
+    return { value: (serializeValue(setting, readSetting(store, setting)) ?? '').trim(), fromEnv: false };
+  };
+  const server = effective('sql.server');
+  const enabled = effective('sql.enabled');
+  if (!server.value) return null;
+  if (/^(true|1|yes|on)$/i.test(enabled.value)) return null;
+  const where = (fromEnv: boolean, name: string) => (fromEnv ? `${name} (environment)` : name);
   return {
     severity: 'warn',
-    message: `${label}: sql.server is set (${server}) but sql.enabled is not true — axdb_sql is not published`,
-    fix: `set sql.enabled to true in ${store.configPath}, or run: d365fo-mcp config sql`,
+    message:
+      `${label}: ${where(server.fromEnv, 'sql.server')} is set (${server.value}) but ` +
+      `${where(enabled.fromEnv, 'sql.enabled')} is not true — axdb_sql is not published`,
+    fix: enabled.fromEnv
+      ? 'set D365FO_SQL_ENABLED=true in the environment that starts the server, or remove it so the config file decides'
+      : `set sql.enabled to true in ${store.configPath}, or run: d365fo-mcp config sql`,
   };
 }
 
