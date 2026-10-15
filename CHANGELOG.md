@@ -148,6 +148,19 @@ those are called out explicitly below.
   bridge that failed to start (no packages path, a cold-VM timeout) meant
   `TRACE_BRIDGE_UNAVAILABLE`. It now falls back to the binary the server would start:
   the configured `bridge.exePath`, else the first built candidate.
+- **`add-control` puts a control where it was asked, and moves one that exists.**
+  On `objectType="form"` `previousSibling`/`positionType` were dropped (the bridge
+  appends to the parent), and an existing control could not be moved at all:
+  add-control again answered "already present — skipped" with a ✅ and
+  modify-property refuses `PositionType`/`PreviousSibling`. Display-method fields
+  added to a custom form stayed at the end of their group. A control the file
+  already defines is now moved (same parent; by order, or by the envelope's
+  position pair on a base-form parent) and never added a second time. A position
+  that cannot work (unknown `positionType`, a `previousSibling` outside the parent)
+  is refused before the bridge writes the control, the design-root names the
+  bridge accepts (`FormDesign`, `Root`, `<Form>Design`) work for placement too,
+  and a move or refusal the bridge took no part in no longer reads as
+  "applied via IMetadataProvider.Update()" / "Bridge operation failed".
 - **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
   off.** The tool is published only when `sql.enabled` is true and `sql.server`
   is set. The wizard writes both, but a hand-edited config can carry the server

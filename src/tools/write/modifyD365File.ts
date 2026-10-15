@@ -101,6 +101,7 @@ import {
   DELETE_ACTION_TYPES,
   directXmlDeleteAction,
   directXmlRemoveControl,
+  addBaseFormControl,
   directXmlAddEntryPoint,
   directXmlRemoveEntryPoint,
   directXmlRemoveDiagnosticSuppression,
@@ -631,7 +632,8 @@ export const ModifyD365FileArgsSchema = z.object({
     'end of the parent. Other values are refused — these are the ones D365FO metadata carries.'
   ),
   previousSibling: z.string().optional().describe(
-    'Name of the sibling control to position after. Implies positionType=AfterItem when that is omitted.'
+    'Name of the sibling control to position after. Implies positionType=AfterItem when that is omitted. ' +
+    'On a control the file already defines, add-control MOVES it there.'
   ),
   baseFormName: z.string().optional().describe(
     'Base form name used for auto-resolving parentControl when the extension name does not contain it. ' +
@@ -2870,7 +2872,8 @@ async function runModify(
           const isFormExtension = objectType === 'form-extension';
 
           if (!isFormExtension) {
-            bridgeResult = await bridgeAddControl(
+            // The bridge appends; addBaseFormControl moves the control to previousSibling/positionType.
+            bridgeResult = await addBaseFormControl(actualFilePath, args as any, () => bridgeAddControl(
               context.bridge,
               objectName,
               (args as any).controlName,
@@ -2879,7 +2882,7 @@ async function runModify(
               (args as any).controlDataSource,
               (args as any).controlDataField,
               (args as any).controlLabel,
-            );
+            ));
           }
 
           if (isFormExtension && (!bridgeResult || !bridgeResult.success)) {
