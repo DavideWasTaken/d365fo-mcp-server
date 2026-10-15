@@ -129,6 +129,12 @@ those are called out explicitly below.
   is set. The wizard writes both, but a hand-edited config can carry the server
   alone, and then `axdb_sql` is simply absent. `doctor` now warns about it for
   the root config and for each instance, and names the fix.
+- **`axdb_sql` refused `maxRows` and `parameters` a client sent as text.** The
+  MCP inputSchema declares only `action` (the strict schema is the contract), so
+  a client has no type for the other parameters and may send `maxRows: "50"` or
+  `parameters` as a JSON string, which failed with "expected number, received
+  string". Those two are now read back from text; limits still apply, and a
+  parameter's value is never converted (an `int` sent as `"5"` is still refused).
 - **`labels(action="update")` with only en-US overwrote every other language
   with English, and every developer comment with the default (#1105).** Update
   writes each existing language folder; one with no supplied translation got the
