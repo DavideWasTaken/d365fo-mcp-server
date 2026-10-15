@@ -70,6 +70,10 @@ namespace D365MetadataBridge.Services.Trace
                         IList<object> values;
                         try { values = ((EventLogRecord)record).GetPropertyValues(selector); }
                         catch (EventLogException) { stats.EventsUnreadable++; continue; }
+                        // A method event whose name did not render (manifest missing or another version) would
+                        // pair as "?" and look clean: count it as unreadable, which the result reports.
+                        if ((kind == XppTraceEventKind.Enter || kind == XppTraceEventKind.Exit) && !(values.Count > 0 && values[0] is string))
+                        { stats.EventsUnreadable++; continue; }
                         aggregator.Add(new XppTraceEvent
                         {
                             Kind = kind.Value,

@@ -34,6 +34,8 @@ export interface CaptureState {
   startedAt: string;
   deadline: string;
   maxSizeMB: number;
+  /** The server process that started it: instances sharing an index share this state file. */
+  ownerPid?: number;
   stoppedAt?: string;
   stopReason?: 'stop' | 'time limit' | 'size limit or ended outside MCP' | 'server shut down';
 }
@@ -127,6 +129,14 @@ export async function stopCapture(): Promise<LogmanResult> {
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined;
+const RETRY_STOP_MS = 30_000;
+
+const isAlive = (pid: number) => {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+};
+/** Started by this process, or by one that no longer runs (an earlier run of this installation). */
+export const isOurs = (state: CaptureState) =>
+  state.ownerPid === undefined || state.ownerPid === process.pid || !isAlive(state.ownerPid);
 
 /** Stop at the deadline even if nobody calls the tool again. */
 export function armTimer(state: CaptureState): void {
@@ -145,7 +155,11 @@ export async function settleExpired(): Promise<CaptureState | undefined> {
   if (!state || state.stoppedAt) return state;
   const running = await isSessionRunning();
   if (running && Date.now() < Date.parse(state.deadline)) return state;
-  if (running) await stopCapture();
+  if (running && (await stopCapture()).code !== 0 && await isSessionRunning()) {
+    // Still writing: recording it as stopped would leave it running with nothing to stop it. Retry soon.
+    armTimer({ ...state, deadline: new Date(Date.now() + RETRY_STOP_MS).toISOString() });
+    return state;
+  }
   state.stoppedAt = new Date().toISOString();
   state.stopReason = running ? 'time limit' : 'size limit or ended outside MCP';
   writeState(state);
@@ -170,11 +184,16 @@ export function resumeTimer(): void {
  * Server shutdown: stop the capture this installation started. Without it, a client closed
  * mid-capture leaves the ETW session writing until the next call to the tool.
  */
-export async function stopOwnCapture(stop: () => Promise<LogmanResult> = stopCapture): Promise<void> {
+export async function stopOwnCapture(
+  stop: () => Promise<LogmanResult> = stopCapture,
+  running: () => Promise<boolean> = isSessionRunning,
+): Promise<void> {
   const state = readState();
-  if (!state || state.stoppedAt) return;
+  // Another live instance's capture is its own to stop.
+  if (!state || state.stoppedAt || !isOurs(state)) return;
   clearTimer();
-  await stop();
+  // Not stopped: leave it recorded as running, so the next call or server start stops it at its deadline.
+  if ((await stop()).code !== 0 && await running()) return;
   state.stoppedAt = new Date().toISOString();
   state.stopReason = 'server shut down';
   writeState(state);
@@ -202,3 +221,9 @@ export function captures(dir: string): Array<{ file: string; sizeMB: number; mod
 }
 
 export const driveOf = (path: string) => parse(resolve(path)).root;
+
+/** The same file, compared as Windows does (case-insensitive). */
+export const sameFile = (a: string, b: string) => win32.resolve(a).toLowerCase() === win32.resolve(b).toLowerCase();
+
+/** A drive root (or share root) cannot be the trace folder: analyze and delete are confined to it. */
+export const isDriveRoot = (dir: string) => win32.dirname(win32.resolve(dir)) === win32.resolve(dir);

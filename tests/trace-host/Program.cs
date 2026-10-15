@@ -25,12 +25,15 @@ internal static class Program
         FocusSelectsThreads();
         FocusRootsListedFirst();
         SubtreeScope();
+        SubtreeMethodAboveAndBelowFocus();
+        SubtreeOpenFocusInShare();
         ProcessFilter();
         StatementNormalisation();
         BindIsCountedOnly();
         ShareUsesBusyTime();
         TempTablesNormalised();
         BatchDispatcherCaveat();
+        RootsCountedPastTheCap();
         ResultSerialises();
 
         Console.WriteLine(failures == 0 ? "PASS: trace aggregation" : "FAIL: " + failures + " check(s)");
@@ -180,6 +183,34 @@ internal static class Program
         Near(r.Totals!.SqlShareOfTime ?? -1, Math.Round(0.2 / 3, 4), "subtree: share over time inside focus (rounded to 4 places)");
     }
 
+    private static void SubtreeMethodAboveAndBelowFocus()
+    {
+        // A dispatcher on both sides of the focus: only the inner call is in scope, and it is the outermost
+        // in-scope frame of A, so its inclusive time counts although an (out-of-scope) A is still below it.
+        var r = Run(new[]
+        {
+            Enter(0, "A"), Enter(1, "F"), Enter(2, "A"), Sql(2.5, "SELECT IN", 0.4), Exit(4, "A"), Exit(5, "F"), Exit(6, "A"),
+        }, new XppTraceOptions { Focus = new[] { "F" }, SubtreeOnly = true });
+        var a = M(r, "A");
+        Check(a.Calls == 1 && a.ClosedCalls == 1, "subtree: only the in-scope call of A counted");
+        Near(a.InclusiveSeconds, 2, "subtree: inner A's inclusive time counted despite the outer A");
+        Near(a.SqlInclusiveSeconds, 0.4, "subtree: inner A's inclusive SQL counted despite the outer A");
+    }
+
+    private static void SubtreeOpenFocusInShare()
+    {
+        // The second F is still open at the end, and its SQL is in the numerator: its time so far must be in
+        // the denominator too, or the share exceeds 1 (5.5 / 1 before).
+        var r = Run(new[]
+        {
+            Enter(0, "F"), Sql(0.5, "SELECT 1", 0.5), Exit(1, "F"),
+            Enter(2, "F"), Sql(7, "SELECT 2", 5), Enter(7.5, "G"), Exit(8, "G"),
+        }, new XppTraceOptions { Focus = new[] { "F" }, SubtreeOnly = true });
+        Near(r.Totals!.FocusSeconds ?? -1, 7, "subtree: open focus frame counted until the thread's last event");
+        Check((r.Totals!.SqlShareOfTime ?? 2) <= 1, "subtree: SQL share stays within the focus time");
+        Check(!r.Caveats.Any(c => c.Contains("counted nothing closed")), "subtree: a closed focus frame means no 'nothing closed' caveat");
+    }
+
     private static void ProcessFilter()
     {
         var r = Run(new[] { Enter(0, "A", pid: 1), Exit(1, "A", pid: 1), Enter(0, "B", pid: 2), Exit(1, "B", pid: 2) }, new XppTraceOptions { ProcessId = 2 });
@@ -243,6 +274,19 @@ internal static class Program
         var task = Run(new[] { Enter(0, "BatchRun::runJobStaticCodeFromBuffer"), Enter(1, "MyJob::run"), Enter(2, "Batch::insert"), Exit(3, "Batch::insert"), Exit(4, "MyJob::run"), Exit(5, "BatchRun::runJobStaticCodeFromBuffer") },
             new XppTraceOptions { Focus = new[] { "MyJob" } });
         Check(!task.Caveats.Any(c => c.Contains("Batch.exe")), "batch: no hint when the task itself runs under BatchRun");
+    }
+
+    private static void RootsCountedPastTheCap()
+    {
+        // 64 distinct roots fill the map; a root already in it keeps counting, and a later BatchRun:: root
+        // is still seen by the Batch.exe caveat.
+        var events = new List<XppTraceEvent>();
+        for (int i = 0; i < 70; i++) { events.Add(Enter(i, "Root" + i)); events.Add(Exit(i + 0.5, "Root" + i)); }
+        for (int i = 0; i < 5; i++) { events.Add(Enter(100 + i, "Root63")); events.Add(Exit(100.5 + i, "Root63")); }
+        events.AddRange(new[] { Enter(200, "BatchRun::runJobStaticCodeFromBuffer"), Enter(201, "MyJob::run"), Enter(202, "Batch::insert"), Exit(203, "Batch::insert"), Exit(204, "MyJob::run"), Exit(205, "BatchRun::runJobStaticCodeFromBuffer") });
+        var r = Run(events, new XppTraceOptions { Focus = new[] { "MyJob" } });
+        Check(r.Threads[0].Roots.Contains("Root63"), "roots: a counted root keeps counting past the cap");
+        Check(!r.Caveats.Any(c => c.Contains("Batch.exe")), "roots: a BatchRun:: root past the cap still silences the Batch.exe hint");
     }
 
     private static void ResultSerialises()
