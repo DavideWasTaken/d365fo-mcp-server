@@ -87,15 +87,35 @@ describe('add-control on a plain form', () => {
     expect(r?.message).toContain('previousSibling');
   });
 
+  it('refuses a position that cannot work before the bridge writes anything', async () => {
+    fs.writeFileSync(file, form(['ItemId']));
+    const bridge = vi.fn(async () => ({ success: true, message: 'added' }));
+    const r = await addBaseFormControl(file, { controlName: 'DispPrice', parentControl: 'Header', previousSibling: 'Missing' }, bridge);
+    expect(bridge).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ success: false, viaXmlFallback: true });
+    expect(r?.message).toContain('Nothing was added');
+    expect(fs.readFileSync(file, 'utf-8')).toBe(form(['ItemId']));
+  });
+
   it('says so when the control was added but could not be positioned', async () => {
     fs.writeFileSync(file, form(['ItemId']));
-    const bridge = vi.fn(async () => {
-      fs.writeFileSync(file, form(['ItemId', 'DispPrice']));
-      return { success: true, message: 'added' };
-    });
-    const r = await addBaseFormControl(file, { controlName: 'DispPrice', parentControl: 'Header', previousSibling: 'Missing' }, bridge);
+    // The bridge reports success, but the control is not where the file says it should be.
+    const bridge = vi.fn(async () => ({ success: true, message: 'added' }));
+    const r = await addBaseFormControl(file, { controlName: 'DispPrice', parentControl: 'Header', previousSibling: 'ItemId' }, bridge);
     expect(r?.success).toBe(true);
     expect(r?.message).toContain('Added at the END');
+  });
+
+  it('marks what the bridge took no part in, and what wrote nothing', async () => {
+    fs.writeFileSync(file, form(['ItemId', 'DispPrice']));
+    const bridge = vi.fn();
+    expect(await addBaseFormControl(file, { controlName: 'DispPrice', parentControl: 'Header', positionType: 'Begin' }, bridge))
+      .toMatchObject({ success: true, viaXmlFallback: true });
+    expect(await addBaseFormControl(file, { controlName: 'DispPrice', parentControl: 'Header', positionType: 'Begin' }, bridge))
+      .toMatchObject({ success: true, viaXmlFallback: true, skipped: true });
+    expect(await addBaseFormControl(file, { controlName: 'DispPrice', parentControl: 'Header' }, bridge))
+      .toMatchObject({ success: true, viaXmlFallback: true, skipped: true });
+    expect(bridge).not.toHaveBeenCalled();
   });
 
   it('keeps CRLF files readable', async () => {
@@ -138,6 +158,7 @@ describe('add-control on a form extension', () => {
   it('still skips an identical re-add, and says how to move', async () => {
     fs.writeFileSync(file, extension([]));
     const r = await directXmlAddControl(file, 'ConDemoDisp', 'HeaderGroup', 'String');
+    expect(r?.skipped).toBe(true);
     expect(r?.message).toContain('skipped');
     expect(r?.message).toContain('previousSibling');
   });

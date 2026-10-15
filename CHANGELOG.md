@@ -142,7 +142,12 @@ those are called out explicitly below.
   modify-property refuses `PositionType`/`PreviousSibling`. Display-method fields
   added to a custom form stayed at the end of their group. A control the file
   already defines is now moved (same parent; by order, or by the envelope's
-  position pair on a base-form parent) and never added a second time.
+  position pair on a base-form parent) and never added a second time. A position
+  that cannot work (unknown `positionType`, a `previousSibling` outside the parent)
+  is refused before the bridge writes the control, the design-root names the
+  bridge accepts (`FormDesign`, `Root`, `<Form>Design`) work for placement too,
+  and a move or refusal the bridge took no part in no longer reads as
+  "applied via IMetadataProvider.Update()" / "Bridge operation failed".
 - **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
   off.** The tool is published only when `sql.enabled` is true and `sql.server`
   is set. The wizard writes both, but a hand-edited config can carry the server
