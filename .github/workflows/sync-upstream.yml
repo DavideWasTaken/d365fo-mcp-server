@@ -221,6 +221,21 @@ jobs:
             removed and which upstream change made them obsolete; anything left
             for the owner (bridge rebuild, doubts); the final gate result.
 
+      # The action hides Claude's own messages from the log; the last one says
+      # why a run stopped (usage limit, credential, max turns).
+      - name: Say why Claude stopped
+        if: steps.claude.outcome == 'failure'
+        shell: bash
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          f="${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}"
+          reason=$(jq -rs 'flatten | map(select(.type == "result")) | last | (.result // .subtype // "unknown")' "$f" 2>/dev/null || echo 'no execution log')
+          echo "::warning::Claude stopped: ${reason:0:300}"
+          { echo '### Claude stopped'; echo; echo "${reason:0:2000}"; } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/sync"
+          echo "$reason" > "$RUNNER_TEMP/sync/claude-error.txt"
+
       - name: Verify the merge
         id: verify
         if: steps.fetch.outputs.needed == 'true'
