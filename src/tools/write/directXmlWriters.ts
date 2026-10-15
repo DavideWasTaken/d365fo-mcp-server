@@ -1328,7 +1328,7 @@ export const directXmlSetFormDataSourceInsertIfEmpty = serializedOnFile(async (
   filePath: string,
   dataSourceName: string,
   insertIfEmpty: boolean,
-): Promise<{ success: boolean; message: string }> => {
+): Promise<{ success: boolean; message: string; changed?: boolean }> => {
   const content = (await fs.readFile(filePath, 'utf-8')).replace(/^﻿/, '').replace(/\r\n/g, '\n');
   const escaped = dataSourceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const block = new RegExp(
@@ -1347,13 +1347,17 @@ export const directXmlSetFormDataSourceInsertIfEmpty = serializedOnFile(async (
     }
     updated = `${updated.slice(0, next.index)}${childIndent}<InsertIfEmpty>No</InsertIfEmpty>\n${updated.slice(next.index)}`;
   }
-  if (updated !== block[0]) {
+  const changed = updated !== block[0];
+  if (changed) {
     const result = content.slice(0, block.index) + updated + content.slice(block.index + block[0].length);
     await writeFileAtomic(filePath, normalizeD365Xml(result));
   }
   return {
     success: true,
-    message: insertIfEmpty ? 'InsertIfEmpty left at its default (Yes).' : 'InsertIfEmpty=No set on the data source.',
+    changed,
+    message: insertIfEmpty
+      ? (changed ? 'InsertIfEmpty set back to its default (Yes).' : 'InsertIfEmpty left at its default (Yes).')
+      : (changed ? 'InsertIfEmpty=No set on the data source.' : 'InsertIfEmpty is already No.'),
   };
 });
 
@@ -1507,7 +1511,9 @@ export const directXmlDeleteAction = serializedOnFile(async (
  * and a form with a dotted path that names no control ("Design.Caption") goes to
  * the Design writer, as before. A form with an explicit controlName it does not
  * define is refused instead — writing a Design property there would be a ✅ on
- * the wrong element.
+ * the wrong element. So is a dotted path whose first segment is neither Design
+ * nor a control of the form ("PostButon.Caption"): the Design writer keeps only
+ * the last segment, and would set the form's caption.
  */
 export const directXmlModifyControlProperty = serializedOnFile(async (
   filePath: string,
@@ -1516,23 +1522,28 @@ export const directXmlModifyControlProperty = serializedOnFile(async (
   propertyPath: string,
   propertyValue: string,
   controlName: string | undefined,
-): Promise<{ success: boolean; message: string } | null> => {
+): Promise<{ success: boolean; message: string; skipped?: boolean } | null> => {
   if (objectType !== 'form' && objectType !== 'form-extension') return null;
+  const noSuchControl = (name: string) => ({
+    success: false,
+    message:
+      `Form ${objectName} has no control named '${name}' — nothing was written. Read the form ` +
+      `with get_object_info to see its control names. Without controlName or a dotted path, ` +
+      `modify-property on a form sets a <Design> property (Caption, Style, …).`,
+  });
+  const firstSegment = propertyPath.split(/[./]/)[0];
+  const namesDesign = firstSegment.toLowerCase() === 'design';
   const target = resolveControlPropertyTarget(propertyPath, controlName);
-  if (!target) return null;
+  if (!target) {
+    // "PostButon.Caption.Text": not a control path, and not a Design one either.
+    if (objectType === 'form' && /[./]/.test(propertyPath) && !namesDesign) return noSuchControl(firstSegment);
+    return null;
+  }
 
   const content = (await fs.readFile(filePath, 'utf-8')).replace(/^\uFEFF/, '');
   const outcome = upsertFormControlProperty(content, target.controlName, target.propertyName, propertyValue);
   if (!outcome) {
-    if (objectType === 'form' && controlName) {
-      return {
-        success: false,
-        message:
-          `Form ${objectName} has no control named '${controlName}' — nothing was written. Read the form ` +
-          `with get_object_info to see its control names. Without controlName, modify-property on a form ` +
-          `sets a <Design> property (Caption, Style, …).`,
-      };
-    }
+    if (objectType === 'form' && (controlName || !namesDesign)) return noSuchControl(target.controlName);
     return null;
   }
   if (!outcome.ok) {
@@ -1544,6 +1555,7 @@ export const directXmlModifyControlProperty = serializedOnFile(async (
   if (outcome.changed) await writeFileAtomic(filePath, normalizeD365Xml(outcome.xml));
   return {
     success: true,
+    ...(outcome.changed ? {} : { skipped: true }),
     message:
       `${outcome.changed ? '✅' : 'ℹ️'} ${outcome.detail} on control '${target.controlName}'` +
       `${outcome.changed ? '' : ' — nothing written'}. File: ${filePath}`,

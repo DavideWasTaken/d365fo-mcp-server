@@ -311,9 +311,11 @@ export async function checkObjectNaming(
         }
         // {Base}{Token}{Feature}: the token sits mid-stem, so neither end says where
         // the base stops. The index does — the same base the writer reads from
-        // [ExtensionOf], so check and writer name the same class.
+        // [ExtensionOf], so check and writer name the same class. The raw prefix is
+        // tried too, as inferExtendedBase and applyObjectPrefix do: where a model's
+        // learned infix differs from it, a name carrying the prefix is still prefixed.
         if (args.baseObjectName === derived) {
-          const inferred = inferBaseBeforeToken(derived, candidates, n => {
+          const inferred = inferBaseBeforeToken(derived, [...candidates, prefix.replace(/_+$/, '')], n => {
             try { return lookupSymbolNocase(db, n, COC_BASE_SYMBOL_TYPES) != null; } catch { return false; }
           });
           if (inferred) args.baseObjectName = inferred;

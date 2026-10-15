@@ -115,12 +115,34 @@ describe('the packagePath fallback scan', () => {
   it("scans only the detected model's package, not every package", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pld-'));
     try {
-      fs.mkdirSync(path.join(root, 'BenchmarkTestMcp'));
+      fs.mkdirSync(path.join(root, 'BenchmarkTestMcp', 'Descriptor'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'BenchmarkTestMcp', 'Descriptor', 'BenchmarkTestMcp.xml'), '<AxModelInfo />');
       fs.mkdirSync(path.join(root, 'ApplicationSuite'));
       autoDetect.mockResolvedValue({ modelName: 'BenchmarkTestMcp', packagePath: root, detectionSource: 'the PackagesLocalDirectory path' });
       const mgr = makeManager({ packagePath: root });
       await mgr.autoDetectProject(path.join(root, 'BenchmarkTestMcp'));
       expect(detectProject).toHaveBeenCalledWith(path.join(root, 'BenchmarkTestMcp'), 4);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Package and model need not share a name (#1086): package "Enhancements" holding
+  // model "Sales Integration". The folder named after the model does not exist, so
+  // the scan fell back to the whole root — or, with an unrelated package of that
+  // name, scanned the wrong one.
+  it('scans the package whose descriptor declares the model, not a folder named after it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pld-'));
+    try {
+      fs.mkdirSync(path.join(root, 'Enhancements', 'Descriptor'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'Enhancements', 'Descriptor', 'SalesIntegration.xml'), '<AxModelInfo />');
+      // A package carrying the model's name that holds some other model.
+      fs.mkdirSync(path.join(root, 'SalesIntegration', 'Descriptor'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'SalesIntegration', 'Descriptor', 'SalesIntegrationLegacy.xml'), '<AxModelInfo />');
+      autoDetect.mockResolvedValue({ modelName: 'SalesIntegration', packagePath: root, detectionSource: 'the PackagesLocalDirectory path' });
+      const mgr = makeManager({ packagePath: root });
+      await mgr.autoDetectProject(path.join(root, 'Enhancements'));
+      expect(detectProject).toHaveBeenCalledWith(path.join(root, 'Enhancements'), 4);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
