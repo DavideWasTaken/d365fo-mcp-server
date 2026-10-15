@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { formDefinesControl, placeFormControl } from '../../src/utils/formControlPlacement';
+import { checkNewControlPosition, formDefinesControl, placeFormControl } from '../../src/utils/formControlPlacement';
 
 const field = (name: string, indent: string) => [
   `${indent}<AxFormControl xmlns="" i:type="AxFormStringControl">`,
@@ -86,6 +86,12 @@ describe('placeFormControl on a plain form', () => {
     expect(placeFormControl(start, { controlName: 'Footer', parentControl: 'ConDemoForm', positionType: 'Begin' }).kind).toBe('placed');
   });
 
+  it('accepts every design-root name the bridge accepts (FormAuthoringDefaults.IsDesignRootSentinel)', () => {
+    for (const parentControl of ['FormDesign', 'root', 'ConDemoFormDesign', '']) {
+      expect(placeFormControl(start, { controlName: 'Footer', parentControl, positionType: 'Begin' }).kind, parentControl).toBe('placed');
+    }
+  });
+
   it('refuses a move into another parent instead of ignoring it', () => {
     const r = placeFormControl(start, { controlName: 'DispPrice', parentControl: 'Design', previousSibling: 'Header' });
     expect(r.kind).toBe('refused');
@@ -129,6 +135,33 @@ describe('placeFormControl on a plain form', () => {
   it('knows which controls the form defines', () => {
     expect(formDefinesControl(start, 'dispcost')).toBe(true);
     expect(formDefinesControl(start, 'ConDemoForm')).toBe(false);
+  });
+});
+
+describe('checkNewControlPosition — before the bridge appends a new control', () => {
+  const start = form(['ItemId', 'Name']);
+
+  it('lets a position that will work through', () => {
+    expect(checkNewControlPosition(start, { controlName: 'DispPrice', parentControl: 'Header', previousSibling: 'itemid' })).toBeUndefined();
+    expect(checkNewControlPosition(start, { controlName: 'DispPrice', parentControl: 'Header', positionType: 'Begin' })).toBeUndefined();
+    expect(checkNewControlPosition(start, { controlName: 'Top', parentControl: 'FormDesign', previousSibling: 'Header' })).toBeUndefined();
+  });
+
+  it('refuses an unknown positionType, AfterItem without a sibling, and itself as sibling', () => {
+    expect(checkNewControlPosition(start, { controlName: 'DispPrice', parentControl: 'Header', positionType: 'Middle' })).toMatch(/Middle/);
+    expect(checkNewControlPosition(start, { controlName: 'DispPrice', parentControl: 'Header', positionType: 'AfterItem' })).toMatch(/needs previousSibling/);
+    expect(checkNewControlPosition(start, { controlName: 'DispPrice', parentControl: 'Header', previousSibling: 'DispPrice' })).toMatch(/itself/);
+  });
+
+  it('refuses a sibling that is not a direct child of the parent, and names the real ones', () => {
+    expect(checkNewControlPosition(start, { controlName: 'DispPrice', parentControl: 'Header', previousSibling: 'Footer' }))
+      .toMatch(/Its children are: ItemId, Name\./);
+    expect(checkNewControlPosition(start, { controlName: 'Top', parentControl: 'Design', previousSibling: 'ItemId' }))
+      .toMatch(/Its children are: Header, Footer\./);
+  });
+
+  it('leaves a parent the file does not have to the bridge', () => {
+    expect(checkNewControlPosition(start, { controlName: 'DispPrice', parentControl: 'TabGeneral', previousSibling: 'X' })).toBeUndefined();
   });
 });
 
@@ -195,5 +228,14 @@ describe('placeFormControl on a form extension', () => {
     const r = placeFormControl(extension([], ['A']), { controlName: 'ConDemoDisp', parentControl: 'OtherGroup', positionType: 'Begin' });
     expect(r.kind).toBe('refused');
     expect(r.kind === 'refused' && r.message).toContain('"HeaderGroup"');
+  });
+
+  it('refuses, rather than throws, for a control in a malformed envelope (<AxFormControl> for <FormControl>)', () => {
+    const broken = extension([], ['A']).replace(/(<\/?)FormControl\b/g, '$1AxFormControl');
+    for (const positionType of ['Begin', 'End']) {
+      const r = placeFormControl(broken, { controlName: 'ConDemoDisp', positionType });
+      expect(r.kind, positionType).toBe('refused');
+      expect(r.kind === 'refused' && r.message).toContain('cannot be positioned');
+    }
   });
 });

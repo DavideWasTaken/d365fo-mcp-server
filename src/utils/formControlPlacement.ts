@@ -122,10 +122,53 @@ function lineSpan(xml: string, node: XmlNode): [number, number] {
   return [from, to];
 }
 
+/**
+ * The names the bridge's AddControl reads as "the design itself"
+ * (FormAuthoringDefaults.IsDesignRootSentinel) — the same list, or a control the
+ * bridge just put under "FormDesign" is refused here as being "in Design, not FormDesign".
+ */
 const isDesignRoot = (name: string | undefined, formName: string): boolean => {
   const n = (name ?? '').trim().toLowerCase();
-  return n === '' || n === 'design' || n === formName.toLowerCase();
+  const f = formName.trim().toLowerCase();
+  return n === '' || n === 'design' || n === 'formdesign' || n === 'root'
+    || (!!f && (n === f || n === `${f}design`));
 };
+
+/**
+ * Whether a control can be put where add-control asks, checked BEFORE the bridge
+ * adds it: the bridge appends and saves, so a position found wrong afterwards
+ * leaves the control written at the end. Returns the refusal, or undefined to go
+ * ahead — also when the parent is not in the file, which is the bridge's to report.
+ */
+export function checkNewControlPosition(xml: string, spec: PlaceFormControlSpec): string | undefined {
+  const position = resolvePosition({ parentControl: spec.parentControl ?? DESIGN, previousSibling: spec.previousSibling, positionType: spec.positionType });
+  if (position.kind === 'invalid') return position.message;
+  const after = position.kind === 'placed' ? position.previousSibling : undefined;
+  if (!after) return undefined;
+  if (after.toLowerCase() === spec.controlName.trim().toLowerCase()) {
+    return `previousSibling names "${spec.controlName}" itself; name the control it should follow.`;
+  }
+  const root = parseNodes(xml);
+  if (!root || !SUPPORTED_ROOTS.has(root.name)) return undefined;
+  const formNameNode = firstChild(root, 'Name');
+  const formName = formNameNode ? textValueOf(xml, formNameNode) : '';
+  const live = locateControls(xml, root).filter(c => !c.discarded);
+  const parent = resolveParentName(live, spec.parentControl, formName);
+  if (!parent) return undefined;
+  const children = live.filter(c => !c.envelope && c.parentName.toLowerCase() === parent.toLowerCase());
+  if (children.some(c => c.name.toLowerCase() === after.toLowerCase())) return undefined;
+  return `previousSibling "${after}" is not a direct child of "${spec.parentControl || DESIGN}". ` +
+    `Its children are: ${children.map(c => c.name).join(', ') || '(none)'}. A control can only follow a sibling ` +
+    `in the same container. Nothing was added.`;
+}
+
+/** The parent the bridge would pick: a control of that name first, then the design-root names. */
+function resolveParentName(live: Located[], asked: string | undefined, formName: string): string | undefined {
+  const a = asked?.trim() ?? '';
+  const byName = a && live.find(c => c.name.toLowerCase() === a.toLowerCase());
+  if (byName) return byName.name;
+  return isDesignRoot(a, formName) ? DESIGN : undefined;
+}
 
 /**
  * Shipped metadata is CRLF and the writers hand this module LF; either works. The
@@ -153,7 +196,7 @@ function placeLf(xml: string, spec: PlaceFormControlSpec): PlaceFormControlResul
   const asked = spec.parentControl?.trim();
   const sameParent = !asked
     || asked.toLowerCase() === entry.parentName.toLowerCase()
-    || (entry.parentName === DESIGN && !entry.envelope && isDesignRoot(asked, formName));
+    || (entry.parentName === DESIGN && !entry.envelope && resolveParentName(all.filter(c => !c.discarded), asked, formName) === DESIGN);
   if (!sameParent) {
     return {
       kind: 'refused',
@@ -237,6 +280,9 @@ function placeByOrder(
     return nameNode ? textValueOf(xml, nameNode) : '';
   };
   const self = siblings.indexOf(entry.control);
+  // E.g. an <AxFormControl> straight inside an <AxFormExtensionControl> (the envelope
+  // holds a <FormControl>): it has no siblings to be ordered among.
+  if (self < 0) return { kind: 'refused', message: `"${entry.name}" is not a direct child of a <Controls> collection in this file; it cannot be positioned.` };
   const others = siblings.filter(s => s !== entry.control);
 
   let anchorAfter: XmlNode | undefined; // insert after this sibling; undefined = first
