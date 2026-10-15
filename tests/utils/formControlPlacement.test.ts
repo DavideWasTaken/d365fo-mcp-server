@@ -116,6 +116,16 @@ describe('placeFormControl on a plain form', () => {
     expect(ok(placeFormControl(r.xml, { controlName: 'Footer', positionType: 'End' })).xml).toBe(start);
   });
 
+  it('moves a control in a CRLF file, as shipped metadata is, and keeps it CRLF', () => {
+    const crlf = (x: string) => x.replace(/\n/g, '\r\n');
+    const r = ok(placeFormControl(crlf(start), { controlName: 'DispPrice', previousSibling: 'ItemId' }));
+    expect(r.changed).toBe(true);
+    expect(r.xml).toBe(crlf(form(['ItemId', 'DispPrice', 'Name', 'Qty', 'DispCost'])));
+    const same = ok(placeFormControl(crlf(start), { controlName: 'DispCost', positionType: 'End' }));
+    expect(same.changed).toBe(false);
+    expect(same.xml).toBe(crlf(start));
+  });
+
   it('knows which controls the form defines', () => {
     expect(formDefinesControl(start, 'dispcost')).toBe(true);
     expect(formDefinesControl(start, 'ConDemoForm')).toBe(false);
@@ -167,6 +177,13 @@ describe('placeFormControl on a form extension', () => {
     expect(ok(placeFormControl(placed, { controlName: 'ConDemoDisp', positionType: 'End' })).xml)
       .toBe(extension([], ['A']));
     expect(ok(placeFormControl(placed, { controlName: 'ConDemoDisp', previousSibling: 'SalesId' })).changed).toBe(false);
+  });
+
+  it('writes the position pair in a CRLF extension with CRLF line ends only', () => {
+    const crlf = (x: string) => x.replace(/\n/g, '\r\n');
+    const r = ok(placeFormControl(crlf(extension([], ['A'])), { controlName: 'ConDemoDisp', previousSibling: 'SalesId' }));
+    expect(r.xml).toBe(crlf(extension(['<PositionType>AfterItem</PositionType>', '<PreviousSibling>SalesId</PreviousSibling>'], ['A'])));
+    expect(/[^\r]\n/.test(r.xml)).toBe(false);
   });
 
   it('reorders a control under a group the extension owns', () => {

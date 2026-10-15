@@ -127,7 +127,19 @@ const isDesignRoot = (name: string | undefined, formName: string): boolean => {
   return n === '' || n === 'design' || n === formName.toLowerCase();
 };
 
+/**
+ * Shipped metadata is CRLF and the writers hand this module LF; either works. The
+ * splice works on LF lines, and a CRLF document comes back CRLF, never mixed.
+ */
 export function placeFormControl(xml: string, spec: PlaceFormControlSpec): PlaceFormControlResult {
+  if (!xml.includes('\r\n')) return placeLf(xml, spec);
+  const result = placeLf(xml.replace(/\r\n/g, '\n'), spec);
+  return result.kind === 'placed'
+    ? { ...result, xml: result.changed ? result.xml.replace(/\n/g, '\r\n') : xml }
+    : result;
+}
+
+function placeLf(xml: string, spec: PlaceFormControlSpec): PlaceFormControlResult {
   const root = parseNodes(xml);
   if (!root || !SUPPORTED_ROOTS.has(root.name)) return { kind: 'unsupported' };
   const formNameNode = firstChild(root, 'Name');
