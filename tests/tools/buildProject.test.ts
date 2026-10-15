@@ -935,20 +935,13 @@ describe('build_d365fo_project', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   }, 1000);
 
-  it.each([false, true])('keeps single/queued success logs and runtime restart guidance (queued=%s)', async queued => {
+  it('keeps the success log and runtime restart guidance', async () => {
     const logFile = 'C:\\Temp\\d365build_log_prev.log';
-    serveState(finishedState(queued ? {
-      buildQueue: ['Dep', MODEL_NAME],
-      queueResults: [
-        { modelName: 'Dep', status: 'succeeded', duration: 1, logFile: 'dependency.log' },
-        { modelName: MODEL_NAME, status: 'succeeded', duration: 2, logFile },
-      ],
-    } : {}));
+    serveState(finishedState({}));
     readdirMock.mockResolvedValue([]);
     const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
     const text = result.content[0].text;
     expect(text).toContain(logFile);
-    if (queued) expect(text).toContain('dependency.log');
     expect(text).toContain('Restart');
     expect(text).toContain('AOSService');
     expect(text).toContain('IIS Express');
@@ -956,18 +949,10 @@ describe('build_d365fo_project', () => {
     expect(text).toContain('does not prove');
   });
 
-  it.each([
-    ['blocked', false], ['failed', false], ['not-ready', false],
-    ['blocked', true], ['failed', true], ['not-ready', true],
-  ])('requires a user-facing warning for runtime %s (queued=%s)', async (status, queued) => {
-    const logFile = 'C:\\Temp\\d365build_log_prev.log';
+  it.each(['blocked', 'failed', 'not-ready'])('requires a user-facing warning for runtime %s', async status => {
     serveState(finishedState({
       restartWorkflow: { request: { aosUrl: 'https://dev.test/' }, stage: 'complete',
         result: { status, message: 'Specific runtime failure reason' } },
-      ...(queued ? { buildQueue: ['Dep', MODEL_NAME], queueResults: [
-        { modelName: 'Dep', status: 'succeeded', duration: 1, logFile },
-        { modelName: MODEL_NAME, status: 'succeeded', duration: 2, logFile },
-      ] } : {}),
     }));
     readdirMock.mockResolvedValue([]);
     const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
@@ -981,12 +966,9 @@ describe('build_d365fo_project', () => {
     expect(restartMock).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('keeps failure logs without claiming runtime readiness (queued=%s)', async queued => {
+  it('keeps the failure log without claiming runtime readiness', async () => {
     const logFile = 'C:\\Temp\\d365build_log_prev.log';
-    serveState(finishedState({ status: 'failed', ...(queued ? {
-      buildQueue: ['Dep', MODEL_NAME],
-      queueResults: [{ modelName: 'Dep', status: 'failed', duration: 1, logFile }],
-    } : {}) }));
+    serveState(finishedState({ status: 'failed' }));
     readdirMock.mockResolvedValue([]);
     const result = await buildProjectTool({ projectPath: PROJECT_PATH }, {});
     expect(result.isError).toBe(true);

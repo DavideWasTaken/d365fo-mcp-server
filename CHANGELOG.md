@@ -112,6 +112,13 @@ those are called out explicitly below.
   refused before anything is written.
 
 ### Changed
+- **`build_d365fo_project` no longer carries the multi-model build queue (#1122).**
+  Building referenced models has been switched off for a while and the queue
+  could not form, but its result branch would have skipped `bpCheck`, `dbSync`
+  and the last-build note had it ever run. The queue is removed; a
+  `buildReferencedModels` argument from an older client is still ignored, and a
+  full build now reports itself as `full build`, not `full build (target),
+  incremental (deps)`.
 - **Code comments are written in English.** Neither the system instructions nor
   the knowledge base said which language a `//` or `///` comment is in, so an
   agent talking to the user in Czech often commented the X++ in Czech, and
@@ -149,12 +156,6 @@ those are called out explicitly below.
   bridge that failed to start (no packages path, a cold-VM timeout) meant
   `TRACE_BRIDGE_UNAVAILABLE`. It now falls back to the binary the server would start:
   the configured `bridge.exePath`, else the first built candidate.
-- **A multi-model build without `restartAos` skipped `bpCheck` and `dbSync`.** When
-  `build_d365fo_project` built a queue of models, the result read the BP and sync
-  sections only from a restart workflow, so without `restartAos: true` both were
-  dropped silently (and the last-build note `run_bp_check` reads was not written).
-  They now run after a queued build as after a single-model one, and a failed sync
-  makes the result an error there too.
 - **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
   off.** The tool is published only when `sql.enabled` is true and `sql.server`
   is set. The wizard writes both, but a hand-edited config can carry the server
