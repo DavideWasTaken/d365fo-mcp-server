@@ -209,6 +209,10 @@ const TOTAL_BUDGET = 45_100;
 // annotations), 45,078 -> 45,402. That is an allowance for an opt-in surface,
 // not headroom for the default one: it is asserted separately below.
 const SQL_CONFIGURED_ALLOWANCE = 330;
+// trace_d365fo likewise: published only once trace.enabled is true, so it is an
+// allowance for an opt-in surface asserted on its own, not part of TOTAL_BUDGET.
+// Measured 381 chars for the tool (schema, description, annotations).
+const TRACE_ENABLED_ALLOWANCE = 400;
 const LARGEST_TOOL_BUDGET = 5_780;
 
 async function getTools(): Promise<Array<{ name: string }>> {
@@ -229,6 +233,21 @@ describe('tool schema token budget', () => {
       expect(tools.map(t => t.name)).toContain('axdb_sql');
       expect(tools.length).toBe(21);
       expect(JSON.stringify(tools).length).toBeLessThan(TOTAL_BUDGET + SQL_CONFIGURED_ALLOWANCE);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('adds no more than the trace allowance once tracing is enabled', async () => {
+    vi.stubEnv('D365FO_TRACE_ENABLED', 'true');
+    try {
+      const tools = await getTools();
+      expect(tools.map(t => t.name)).toContain('trace_d365fo');
+      expect(tools.length).toBe(21);
+      const traceChars = JSON.stringify(tools.find(t => t.name === 'trace_d365fo')).length;
+      // eslint-disable-next-line no-console
+      console.error(`[tool-budget] trace_d365fo ${traceChars} chars`);
+      expect(JSON.stringify(tools).length).toBeLessThan(TOTAL_BUDGET + TRACE_ENABLED_ALLOWANCE);
     } finally {
       vi.unstubAllEnvs();
     }

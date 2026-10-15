@@ -105,4 +105,5 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotations> = {
   update_symbol_index:              write('Update symbol index', { idempotent: true }),
   build_d365fo_project:             write('Build D365FO project', { idempotent: true }),
   run_systest_class:                write('Run SysTest unit tests'),
+  trace_d365fo:                     write('ETW performance trace', { destructive: true }),
 };

@@ -56,6 +56,7 @@ const TOOL_CAP_SIZES: Record<string, number | 'uncapped'> = {
   // handshake section behind the project table.
   get_workspace_info:               20000,
   axdb_sql:                         'uncapped', // the handler bounds its own JSON (boundedSqlResult); a cut here would slice it into invalid JSON
+  trace_d365fo:                     'uncapped', // bounded by boundedAnalysis, same reason
   default:                          5000,
 };
 
