@@ -3,9 +3,9 @@ import { basename, join, resolve } from 'node:path';
 import { isTraceEnabled, rememberOutputDir, resolveTraceConfig } from '../../config/trace.js';
 import { TraceInputSchema, traceContract, type TraceInput } from './trace/contract.js';
 import {
-  SESSION, accessDenied, armTimer, captureFileName, captures, clearTimer, freeBytes, isInside, isSessionRunning,
-  listDrives, readState, requiredFreeMB, settleExpired, sizeLimitMB, startCapture, stopCapture, writeState,
-  type CaptureState,
+  SESSION, accessDenied, armTimer, captureFileName, captures, clearTimer, freeBytes, isDriveRoot, isInside, isOurs,
+  isSessionRunning, listDrives, readState, requiredFreeMB, sameFile, settleExpired, sizeLimitMB, startCapture, stopCapture,
+  writeState, type CaptureState,
 } from './trace/capture.js';
 import { analysisFiles, analysisState, boundedAnalysis, startAnalysis, waitForAnalysis } from './trace/analysis.js';
 
@@ -17,6 +17,13 @@ const reply = (data: unknown, isError = false) => ({
 const fail = (code: string, message: string, extra: Record<string, unknown> = {}) => reply({ code, message, ...extra }, true);
 const ACCESS = 'logman was refused: capturing ETW needs MCP to run under an account in Administrators or Performance Log Users. Ask the user to fix the account and restart MCP; do not fall back to timer code without telling them.';
 const NOT_OURS = `An ETW session named ${SESSION} is running that this server did not start: another MCP instance on this VM, or a logman command. Only one capture runs at a time on the VM.`;
+
+/**
+ * The folders analyze and delete may touch: the last capture's and the configured/remembered one.
+ * Never a drive root, whose "inside" would be the whole drive.
+ */
+const traceFolders = (state: CaptureState | undefined) =>
+  [...new Set([state?.outputDir, resolveTraceConfig().outputDir].filter((d): d is string => !!d && !isDriveRoot(d)))];
 
 function captureView(state: CaptureState | undefined, running: boolean) {
   if (!state) return undefined;
@@ -41,12 +48,16 @@ async function start(input: Extract<TraceInput, { action: 'start' }>) {
   const limitMB = sizeLimitMB(seconds, config.maxSizeMB);
   const needMB = requiredFreeMB(limitMB);
   const neededGB = Math.ceil(needMB / 1024);
-  const askFolder = (why: string) => fail('TRACE_LOCATION_NEEDED',
-    `${why}; a ${seconds} s capture needs about ${neededGB} GB. Ask the user which folder to use (suggest the drive with most space, not the system drive), then call start again with outputDir. The folder will be remembered.`,
+  // A configured trace.outputDir always wins: the agent cannot move captures (and what delete may remove) elsewhere.
+  const configured = config.outputDirSource === 'config';
+  const askFolder = (why: string) => fail('TRACE_LOCATION_NEEDED', configured
+    ? `${why}; a ${seconds} s capture needs about ${neededGB} GB. trace.outputDir is set in the configuration: ask the user to free space there or to change it (d365fo-mcp config trace, then restart MCP), or start a shorter capture.`
+    : `${why}; a ${seconds} s capture needs about ${neededGB} GB. Ask the user which folder to use (suggest the drive with most space, not the system drive), then call start again with outputDir. The folder will be remembered.`,
     { drives: listDrives(), neededGB });
-  const chosen = input.outputDir ?? config.outputDir;
+  const chosen = configured ? config.outputDir : input.outputDir ?? config.outputDir;
   if (!chosen) return askFolder('No trace folder is set yet');
   const dir = resolve(chosen);
+  if (isDriveRoot(dir)) return askFolder(`${dir} is a drive root, which cannot be the trace folder (analyze and delete are confined to it); use a folder on it`);
   const free = freeBytes(dir);
   if (free === undefined || free / 2 ** 20 < needMB) {
     return askFolder(`${dir} has ${free === undefined ? 'no readable volume' : `${Math.round(free / 2 ** 30 * 10) / 10} GB free`}`);
@@ -54,7 +65,7 @@ async function start(input: Extract<TraceInput, { action: 'start' }>) {
 
   fs.mkdirSync(dir, { recursive: true });
   let remembered: string | undefined;
-  if (input.outputDir && input.rememberOutputDir !== false && config.outputDirSource !== 'config') remembered = rememberOutputDir(dir);
+  if (input.outputDir && input.rememberOutputDir !== false && !configured) remembered = rememberOutputDir(dir);
 
   const file = captureFileName(dir, input.label);
   const result = await startCapture(file, limitMB);
@@ -65,13 +76,14 @@ async function start(input: Extract<TraceInput, { action: 'start' }>) {
   const startedAt = new Date();
   const state: CaptureState = {
     file, outputDir: dir, mode: input.mode, label: input.label, startedAt: startedAt.toISOString(),
-    deadline: new Date(startedAt.getTime() + seconds * 1000).toISOString(), maxSizeMB: limitMB,
+    deadline: new Date(startedAt.getTime() + seconds * 1000).toISOString(), maxSizeMB: limitMB, ownerPid: process.pid,
   };
   writeState(state);
   armTimer(state);
   return reply({
     started: true, capture: captureView(state, true),
     ...(remembered ? { outputDirRemembered: `${dir} (saved in ${remembered})` } : {}),
+    ...(configured && input.outputDir && !sameFile(input.outputDir, dir) ? { outputDirIgnored: `trace.outputDir is configured; the capture is in ${dir}.` } : {}),
     nextStep: input.mode === 'auto'
       ? `Reproduce the scenario now with your browser tool or by running the job, then call stop. The capture ends by itself after ${seconds} s.`
       : `Tell the user the capture is running and what to do in the D365FO client; when they say they are done, call stop. It ends by itself after ${seconds} s.`,
@@ -87,7 +99,7 @@ async function stop() {
     return reply({ stopped: true, alreadyEnded: true, capture: captureView(settled, false), nextStep: 'Call analyze.' });
   }
   // The session name is the same for every instance on the VM; the state file is this one's.
-  if (!state || state.stoppedAt) return fail('TRACE_NOT_OURS', `${NOT_OURS} Do not stop it from here; if it is left over, the user can end it with: logman stop ${SESSION} -ets`);
+  if (!state || state.stoppedAt || !isOurs(state)) return fail('TRACE_NOT_OURS', `${NOT_OURS} Do not stop it from here; if it is left over, the user can end it with: logman stop ${SESSION} -ets`);
   const result = await stopCapture();
   if (result.code !== 0) {
     if (accessDenied(result)) return fail('TRACE_ACCESS_DENIED', ACCESS);
@@ -115,7 +127,10 @@ async function analyze(input: Extract<TraceInput, { action: 'analyze' }>, contex
   const state = await settleExpired();
   const etl = resolve(input.file ?? state?.file ?? '');
   if (!input.file && !state) return fail('TRACE_NO_CAPTURE', 'No capture yet: start one, or pass file.');
-  if (state && !state.stoppedAt && resolve(state.file) === etl) return fail('TRACE_STILL_RUNNING', 'This capture is still running: call stop first.');
+  if (input.file && !traceFolders(state).some(d => isInside(etl, d))) {
+    return fail('TRACE_FILE_REFUSED', `Only captures inside the trace folder can be analysed${traceFolders(state).length ? ` (${traceFolders(state).join(', ')})` : ''}.`);
+  }
+  if (state && !state.stoppedAt && sameFile(state.file, etl)) return fail('TRACE_STILL_RUNNING', 'This capture is still running: call stop first.');
   if (!fs.existsSync(etl)) return fail('TRACE_FILE_NOT_FOUND', `${etl} does not exist.`);
   const options = { focus: input.focus, pid: input.pid, scope: input.scope, top: input.top };
   const files = analysisFiles(etl, options);
@@ -144,10 +159,10 @@ async function analyze(input: Extract<TraceInput, { action: 'analyze' }>, contex
 
 function remove(input: Extract<TraceInput, { action: 'delete' }>) {
   const state = readState();
-  const dir = state?.outputDir ?? resolveTraceConfig().outputDir;
+  const dirs = traceFolders(state);
   const etl = resolve(input.file);
-  if (!dir || !isInside(etl, dir)) return fail('TRACE_DELETE_REFUSED', `Only captures inside the trace folder${dir ? ` (${dir})` : ''} can be deleted.`);
-  if (state && !state.stoppedAt && resolve(state.file) === etl) return fail('TRACE_STILL_RUNNING', 'This capture is running: call stop first.');
+  if (!dirs.some(d => isInside(etl, d))) return fail('TRACE_DELETE_REFUSED', `Only captures inside the trace folder${dirs.length ? ` (${dirs.join(', ')})` : ''} can be deleted.`);
+  if (state && !state.stoppedAt && sameFile(state.file, etl)) return fail('TRACE_STILL_RUNNING', 'This capture is running: call stop first.');
   const name = basename(etl).toLowerCase();
   const parent = resolve(etl, '..');
   const removed: string[] = [];

@@ -28,4 +28,14 @@ describe.runIf(process.platform === 'win32')('doctor — trace', () => {
     expect(low?.fix).toContain('config trace');
     expect(checkTrace(store, 'Root', () => 200 * 2 ** 30)?.severity).toBe('ok');
   });
+
+  it("asks for as much room as start does at the configured limits", () => {
+    const store = openStore(tmp, null);
+    writeSetting(store, settingByPath('trace.enabled')!, true);
+    writeSetting(store, settingByPath('trace.outputDir')!, 'K:/Traces');
+    // Defaults (120 s, 4096 MB): start needs 4096 + 1024 MB, so 4.5 GB is not enough.
+    expect(checkTrace(store, 'Root', () => 4.5 * 2 ** 30)?.message).toContain('needs about 5 GB');
+    writeSetting(store, settingByPath('trace.maxSizeMB')!, 1000);
+    expect(checkTrace(store, 'Root', () => 4.5 * 2 ** 30)?.severity).toBe('ok');
+  });
 });

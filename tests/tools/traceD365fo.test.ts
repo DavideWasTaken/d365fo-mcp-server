@@ -17,6 +17,7 @@ vi.mock('../../src/tools/sdlc/trace/capture.js', async importOriginal => ({
   stopCapture: vi.fn(async () => ({ code: 0, output: '' })),
   startCapture: vi.fn(async () => ({ code: 0, output: '' })),
   listDrives: vi.fn(() => [{ drive: 'E:/', freeGB: 500 }]),
+  freeBytes: vi.fn(() => 500 * 2 ** 30),
 }));
 
 const parse = (r: { content: Array<{ text: string }> }) => JSON.parse(r.content[0].text);
@@ -99,6 +100,51 @@ describe('trace_d365fo', () => {
       expect(r.drives).toEqual([{ drive: 'E:/', freeGB: 500 }]);
     });
 
+    const running = (file: string, extra: Partial<Parameters<typeof writeState>[0]> = {}) =>
+      writeState({ file, outputDir: path.dirname(file), mode: 'manual', startedAt: new Date().toISOString(),
+        deadline: new Date(Date.now() + 60_000).toISOString(), maxSizeMB: 200, ...extra });
+
+    it('keeps a configured trace folder: outputDir cannot move captures elsewhere', async () => {
+      const configured = path.join(dir, 'configured');
+      vi.stubEnv('D365FO_TRACE_DIR', configured);
+      const r = parse(await traceD365foTool({ action: 'start', mode: 'auto', seconds: 10, outputDir: path.join(dir, 'elsewhere') }, {}));
+      expect(r.started).toBe(true);
+      expect(isInside(r.capture.file, configured)).toBe(true);
+      expect(r.outputDirIgnored).toMatch(/configured/);
+      expect(readState()?.ownerPid).toBe(process.pid);
+      expect(readRememberedOutputDir()).toBeUndefined();
+    });
+
+    it('refuses a drive root as the trace folder', async () => {
+      const r = parse(await traceD365foTool({ action: 'start', mode: 'auto', seconds: 10, outputDir: 'C:\\' }, {}));
+      expect(r.code).toBe('TRACE_LOCATION_NEEDED');
+      expect(r.message).toMatch(/drive root/);
+      expect(readRememberedOutputDir()).toBeUndefined();
+    });
+
+    it('analyses only captures inside the trace folder', async () => {
+      vi.stubEnv('D365FO_TRACE_DIR', path.join(dir, 'traces'));
+      const outside = path.join(dir, 'other', 'a.etl');
+      fs.mkdirSync(path.dirname(outside), { recursive: true });
+      fs.writeFileSync(outside, 'x');
+      expect(parse(await traceD365foTool({ action: 'analyze', file: outside }, {})).code).toBe('TRACE_FILE_REFUSED');
+      expect(parse(await traceD365foTool({ action: 'analyze', file: '\\\\host\\share\\a.etl' }, {})).code).toBe('TRACE_FILE_REFUSED');
+    });
+
+    it('recognises the running capture whatever the letter case', async () => {
+      const file = path.join(dir, 'traces', 'd365fo-a.etl');
+      running(file);
+      const r = parse(await traceD365foTool({ action: 'delete', file: file.toUpperCase() }, {}));
+      expect(r.code).toBe('TRACE_STILL_RUNNING');
+    });
+
+    it("does not stop a capture another live instance sharing the index started", async () => {
+      logman.running = true;
+      running(path.join(dir, 'traces', 'a.etl'), { ownerPid: process.ppid });
+      expect(parse(await traceD365foTool({ action: 'stop' }, {})).code).toBe('TRACE_NOT_OURS');
+      expect(readState()?.stoppedAt).toBeUndefined();
+    });
+
     it("does not stop a session another instance started", async () => {
       logman.running = true;
       const r = await traceD365foTool({ action: 'stop' }, {});
@@ -121,6 +167,20 @@ describe('trace_d365fo', () => {
     expect(readState()).toMatchObject({ stopReason: 'server shut down' });
     await stopOwnCapture(stop);
     expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves another live instance's capture alone at shutdown, and keeps one it failed to stop", async () => {
+    const state = { file: 'E:/t/a.etl', outputDir: 'E:/t', mode: 'manual' as const, startedAt: new Date().toISOString(),
+      deadline: new Date(Date.now() + 60_000).toISOString(), maxSizeMB: 3000 };
+    const stop = vi.fn(async () => ({ code: 0, output: '' }));
+    writeState({ ...state, ownerPid: process.ppid });
+    await stopOwnCapture(stop);
+    expect(stop).not.toHaveBeenCalled();
+    expect(readState()?.stoppedAt).toBeUndefined();
+    // logman failed and the session still runs: not recorded as stopped, so its deadline still applies.
+    writeState({ ...state, ownerPid: process.pid });
+    await stopOwnCapture(async () => ({ code: 1, output: 'timeout' }), async () => true);
+    expect(readState()?.stoppedAt).toBeUndefined();
   });
 
   it('recognises a refused logman by its exit code, whatever the language', () => {

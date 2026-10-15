@@ -11,7 +11,7 @@ import { p } from '../ui.js';
 import { settingByPath } from '../../config/settings.js';
 import { bridgeBuildCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { commandExists } from '../exec.js';
-import { freeBytes } from '../../tools/sdlc/trace/capture.js';
+import { freeBytes, requiredFreeMB, sizeLimitMB } from '../../tools/sdlc/trace/capture.js';
 import { isLegacyInstanceLayout, listInstances, type Instance } from '../instances.js';
 import { checkRelease } from '../npmRegistry.js';
 import { conflictingLegacyValues, readPath, readSetting, settingSource, type SettingsStore } from '../settingsStore.js';
@@ -519,8 +519,12 @@ export function checkTrace(store: SettingsStore, label: string, free: (dir: stri
   }
   const bytes = free(dir);
   const gb = bytes === undefined ? undefined : Math.round(bytes / 2 ** 30 * 10) / 10;
-  if (gb === undefined || gb < 4) {
-    return { severity: 'warn', message: `${label}: trace.outputDir ${dir} has ${gb === undefined ? 'no readable volume' : `${gb} GB free`} — a one-minute capture of a busy batch can take 3 GB`, fix: 'point trace.outputDir at a drive with space: d365fo-mcp config trace' };
+  // What start requires for the longest capture the setup allows, so "ok" here means start will not refuse.
+  const limit = (path: string, fallback: number) => Number(readSetting(store, settingByPath(path)!) ?? fallback) || fallback;
+  const neededMB = requiredFreeMB(sizeLimitMB(limit('trace.maxSeconds', 120), limit('trace.maxSizeMB', 4096)));
+  if (bytes === undefined || bytes / 2 ** 20 < neededMB) {
+    const neededGB = Math.ceil(neededMB / 1024 * 10) / 10;
+    return { severity: 'warn', message: `${label}: trace.outputDir ${dir} has ${gb === undefined ? 'no readable volume' : `${gb} GB free`} — a capture at the configured limits needs about ${neededGB} GB`, fix: 'point trace.outputDir at a drive with space: d365fo-mcp config trace' };
   }
   return { severity: 'ok', message: `${label}: tracing enabled — captures in ${dir} (${gb} GB free). Needs Administrators or Performance Log Users.` };
 }
