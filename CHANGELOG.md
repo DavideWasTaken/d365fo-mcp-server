@@ -112,6 +112,13 @@ those are called out explicitly below.
   refused before anything is written.
 
 ### Changed
+- **`build_d365fo_project` no longer carries the multi-model build queue (#1122).**
+  Building referenced models has been switched off for a while and the queue
+  could not form, but its result branch would have skipped `bpCheck`, `dbSync`
+  and the last-build note had it ever run. The queue is removed; a
+  `buildReferencedModels` argument from an older client is still ignored, and a
+  full build now reports itself as `full build`, not `full build (target),
+  incremental (deps)`.
 - **Code comments are written in English.** Neither the system instructions nor
   the knowledge base said which language a `//` or `///` comment is in, so an
   agent talking to the user in Czech often commented the X++ in Czech, and

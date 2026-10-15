@@ -157,18 +157,21 @@ describe('optional AOS restart build workflow', () => {
     await buildProjectTool({ modelName: 'MyModel', wait: false }, {}); await finish();
     expect(m.restart).not.toHaveBeenCalled();
   });
-  it('renders saved queued restart results without replaying prerequisites', async () => {
+  it('compiles only the target model, even when an older client asks for referenced models (#1122)', async () => {
+    await buildProjectTool({ modelName: 'MyModel', wait: false, buildReferencedModels: true }, {}); await finish();
+    expect(m.spawn).toHaveBeenCalledTimes(1);
+    expect(state().modelName).toBe('MyModel');
+  });
+  it('renders saved restart results without replaying prerequisites', async () => {
     await buildProjectTool({ ...opts, dbSync: true }, {}); await finish();
     const [key, raw] = [...m.files.entries()].find(([p]) => p.includes('d365build_state'))!;
     const saved = JSON.parse(raw);
-    saved.buildQueue = ['Dependency', 'MyModel'];
-    saved.queueResults.unshift({ modelName: 'Dependency', status: 'succeeded', duration: 2, logFile: 'dep.log' });
     saved.restartWorkflow.result = { status: 'not-ready', message: 'AOS readiness unverified' };
     m.files.set(key, JSON.stringify(saved));
     const response = await buildProjectTool({ modelName: 'MyModel', wait: false }, {});
     expect(response.content[0].text).toContain('AOS readiness unverified');
     expect(response.content[0].text).toContain('Sync succeeded');
-    expect(response.content[0].text).not.toContain('✅ Build complete');
+    expect(response.content[0].text).not.toContain('✅ Build succeeded');
     expect(response.isError).toBe(true); expect(m.sync).toHaveBeenCalledTimes(1); expect(m.restart).toHaveBeenCalledTimes(1);
   });
   it('refuses replay and forced builds after the server owning a workflow disappears', async () => {
