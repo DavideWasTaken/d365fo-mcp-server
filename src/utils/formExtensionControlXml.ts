@@ -448,12 +448,14 @@ export function insertFormExtensionControl(
  * because an unknown enum value is exactly the kind of thing that deserializes
  * to a discarded node under a silent build.
  */
-type ResolvedPosition =
+export type ResolvedPosition =
   | { kind: 'none'; note?: string }
   | { kind: 'placed'; positionType: 'AfterItem' | 'Begin'; previousSibling?: string; note?: string }
   | { kind: 'invalid'; message: string };
 
-function resolvePosition(spec: FormExtensionControlSpec): ResolvedPosition {
+export function resolvePosition(
+  spec: Pick<FormExtensionControlSpec, 'parentControl' | 'previousSibling' | 'positionType'>,
+): ResolvedPosition {
   const requested = spec.positionType?.trim();
   const sibling = spec.previousSibling?.trim() || undefined;
 

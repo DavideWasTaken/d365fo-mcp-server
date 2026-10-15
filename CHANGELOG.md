@@ -135,6 +135,14 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **`add-control` puts a control where it was asked, and moves one that exists.**
+  On `objectType="form"` `previousSibling`/`positionType` were dropped (the bridge
+  appends to the parent), and an existing control could not be moved at all:
+  add-control again answered "already present — skipped" with a ✅ and
+  modify-property refuses `PositionType`/`PreviousSibling`. Display-method fields
+  added to a custom form stayed at the end of their group. A control the file
+  already defines is now moved (same parent; by order, or by the envelope's
+  position pair on a base-form parent) and never added a second time.
 - **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
   off.** The tool is published only when `sql.enabled` is true and `sql.server`
   is set. The wizard writes both, but a hand-edited config can carry the server
