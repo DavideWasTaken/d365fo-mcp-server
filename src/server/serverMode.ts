@@ -15,8 +15,11 @@
  *     needs (issue #825). 'core' publishes only the plan → discover → write →
  *     build → verify loop; MCP_EXTRA_TOOLS adds individual tools back.
  *
- * isToolEnabled() is the single predicate combining both, shared by the
- * ListTools filter and the runtime call gate so they cannot drift apart.
+ * isToolEnabled() is the predicate combining both for the ListTools filter. The
+ * runtime call gate in toolHandler checks the same two parts one at a time, so
+ * a refusal can name its reason. The one difference is axdb_sql: unpublished
+ * while SQL is unconfigured, it still reaches its own handler, which answers
+ * SQL_DISABLED with the way to configure it.
  */
 
 /**
@@ -239,9 +242,9 @@ export function isToolInProfile(
 }
 
 /**
- * Single source of truth for whether a tool is published AND callable: locality
- * first, then breadth. Used by the ListTools filter (mcpServer) and the runtime
- * call gate (toolHandler).
+ * Whether a tool is published: locality first, then breadth, and axdb_sql only
+ * once SQL is configured. Used by the ListTools filter (mcpServer); the runtime
+ * call gate (toolHandler) applies the locality and breadth parts itself.
  */
 export function isToolEnabled(
   toolName: string,

@@ -44,7 +44,7 @@ beforeEach(async () => {
   saved = {
     autoDetectedProject: cfg.autoDetectedProject, autoDetectionAttempted: cfg.autoDetectionAttempted,
     toolForcedProject: cfg.toolForcedProject, runtimeContext: cfg.runtimeContext,
-    lastForcedProjectPath: cfg.lastForcedProjectPath,
+    lastForcedProjectPath: cfg.lastForcedProjectPath, serverDetectedProjectPath: cfg.serverDetectedProjectPath,
   };
   savedEnv = process.env.D365FO_PROJECT_PATH;
   delete process.env.D365FO_PROJECT_PATH;
@@ -104,6 +104,43 @@ describe('which projects vouch for their own folder', () => {
     const note = await registerFileInActiveProject('class', 'CRThing', 'ContosoRobotics', foreignProject);
     expect(note).toContain('added it to');
   });
+
+  /**
+   * An agent routinely "confirms" its project with get_workspace_info(projectPath=…)
+   * naming the very project the server detected. That went through forceProject,
+   * which marked it tool-activated — and from then on every create, label and
+   * modify registration into it was refused as outside the solution roots.
+   */
+  describe('a tool call re-selecting the project the server detected', () => {
+    // After the detection beforeEach started, so it cannot overwrite this one.
+    const detect = async (projectPath: string) => {
+      await cfg.awaitPendingDetection();
+      cfg.lastForcedProjectPath = null;
+      cfg.serverDetectedProjectPath = null;
+      cfg.autoDetectedProject = {
+        projectPath, modelName: 'ContosoRobotics', solutionPath: path.dirname(path.dirname(projectPath)),
+      };
+    };
+
+    it('leaves it detected, so it keeps its root', async () => {
+      await detect(foreignProject);
+      expect(await cfg.forceProject(foreignProject)).not.toBeNull();
+      expect((await assertProjectPathAllowed(foreignProject)).ok).toBe(true);
+    });
+
+    it('also after switching away to another project and back', async () => {
+      await detect(foreignProject);
+      const elsewhere = await projectIn('elsewhere-');
+      try {
+        expect(await cfg.forceProject(elsewhere)).not.toBeNull();
+        expect((await assertProjectPathAllowed(elsewhere)).ok).toBe(false);
+        expect(await cfg.forceProject(foreignProject)).not.toBeNull();
+        expect((await assertProjectPathAllowed(foreignProject)).ok).toBe(true);
+      } finally {
+        await fs.rm(path.dirname(path.dirname(elsewhere)), { recursive: true, force: true });
+      }
+    });
+  });
 });
 
 describe('registerFileInActiveProject (create/modify on an existing, unregistered file)', () => {
@@ -118,5 +155,34 @@ describe('registerFileInActiveProject (create/modify on an existing, unregistere
     const note = await registerFileInActiveProject('class', 'CRThing', 'ContosoRobotics', ownProject);
     expect(note).toContain('added it to');
     expect(await fs.readFile(ownProject, 'utf-8')).toContain('AxClass\\CRThing');
+  });
+});
+
+/**
+ * get_workspace_info(projectPath=…) switches to a project outside the roots without
+ * a word, and every create after it writes the object and then reports "failed to
+ * add to project". The switch itself is the moment to say so — and which setting
+ * makes the project a root.
+ */
+describe('get_workspace_info(projectPath=…) outside the solution roots', () => {
+  const context = (): any => {
+    const stmt = { all: () => [], get: () => undefined, run: () => {} };
+    const db = { prepare: () => stmt };
+    return { symbolIndex: { db, getReadDb: () => db, getLastIndexedAt: () => null }, parser: {}, cache: {}, workspaceScanner: {}, hybridSearch: {} };
+  };
+  const switchTo = async (projectPath: string): Promise<string> => {
+    const { getWorkspaceInfoTool } = await import('../../src/tools/readers/getWorkspaceInfo.js');
+    const r = await getWorkspaceInfoTool({ method: 'tools/call', params: { name: 'get_workspace_info', arguments: { projectPath } } } as any, context());
+    return String(r.content[0].text);
+  };
+
+  it('warns at the switch, naming workspace.solutionsPath', async () => {
+    const text = await switchTo(foreignProject);
+    expect(text.split('\n')[0]).toMatch(/^⚠️ Switched to .*outside the configured solution roots/);
+    expect(text).toContain('workspace.solutionsPath');
+  });
+
+  it('says nothing for a project under the roots', async () => {
+    expect(await switchTo(ownProject)).not.toContain('outside the configured solution roots');
   });
 });

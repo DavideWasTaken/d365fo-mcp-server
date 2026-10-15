@@ -932,12 +932,13 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
     const translationMap = new Map<string, { text: string; comment?: string }>();
     // The comment each translation STATES (its own, defaultComment or description). Update
     // keeps a label's existing comment where the call states none; effectiveDescription's
-    // project-name/labelFileId default is for new labels only.
+    // project-name/labelFileId default is for new labels only. Keyed like translationMap,
+    // so a label's text and its comment always come from the same entry.
     const statedComments = new Map<string, string | undefined>();
     for (const tr of translations) {
-      translationMap.set(tr.language.replace(/_/g, '-'), { text: tr.text, comment: tr.comment ?? defaultComment ?? effectiveDescription });
-      const key = tr.language.replace(/_/g, '-').toLowerCase();
-      if (!statedComments.has(key)) statedComments.set(key, tr.comment ?? defaultComment ?? description);
+      const language = tr.language.replace(/_/g, '-');
+      translationMap.set(language, { text: tr.text, comment: tr.comment ?? defaultComment ?? effectiveDescription });
+      statedComments.set(language, tr.comment ?? defaultComment ?? description);
     }
     // Case-insensitive view. The FIRST spelling of a locale keeps the key, so a
     // later case variant (`IT-it` after `it-IT`) cannot overwrite it.
@@ -989,9 +990,12 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
     // 2. Discover the language folders that already exist in the model.
     //    NOTE: LabelResources/ is shared by EVERY label file in the model, so this lists
     //    locales owned by sibling label files too. The `languages` arg scopes the writes.
-    const requestedLanguages = (args.languages ?? [])
+    // `en-US` and `en_US` are one folder: list it once, or it is written and then
+    // reported as already existing.
+    const requestedLanguages = [...new Map((args.languages ?? [])
       .map(l => l.trim().replace(/_/g, '-'))
-      .filter(Boolean);
+      .filter(Boolean)
+      .map(l => [l.toLowerCase(), l] as const)).values()];
 
     let discoveredLanguages: string[] = [];
     try {
@@ -1126,10 +1130,12 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
     }
 
     // On update, a folder that would only get the last-resort fallback keeps its own text —
-    // unless that text is the fallback source's current text, i.e. a copy an earlier
-    // create seeded (e.g. only en-US supplied); a copy follows the update.
-    const lastResortSource = (translationsByLocale.get('en-us')
-      ?? translationsByLocale.get(translations[0].language.replace(/_/g, '-').toLowerCase()))?.language;
+    // unless that text is en-US's current text, i.e. a copy an earlier create seeded (only
+    // en-US supplied); a copy follows the update. Only en-US is a copy source: with en-US
+    // not supplied the fallback is the first supplied locale, and en-US itself would then
+    // be the folder judged a "copy" whenever the two texts agree (Status, Name, Filter…),
+    // overwriting the primary language with a translation.
+    const lastResortSource = translationsByLocale.get('en-us')?.language;
     let lastResortSourceText: string | undefined;
     if (args.overwriteExisting && lastResortSource) {
       // Every folder on disk, not only the targeted ones: a `languages` scope that leaves
@@ -1192,8 +1198,8 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
           keptExisting.push(`${lang} ("${current.text}")`);
           continue;
         }
-        const stated = lastResort ? (defaultComment ?? description) : statedComments.get(resolved.language.toLowerCase());
-        entry = { text: entry.text, comment: stated ?? current.comment ?? entry.comment };
+        const stated = lastResort ? (defaultComment ?? description) : statedComments.get(resolved.language);
+        entry = { text: entry.text, comment: stated ?? current.comment };
       }
       labelMap.set(labelId, entry);
 

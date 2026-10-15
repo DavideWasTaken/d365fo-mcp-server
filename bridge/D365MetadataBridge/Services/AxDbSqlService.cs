@@ -215,24 +215,52 @@ WHERE (@schema='' AND o.object_id=OBJECT_ID(QUOTENAME(@table))) OR (s.name=@sche
             result["columns"] = columns; result["rows"] = rows; result["truncated"] = false;
             // Keep cancellation active during synchronous bounded stream reads too.
             using (token.Register(() => { try { command.Cancel(); } catch (InvalidOperationException) { } }))
-            using (var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token).ConfigureAwait(false))
             {
-                var names = new HashSet<string>(StringComparer.Ordinal);
-                for (var i = 0; i < reader.FieldCount; i++)
+                var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token).ConfigureAwait(false);
+                var stoppedEarly = false;
+                try
                 {
-                    if (!names.Add(reader.GetName(i))) throw new ArgumentException("Duplicate result column names are unsupported; give columns unique aliases.");
-                    columns.Add(new { name = reader.GetName(i), type = reader.GetDataTypeName(i) });
+                    var names = new HashSet<string>(StringComparer.Ordinal);
+                    for (var i = 0; i < reader.FieldCount; i++)
+                    {
+                        if (!names.Add(reader.GetName(i))) throw new ArgumentException("Duplicate result column names are unsupported; give columns unique aliases.");
+                        columns.Add(new { name = reader.GetName(i), type = reader.GetDataTypeName(i) });
+                    }
+                    var budget = ResponseByteLimit - 4096;
+                    long used = JsonSerializer.SerializeToUtf8Bytes(result, Json).Length;
+                    if (used > budget) throw new ArgumentException("Result column metadata exceeds the response budget.");
+                    while (await reader.ReadAsync(token).ConfigureAwait(false))
+                    {
+                        if (rows.Count == maxRows) { result["truncated"] = true; stoppedEarly = true; break; }
+                        // Counted cell by cell, not once the row is built: a row of many large
+                        // cells (`SELECT c AS c1, c AS c2, …`) would otherwise sit in memory whole,
+                        // hundreds of MB, before a whole-row check refused it.
+                        var row = new Dictionary<string, object?>();
+                        long rowBytes = 3; // {}, and the comma before it
+                        for (var i = 0; i < reader.FieldCount && used + rowBytes <= budget; i++)
+                        {
+                            var value = Cell(reader, i, token);
+                            row[reader.GetName(i)] = value;
+                            rowBytes += JsonSerializer.SerializeToUtf8Bytes(reader.GetName(i), Json).Length
+                                + JsonSerializer.SerializeToUtf8Bytes(value, Json).Length + 2; // : and ,
+                        }
+                        if (used + rowBytes > budget) { result["truncated"] = true; stoppedEarly = true; break; }
+                        rows.Add(row);
+                        used += rowBytes;
+                    }
                 }
-                if (JsonSerializer.SerializeToUtf8Bytes(result, Json).Length > ResponseByteLimit - 4096)
-                    throw new ArgumentException("Result column metadata exceeds the response budget.");
-                while (await reader.ReadAsync(token).ConfigureAwait(false))
+                finally
                 {
-                    if (rows.Count == maxRows) { result["truncated"] = true; break; }
-                    var row = new Dictionary<string, object?>();
-                    for (var i = 0; i < reader.FieldCount; i++) row[reader.GetName(i)] = Cell(reader, i, token);
-                    rows.Add(row);
-                    if (JsonSerializer.SerializeToUtf8Bytes(result, Json).Length > ResponseByteLimit - 4096)
-                    { rows.RemoveAt(rows.Count - 1); result["truncated"] = true; break; }
+                    if (stoppedEarly)
+                    {
+                        // Disposing a reader with rows left reads and discards every one of them:
+                        // 11.5 s for a 100-row answer over a 5.8M-row AxDB table, long enough on a
+                        // bigger table to turn a good truncated answer into AXDB_TIMEOUT. Cancel
+                        // first; the rows already read are the answer, so a cancel error is not one.
+                        try { command.Cancel(); } catch { }
+                        try { reader.Dispose(); } catch (SqlException) { }
+                    }
+                    else reader.Dispose();
                 }
             }
         }

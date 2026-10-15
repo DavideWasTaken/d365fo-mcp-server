@@ -126,6 +126,36 @@ describe('labels(action="update") on an existing label', () => {
     expect(await read('en-US')).toContain('Greeting=Helo');
   });
 
+  it('never takes en-US for a copy of another language that happens to read the same', async () => {
+    // Status, Name, Filter… are the same word in English and German. Without en-US in the
+    // call the fallback source is `de`, and en-US used to be judged its "copy".
+    await seed('en-US', 'Greeting=Status\r\n ;English comment\r\n');
+    await seed('de', 'Greeting=Status\r\n');
+    await update([{ language: 'de', text: 'Zustand' }]);
+    expect(await read('de')).toContain('Greeting=Zustand');
+    expect(await read('en-US')).toContain('Greeting=Status\r\n ;English comment\r\n');
+    expect(await read('it')).toContain('Greeting=Ciao');
+  });
+
+  it('adds no comment the call did not state to a label that had none', async () => {
+    await seed('en-US', 'Greeting=Helo\r\nOther=Keep me\r\n');
+    await update([{ language: 'en-US', text: 'Hello' }]);
+    expect(await read('en-US')).toContain('Greeting=Hello\r\nOther=Keep me');
+  });
+
+  it('takes the text and the comment from the same entry when a locale is given twice', async () => {
+    await update([
+      { language: 'en_US', text: 'First', comment: 'first comment' },
+      { language: 'en-US', text: 'Second', comment: 'second comment' },
+    ]);
+    expect(await read('en-US')).toContain('Greeting=Second\r\n ;second comment\r\n');
+  });
+
+  it('writes a folder listed twice in the languages scope once', async () => {
+    const reply = await update([{ language: 'en-US', text: 'Hello' }], { languages: ['en-US', 'en_US'] });
+    expect(reply.match(/✔ en-US/g)).toHaveLength(1);
+  });
+
   it('says the label was left unchanged when every targeted folder kept its text', async () => {
     const reply = await update([{ language: 'en-US', text: 'Hello' }], { languages: ['it'] });
     expect(reply).toContain('left unchanged');

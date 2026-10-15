@@ -6,6 +6,7 @@
 import * as fs from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import * as path from 'path';
+import { findDescriptorPath } from '../metadata/modelDescriptor.js';
 import * as os from 'os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { autoDetectD365Project, detectD365Project, scanAllD365Projects, extractModelNameFromProject, detectGitBranch, isMicrosoftDemoModel, distinctCustomModels, type D365ProjectInfo } from './workspaceDetector.js';
@@ -52,6 +53,13 @@ function normalizePath(p: string): string {
   } catch {
     return p;
   }
+}
+
+/** Two spellings of one project file — case-insensitively on Windows, as its paths are. */
+function sameProjectPath(a: string, b: string): boolean {
+  const x = path.normalize(a);
+  const y = path.normalize(b);
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
 class ConfigManager {
@@ -101,6 +109,12 @@ class ConfigManager {
   private toolForcedProject: { anchorModel: string; forcedModel: string } | null = null;
   /** The .rnrproj forceProject() last activated — see getServerDetectedProject(). */
   private lastForcedProjectPath: string | null = null;
+  /**
+   * The project detection itself found, as forceProject() saw it before switching.
+   * Activating THAT one through a tool call (an agent "confirming" its project) is
+   * not a caller's choice, so it keeps the solution root detection gave it.
+   */
+  private serverDetectedProjectPath: string | null = null;
   // The sources available the last time detection ran, and whether the retry that
   // a change in them buys has been spent — see ensureProjectDetection().
   private lastDetectionFingerprint: string | null = null;
@@ -208,9 +222,13 @@ class ConfigManager {
         // When the workspace already named the model, its .rnrproj can only be in
         // that model's package: scan it, not every package. The whole root is
         // hundreds of packages — 7.5 s on the dev VM, for a project that is not
-        // there when the workspace is the package folder itself.
-        const modelPackage = detectedProject?.modelName ? path.join(packagePathHint, detectedProject.modelName) : null;
-        const scanRoot = modelPackage && existsSync(modelPackage) ? modelPackage : packagePathHint;
+        // there when the workspace is the package folder itself. The package is the
+        // one whose descriptor declares the model, not a folder named after it:
+        // the two names differ for an ISV model (#1086).
+        const modelPackage = detectedProject?.modelName
+          ? findDescriptorPath(packagePathHint, detectedProject.modelName)?.packageName
+          : undefined;
+        const scanRoot = modelPackage ? path.join(packagePathHint, modelPackage) : packagePathHint;
         debugLog(`[ConfigManager] No .rnrproj in workspace — scanning packagePath: ${scanRoot}`);
         const pkgScan = await detectD365Project(scanRoot, 4);
         if (pkgScan?.projectPath) {
@@ -977,7 +995,7 @@ class ConfigManager {
   getServerDetectedProject(): D365ProjectInfo | null {
     const detected = this.autoDetectedProject;
     if (!detected?.projectPath) return null;
-    if (this.lastForcedProjectPath && path.normalize(detected.projectPath) === this.lastForcedProjectPath) return null;
+    if (this.lastForcedProjectPath && sameProjectPath(detected.projectPath, this.lastForcedProjectPath)) return null;
     return detected;
   }
 
@@ -1419,6 +1437,8 @@ class ConfigManager {
       // hand the caller exactly the bypass the anchor exists to deny.
       await this.awaitPendingDetection();
       const modelBeforeSwitch = this.getModelName();
+      const detectedBeforeSwitch = this.getServerDetectedProject()?.projectPath;
+      if (detectedBeforeSwitch) this.serverDetectedProjectPath = path.normalize(detectedBeforeSwitch);
       const normalizedPath = path.normalize(projectPath);
       const modelName = await extractModelNameFromProject(normalizedPath);
       if (!modelName) {
@@ -1431,7 +1451,13 @@ class ConfigManager {
         solutionPath: path.dirname(path.dirname(normalizedPath)),
       };
       this.autoDetectedProject = project;
-      this.lastForcedProjectPath = normalizedPath;
+      // Re-selecting the project the server detected — now or before an earlier
+      // switch — leaves it detected: marking it forced took away the solution root
+      // a zero-config install registers every create through.
+      this.lastForcedProjectPath =
+        this.serverDetectedProjectPath && sameProjectPath(normalizedPath, this.serverDetectedProjectPath)
+          ? null
+          : normalizedPath;
       this.autoDetectionAttempted = true;
       // Cache under the project path key so direct lookups work.
       this.autoDetectionCache.set(normalizedPath, project);
