@@ -775,9 +775,11 @@ export const D365FO_FILE_OP_SPECS: Record<string, D365FileOpSpec> = {
       + 'designer. On an EXTENSION-OWNED <DataGroup> parent the control IS written, with a warning: '
       + 'nothing tops that group up, so the explicit control is what puts the field on the form, and '
       + 'the field group entry is needed as well so a later designer Refresh does not discard it. '
-      + 'previousSibling works under either parent — under an extension-defined parent it orders the '
-      + 'control in the XML, under a base-form parent it is written as '
-      + '<PositionType>AfterItem</PositionType> + <PreviousSibling>.',
+      + 'previousSibling / positionType (Begin, End) place the control: on objectType="form" and under an '
+      + 'extension-defined parent by its order among the children of the parent, under a base-form parent as '
+      + '<PositionType>AfterItem</PositionType> + <PreviousSibling>. On a control the file ALREADY defines, '
+      + 'add-control with previousSibling or positionType MOVES it there (same parent only; to change parent, '
+      + 'remove-control then add-control) — the way to put a field next to another after creating it.',
   },
   'remove-control': {
     required: ['controlName'],

@@ -20,6 +20,7 @@ import { withFileLock, writeFileAtomic } from '../../utils/atomicFileWrite.js';
 import { normalizeD365Xml } from '../../utils/d365XmlNormalizer.js';
 import { insertFormExtensionControl } from '../../utils/formExtensionControlXml.js';
 import { removeFormControl } from '../../utils/formControlRemoval.js';
+import { formDefinesControl, placeFormControl, type PlaceFormControlSpec } from '../../utils/formControlPlacement.js';
 import { addSecurityEntryPoint, removeSecurityEntryPoint } from '../xml/securityPrivilegeXml.js';
 import { removeDiagnosticSuppression, addDiagnosticSuppression, emptySuppressionListXml } from '../../utils/ignoreDiagnosticListXml.js';
 import { buildSuppressionXml } from '../../knowledge/bpMonikers/index.js';
@@ -459,9 +460,15 @@ export const directXmlAddControl = serializedOnFile(async (
       case 'unsupported':
         return null; // not a form-extension shape we recognise — caller falls through
       case 'exists':
+        // Asked for a position: the caller is moving the control it added earlier, and
+        // "skipped" with a ✅ would leave it where it was while saying all is well.
+        if (previousSibling || positionType) {
+          return placeInFile(filePath, content, { controlName, parentControl, previousSibling, positionType });
+        }
         return {
           success: true,
-          message: `✅ Control '${controlName}' already present in ${filePath} — skipped (idempotent).`,
+          message: `✅ Control '${controlName}' already present in ${filePath} — skipped (idempotent). ` +
+            `To move it, call add-control again with previousSibling or positionType.`,
         };
       case 'refused':
         return { success: false, message: outcome.message };
@@ -487,6 +494,75 @@ export const directXmlAddControl = serializedOnFile(async (
     return null;
   }
 });
+
+/** Move a control the file defines; shared by the two writers below, which hold the file lock. */
+async function placeInFile(
+  filePath: string,
+  content: string,
+  spec: PlaceFormControlSpec,
+): Promise<{ success: boolean; message: string }> {
+  const outcome = placeFormControl(content, spec);
+  switch (outcome.kind) {
+    case 'unsupported':
+      return { success: false, message: `${filePath} is not an AxForm or AxFormExtension; no control could be positioned in it.` };
+    case 'not-found':
+      return {
+        success: false,
+        message: `Control '${spec.controlName}' is not defined in ${filePath}. ` +
+          (outcome.present.length ? `Controls in this file: ${outcome.present.join(', ')}.` : 'This file defines no controls.'),
+      };
+    case 'refused':
+      return { success: false, message: outcome.message };
+  }
+  if (outcome.changed) await writeFileAtomic(filePath, normalizeD365Xml(outcome.xml));
+  return { success: true, message: `${outcome.changed ? '✅' : 'ℹ️'} ${outcome.detail}. File: ${filePath}` };
+}
+
+/** Move a control already in the file to previousSibling / positionType. */
+export const directXmlPlaceControl = serializedOnFile(async (
+  filePath: string,
+  spec: PlaceFormControlSpec,
+): Promise<{ success: boolean; message: string }> => {
+  const content = (await fs.readFile(filePath, 'utf-8')).replace(/^﻿/, '').replace(/\r\n/g, '\n');
+  return placeInFile(filePath, content, spec);
+});
+
+/**
+ * add-control on a plain form: the bridge creates the control, the XML puts it in place.
+ *
+ * The bridge's AddControl has no position (it appends to the parent) and no duplicate
+ * check, so a control the form already defines is not added again: it is moved when a
+ * position was asked for, and reported as present otherwise. A control the bridge did
+ * add is then moved to previousSibling / positionType; a failure there leaves it, added,
+ * at the end of its parent, and says so.
+ */
+export async function addBaseFormControl(
+  filePath: string,
+  spec: PlaceFormControlSpec & { parentControl: string },
+  addViaBridge: () => Promise<{ success: boolean; message: string } | null>,
+): Promise<{ success: boolean; message: string } | null> {
+  const positioned = !!(spec.previousSibling || spec.positionType);
+  let existing = '';
+  try { existing = await fs.readFile(filePath, 'utf-8'); } catch { /* the bridge resolves the form itself */ }
+  if (existing && formDefinesControl(existing.replace(/\r\n/g, '\n'), spec.controlName)) {
+    return positioned
+      ? directXmlPlaceControl(filePath, spec)
+      : {
+          success: true,
+          message: `ℹ️ Control '${spec.controlName}' is already on the form — nothing added. ` +
+            `To move it, call add-control again with previousSibling or positionType. File: ${filePath}`,
+        };
+  }
+  const added = await addViaBridge();
+  if (!added?.success || !positioned) return added;
+  const placed = await directXmlPlaceControl(filePath, spec);
+  return {
+    success: true,
+    message: placed.success
+      ? `${added.message}\n${placed.message}`
+      : `${added.message}\n⚠️ Added at the END of '${spec.parentControl}' — it could not be positioned: ${placed.message}`,
+  };
+}
 
 /**
  * Normalises a NoYes-shaped flag to a boolean.
