@@ -20,6 +20,13 @@ vi.mock('../../src/tools/sdlc/trace/capture.js', async importOriginal => ({
   freeBytes: vi.fn(() => 500 * 2 ** 30),
 }));
 
+// The bridge binary the server would start, as the analysis finds it without a running bridge.
+const bridgeExe = vi.hoisted(() => ({ path: undefined as string | undefined }));
+vi.mock('../../src/bridge/bridgeClient.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../src/bridge/bridgeClient.js')>()),
+  locateBridgeExe: vi.fn(() => bridgeExe.path),
+}));
+
 const parse = (r: { content: Array<{ text: string }> }) => JSON.parse(r.content[0].text);
 
 let dir: string;
@@ -30,6 +37,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   logman.running = false;
+  bridgeExe.path = undefined;
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -129,6 +137,19 @@ describe('trace_d365fo', () => {
       fs.writeFileSync(outside, 'x');
       expect(parse(await traceD365foTool({ action: 'analyze', file: outside }, {})).code).toBe('TRACE_FILE_REFUSED');
       expect(parse(await traceD365foTool({ action: 'analyze', file: '\\\\host\\share\\a.etl' }, {})).code).toBe('TRACE_FILE_REFUSED');
+    });
+
+    it('analyses with the built bridge binary when the long-running bridge did not start', async () => {
+      vi.stubEnv('D365FO_TRACE_DIR', path.join(dir, 'traces'));
+      const etl = path.join(dir, 'traces', 'd365fo-a.etl');
+      fs.mkdirSync(path.dirname(etl), { recursive: true });
+      fs.writeFileSync(etl, 'x');
+      expect(parse(await traceD365foTool({ action: 'analyze', file: etl, waitSeconds: 0 }, {})).code).toBe('TRACE_BRIDGE_UNAVAILABLE');
+      // node stands in for the binary: it rejects --analyze-trace, which shows the analysis was started with it.
+      bridgeExe.path = process.execPath;
+      const r = parse(await traceD365foTool({ action: 'analyze', file: etl, waitSeconds: 20 }, {}));
+      expect(r.code).toBe('TRACE_ANALYSIS_FAILED');
+      expect(r.message).toMatch(/exited with code/);
     });
 
     it('recognises the running capture whatever the letter case', async () => {

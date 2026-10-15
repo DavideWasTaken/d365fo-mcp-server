@@ -135,6 +135,12 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **`trace_d365fo(action="analyze")` refused when the bridge had not started.** The
+  analysis runs the bridge binary as a separate `--analyze-trace` process and needs no
+  D365FO assembly, but it took the binary's path from the running bridge only, so a
+  bridge that failed to start (no packages path, a cold-VM timeout) meant
+  `TRACE_BRIDGE_UNAVAILABLE`. It now falls back to the binary the server would start:
+  the configured `bridge.exePath`, else the first built candidate.
 - **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
   off.** The tool is published only when `sql.enabled` is true and `sql.server`
   is set. The wizard writes both, but a hand-edited config can carry the server

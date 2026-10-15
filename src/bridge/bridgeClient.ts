@@ -64,6 +64,30 @@ export * from './bridgeTypes.js';
 
 const BRIDGE_EXE_NAME = 'D365MetadataBridge.exe';
 
+/** Where a built bridge is looked for inside this installation, in order. */
+export function bridgeExeCandidates(): string[] {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return [
+    // Development: built in-tree
+    path.resolve(here, '../../bridge/D365MetadataBridge/bin/Release', BRIDGE_EXE_NAME),
+    // Production: alongside the server
+    path.resolve(here, './', BRIDGE_EXE_NAME),
+    path.resolve(here, BRIDGE_EXE_NAME),
+  ];
+}
+
+/**
+ * The bridge binary the server would start, found without starting it: the
+ * configured path when one is set (and exists — a configured path is never
+ * second-guessed), otherwise the first built candidate. For callers that only
+ * need the binary, such as the trace analysis (`--analyze-trace`), which touches
+ * no D365FO assembly and so works even when the long-running bridge did not start.
+ */
+export function locateBridgeExe(configured = process.env.D365FO_BRIDGE_EXE_PATH?.trim()): string | undefined {
+  if (configured) return fs.existsSync(configured) ? configured : undefined;
+  return bridgeExeCandidates().find(c => fs.existsSync(c));
+}
+
 /** Parse a positive-integer env var with a fallback (ignores invalid/non-positive values). */
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -1024,15 +1048,8 @@ export class BridgeClient extends EventEmitter {
       return configured;
     }
 
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const candidates = [
-      // Development: built in-tree
-      path.resolve(__dirname, '../../bridge/D365MetadataBridge/bin/Release', BRIDGE_EXE_NAME),
-      // Production: alongside the server
-      path.resolve(__dirname, './', BRIDGE_EXE_NAME),
-      path.resolve(__dirname, BRIDGE_EXE_NAME),
-    ];
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const candidates = bridgeExeCandidates();
 
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
