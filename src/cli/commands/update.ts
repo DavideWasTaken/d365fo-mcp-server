@@ -8,10 +8,10 @@
  */
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
+import { bridgeFreshness, type BridgeFreshness } from '../bridgeSources.js';
 import { DOTNET_MISSING, bridgeBuildCommand, installMode, isWindows, paths, repoRoot } from '../context.js';
-import { bridgeFreshness, writeBridgeSourceStamp } from '../bridgeSources.js';
 import { commandExists, runExe, runShell } from '../exec.js';
-import { branchStatus, changedFiles, gitHead } from '../gitState.js';
+import { branchStatus } from '../gitState.js';
 import { listInstances } from '../instances.js';
 import { checkRelease } from '../npmRegistry.js';
 import { instanceTarget, rootTarget } from '../target.js';
@@ -25,31 +25,38 @@ import { rebuildIndex } from './indexCmd.js';
  * `hadBridge` is taken before the update: judged on the after-state alone, a
  * bridge the update destroyed is indistinguishable from one that was never
  * built, and the difference is whether the server just lost its write path.
+ * `now` is taken after it: an update that moved the bridge sources leaves the
+ * binary in place, so whether it survived says nothing about whether it is
+ * still the bridge this code expects (#1115).
  *
- * A third input covers the binary that survives but no longer matches its
- * code. `git pull` never deletes the binary, so for a checkout the two above
- * always read "optional" — even when the pull brought C# fixes, which the old
- * binary then silently goes on without. `sourcesChanged` is whether the bridge
- * sources differ from the ones the binary was built from.
- *
- *   none     — there was no bridge, so this install does not use writes
- *   optional — the bridge survived and its sources did not move; rebuilding
- *              is a post-upgrade nicety
- *   stale    — the bridge survived, but its sources changed after it was
- *              built, so the binary predates them until it is rebuilt
- *   required — the update removed a bridge that was there, so the write path
- *              is gone until it is rebuilt
+ *   none      — there was no bridge, so this install does not use writes
+ *   optional  — the bridge survived and was built from these very sources;
+ *               rebuilding is only for a D365FO platform upgrade
+ *   required  — the update removed a bridge that was there, so the write path
+ *               is gone until it is rebuilt
+ *   stale     — the bridge survived but was built from older sources, so the
+ *               new code would run against the old bridge
+ *   unstamped — the bridge survived but records no sources (built before the
+ *               stamp existed); one rebuild writes the stamp
  */
-export type BridgeAction = 'none' | 'optional' | 'stale' | 'required';
+export type BridgeAction = 'none' | 'optional' | 'required' | 'stale' | 'unstamped';
 
-export function bridgeAction(hadBridge: boolean, existsNow: boolean, sourcesChanged = false): BridgeAction {
+export function bridgeAction(hadBridge: boolean, now: BridgeFreshness): BridgeAction {
   if (!hadBridge) return 'none';
-  if (!existsNow) return 'required';
-  return sourcesChanged ? 'stale' : 'optional';
+  switch (now) {
+    case 'missing': return 'required';
+    case 'current': return 'optional';
+    case 'stale': return 'stale';
+    case 'unstamped': return 'unstamped';
+  }
 }
 
-/** The bridge project, as a pathspec relative to the repository root. */
-const BRIDGE_SOURCES = 'bridge/D365MetadataBridge';
+/** Why a rebuild is required, said before asking for it. */
+const REQUIRED_BECAUSE: Record<Exclude<BridgeAction, 'none' | 'optional'>, string> = {
+  required: 'The update replaced the package, so the C# bridge binary is gone — writes stay unavailable until it is rebuilt.',
+  stale: 'The C# bridge was built from older sources than this version — the server would run the new code against the old bridge until it is rebuilt.',
+  unstamped: 'The C# bridge records no sources (it was built before that record existed), so it may be older than this version — rebuild it once so updates can tell from now on.',
+};
 
 /**
  * Where `npm install -g` runs. Anywhere but the package itself.
@@ -99,8 +106,6 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
   // update destroyed the write path, and saying so beats reading the absence
   // as "this install never needed writes" and silently moving on.
   const hadBridge = isWindows && fs.existsSync(paths.bridgeExe);
-  // Also before: what the pull moved is the diff from here to the new HEAD.
-  const headBefore = installMode === 'git' ? gitHead() : null;
 
   const steps: [string, () => Promise<number>][] = installMode === 'npm'
     ? [['npm install -g d365fo-mcp@latest', () => runShell('npm install -g d365fo-mcp@latest', { cwd: globalInstallCwd() })]]
@@ -124,32 +129,16 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
     }
   }
 
-  // The stamp the bridge build writes next to the binary is the reliable
-  // answer: it also catches sources that moved before this run — a hand-run
-  // `git pull`, or an earlier update whose npm install or build failed. A
-  // binary built before stamping existed has none; then fall back to what this
-  // pull moved (null when the diff cannot be computed: nothing known changed).
-  const freshness = bridgeFreshness();
-  const pulledSources = freshness === 'unknown' && headBefore
-    ? (changedFiles(headBefore, 'HEAD', BRIDGE_SOURCES) ?? []).length > 0
-    : false;
-  const action = bridgeAction(hadBridge, fs.existsSync(paths.bridgeExe), freshness === 'stale' || pulledSources);
+  const action = bridgeAction(hadBridge, bridgeFreshness());
   if (action !== 'none') {
     const gone = action === 'required';
-    const stale = action === 'stale';
-    if (gone) p.log.warn('The update replaced the package, so the C# bridge binary is gone — writes stay unavailable until it is rebuilt.');
-    if (stale) {
-      p.log.warn(
-        'The C# bridge sources changed after the bridge was built — ' +
-        'those changes are not in effect until it is rebuilt.\n' +
-        '   Stop MCP first: a running server keeps the binary locked.',
-      );
-    }
+    const needed = action !== 'optional';
+    if (needed) p.log.warn(REQUIRED_BECAUSE[action]);
     const rebuild = opts.yes || await askConfirm(
       gone
         ? 'Rebuild the C# bridge now? (required to restore writes)'
-        : stale
-          ? 'Rebuild the C# bridge now? (required for the changed bridge sources)'
+        : needed
+          ? 'Rebuild the C# bridge now? (required — this version may have changed it)'
           : 'Rebuild the C# bridge (recommended after a D365FO version upgrade)?',
     );
     if (rebuild && !await commandExists('dotnet')) {
@@ -162,20 +151,18 @@ export async function updateCommand(opts: { yes?: boolean }): Promise<void> {
       if (await runExe('dotnet', buildArgs, { cwd: paths.bridgeDir }) !== 0) {
         p.log.error(gone
           ? 'Bridge build failed — the server stays read-only until it succeeds.'
-          : stale
-            ? 'Bridge build failed — MCP keeps running the previous bridge binary, without the source changes.'
-            : 'Bridge build failed — writes may use the previous bridge binary.');
+          : 'Bridge build failed — writes keep using the previous bridge binary. ' +
+            'If a file is in use, stop the MCP server (VS Code / Visual Studio) and run the update again.');
         process.exitCode = 1;
         return;
       }
-      writeBridgeSourceStamp();
       p.log.success('C# bridge rebuilt.');
     } else if (gone) {
       // Declining is allowed, but it must not be quiet: the capability was
       // there before this command ran and is not there now.
       p.log.warn(`Skipped — the server runs read-only. Rebuild later with:\n   ${bridgeBuildCommand()}`);
-    } else if (stale) {
-      p.log.warn(`Skipped — MCP keeps running the previous bridge binary, without the source changes. Rebuild later with:\n   ${bridgeBuildCommand()}`);
+    } else if (needed) {
+      p.log.warn(`Skipped — the server keeps running the previous bridge binary. Rebuild later with:\n   ${bridgeBuildCommand()}`);
     }
   }
 

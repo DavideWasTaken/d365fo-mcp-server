@@ -44,7 +44,10 @@ does not start: it answers `TRACE_LOCATION_NEEDED` with every drive and its free
 asks you which folder to use, and the folder you choose is remembered in `trace-settings.json`
 beside the index database for the next captures. A configured `trace.outputDir` always wins: an
 `outputDir` the agent passes is then ignored. A drive root is refused as the folder, because
-`analyze` (with `file`) and `delete` accept only captures inside the trace folder.
+`analyze` (with `file`) and `delete` accept only captures inside the trace folder; so is a relative
+path. The drives are probed off the event loop with the same letters and 2-second budget as the
+packages-root scan: on a machine with a disconnected mapped drive the letters behind it are listed
+under `drivesNotProbed`, and `environment.scanDrives` (`D365FO_SCAN_DRIVES`) pins the set.
 Nothing is written to the system drive unless you choose it.
 
 ## Two ways to capture
@@ -63,7 +66,9 @@ outlive the session that started it. Only one capture runs at a time on the VM, 
 instances: `stop` — and the shutdown of a server — ends only the capture this server started (or one
 whose server no longer runs), even when several instances share one index, and a session started
 elsewhere is reported, not stopped. If `logman` fails to stop a capture at its time limit, the
-capture stays recorded as running and the stop is retried every 30 s.
+capture stays recorded as running and the stop is retried every 30 s. If the capture's state file
+cannot be written (the folder of the index database is not writable), `start` stops the capture
+again at once and answers `TRACE_STATE_FAILED`: nothing could have stopped it later.
 
 Good practice: run the scenario once untraced first (the first run pays for caches), keep
 captures short, and for a job that runs for hours capture a representative minute in the middle.
@@ -80,8 +85,10 @@ are kept beside the capture (`<file>.analysis.<hash>.json`) and reused.
   process. `scope: "subtree"` counts only time below the focus method.
 - `topExclusive` / `topInclusive` / `topCalls` — X++ methods by own time, by time including
   callees, by call count; each with the SQL time issued directly and beneath it.
-- `topSqlByTime` / `topSqlByCount` — statements (normalised, truncated) with executions, total,
-  preparation, max and their top callers. `repeatedSql` — one caller running the same statement
+- `topSqlByTime` / `topSqlByCount` — statements with executions, total, preparation, max and their
+  top callers. Statements are told apart by their whole text (whitespace collapsed, session temp-table
+  names reduced to the table id); the text shown is shortened to 300 characters, and when the column
+  list is longer it keeps only its head and then `FROM … WHERE`, which names the table and the filter. `repeatedSql` — one caller running the same statement
   at least 50 times: the per-record query in a loop that set-based code or a cache would remove.
 - `topRowFetch`, `totals` (SQL share of the selected threads' busy time), `threads`, `openAtEnd`,
   `pairing` and `caveats`.

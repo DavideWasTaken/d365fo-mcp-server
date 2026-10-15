@@ -17,21 +17,25 @@ export const SqlParameterSchema = z.discriminatedUnion('type', [
  * The MCP inputSchema declares only `action` (the strict schema is this contract), so a client
  * has no type for the other parameters and may send them as text: maxRows "50", parameters as
  * JSON. Read text back only for those two; parameter values themselves are never converted.
+ *
+ * Blank text is an omitted argument (clients fill unset optional fields with ""). A number
+ * written as "1e3" or "50.0" is read as one; z.int() still refuses any that is not whole.
  */
 const fromText = (v: unknown): unknown => {
   if (typeof v !== 'string') return v;
   const s = v.trim();
-  if (/^\d+$/.test(s)) return Number(s);
+  if (!s) return undefined;
+  if (/^\d+(\.\d+)?(e\+?\d+)?$/i.test(s)) return Number(s);
   if (s.startsWith('[')) { try { return JSON.parse(s); } catch { return v; } }
   return v;
 };
 const parameters = z.preprocess(fromText, z.array(SqlParameterSchema).max(100).refine(values =>
-  new Set(values.map(p => p.name.toLowerCase())).size === values.length, 'Parameter names must be unique')).optional();
+  new Set(values.map(p => p.name.toLowerCase())).size === values.length, 'Parameter names must be unique').optional()).optional();
 export const SqlInputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('contract') }).strict(),
   z.object({ action: z.literal('status') }).strict(),
   z.object({ action: z.literal('schema'), table: name, schema: name.optional() }).strict(),
-  z.object({ action: z.literal('query'), sql, parameters, maxRows: z.preprocess(fromText, z.number().int().min(1).max(1000)).optional() }).strict(),
+  z.object({ action: z.literal('query'), sql, parameters, maxRows: z.preprocess(fromText, z.number().int().min(1).max(1000).optional()).optional() }).strict(),
 ]);
 
 export function sqlContract() {

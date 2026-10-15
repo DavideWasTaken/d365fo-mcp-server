@@ -8,9 +8,9 @@
 import * as fs from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { p } from '../ui.js';
-import { settingByPath } from '../../config/settings.js';
-import { bridgeBuildCommand, cliCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
+import { serializeValue, settingByPath } from '../../config/settings.js';
 import { bridgeFreshness, type BridgeFreshness } from '../bridgeSources.js';
+import { bridgeBuildCommand, cliCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { commandExists } from '../exec.js';
 import { freeBytes, requiredFreeMB, sizeLimitMB } from '../../tools/sdlc/trace/capture.js';
 import { isLegacyInstanceLayout, listInstances, type Instance } from '../instances.js';
@@ -484,16 +484,35 @@ function layoutChecks(inst: Instance): CheckResult[] {
  * (isAxDbConfigured). The wizard writes both together, but a config edited by
  * hand can carry the server alone — and then the tool is simply absent, with
  * nothing saying why.
+ *
+ * Same precedence the server applies (loadEnv): a variable the real environment
+ * defines — even as empty — outranks the config file. A config value is read the
+ * way the server projects it onto the environment (serializeValue), so a quoted
+ * `"false"` is off here exactly as it is at runtime.
  */
-export function checkSqlSwitch(store: SettingsStore, label: string): CheckResult | null {
-  const server = readSetting(store, settingByPath('sql.server')!);
-  const enabled = readSetting(store, settingByPath('sql.enabled')!);
-  if (typeof server !== 'string' || !server.trim()) return null;
-  if (enabled === true || /^(true|1|yes|on)$/i.test(String(enabled ?? '').trim())) return null;
+export function checkSqlSwitch(
+  store: SettingsStore,
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CheckResult | null {
+  const effective = (settingPath: string): { value: string; fromEnv: boolean } => {
+    const setting = settingByPath(settingPath)!;
+    if (env[setting.env] !== undefined) return { value: env[setting.env]!.trim(), fromEnv: true };
+    return { value: (serializeValue(setting, readSetting(store, setting)) ?? '').trim(), fromEnv: false };
+  };
+  const server = effective('sql.server');
+  const enabled = effective('sql.enabled');
+  if (!server.value) return null;
+  if (/^(true|1|yes|on)$/i.test(enabled.value)) return null;
+  const where = (fromEnv: boolean, name: string) => (fromEnv ? `${name} (environment)` : name);
   return {
     severity: 'warn',
-    message: `${label}: sql.server is set (${server}) but sql.enabled is not true — axdb_sql is not published`,
-    fix: `set sql.enabled to true in ${store.configPath}, or run: d365fo-mcp config sql`,
+    message:
+      `${label}: ${where(server.fromEnv, 'sql.server')} is set (${server.value}) but ` +
+      `${where(enabled.fromEnv, 'sql.enabled')} is not true — axdb_sql is not published`,
+    fix: enabled.fromEnv
+      ? 'set D365FO_SQL_ENABLED=true in the environment that starts the server, or remove it so the config file decides'
+      : `set sql.enabled to true in ${store.configPath}, or run: ${cliCommand('config sql')}`,
   };
 }
 
@@ -526,36 +545,6 @@ async function checkSqliteEngine(): Promise<CheckResult> {
 }
 
 /**
- * Whether a git checkout is current — judged against the branch it tracks.
- *
- * Not against the npm registry: package.json on a branch is only bumped by the
- * release workflow at publish time, so a checkout that already contains the
- * latest release still reports the previous version. Compared with the
- * registry it would be told to update forever, and `d365fo-mcp update` (a
- * `git pull`) could never clear the warning. A fork has no release of its own
- * on npm at all.
- */
-export function checkCheckoutFreshness(version: string, status: BranchStatus | null): CheckResult {
-  if (status === null) {
-    return {
-      severity: 'info',
-      message: `d365fo-mcp ${version} (git checkout) — no upstream branch to compare with; the npm registry does not apply to a checkout`,
-    };
-  }
-  if (status.behind > 0) {
-    return {
-      severity: 'warn',
-      message: `d365fo-mcp ${version} (git checkout) — ${status.branch} is ${status.behind} commit${status.behind === 1 ? '' : 's'} behind ${status.upstream} as of the last fetch`,
-      fix: cliCommand('update'),
-    };
-  }
-  return {
-    severity: 'ok',
-    message: `d365fo-mcp ${version} (git checkout) — ${status.branch} is up to date with ${status.upstream} as of the last fetch`,
-  };
-}
-
-/**
  * Tracing switched on: where captures will go and whether that drive can take one.
  *
  * A capture of a busy batch grows by tens of MB per second; the tool refuses to start
@@ -583,29 +572,33 @@ export function checkTrace(store: SettingsStore, label: string, free: (dir: stri
 }
 
 /**
- * A built bridge, and whether it was compiled from the sources now on disk.
+ * Whether a git checkout is current — judged against the branch it tracks.
  *
- * `git pull` or an npm update moves the sources without touching the binary,
- * and a server running the older binary works — just without the C# changes.
- * The build writes a stamp of its sources next to the binary; see
- * bridgeSources.ts. A bridge built before stamping existed cannot be judged,
- * and saying so beats calling it current.
+ * Not against the npm registry: package.json on a branch is only bumped by the
+ * release workflow at publish time, so a checkout that already contains the
+ * latest release still reports the previous version. Compared with the
+ * registry it would be told to update forever, and `d365fo-mcp update` (a
+ * `git pull`) could never clear the warning. A fork has no release of its own
+ * on npm at all.
  */
-export function checkBridgeFreshness(exePath: string, freshness: BridgeFreshness, rebuild: string): CheckResult {
-  if (freshness === 'stale') {
+export function checkCheckoutFreshness(version: string, status: BranchStatus | null): CheckResult {
+  if (status === null) {
+    return {
+      severity: 'info',
+      message: `d365fo-mcp ${version} (git checkout) — no upstream branch to compare with; the npm registry does not apply to a checkout`,
+    };
+  }
+  if (status.behind > 0) {
     return {
       severity: 'warn',
-      message: `C# bridge built from older sources (${exePath}) — the bridge changes since then are not in effect`,
-      fix: `stop MCP, then: ${rebuild}`,
+      message: `d365fo-mcp ${version} (git checkout) — ${status.branch} is ${status.behind} commit${status.behind === 1 ? '' : 's'} behind ${status.upstream} as of the last fetch`,
+      fix: cliCommand('update'),
     };
   }
-  if (freshness === 'unknown') {
-    return {
-      severity: 'ok',
-      message: `C# bridge built (${exePath}) — no source stamp, so whether it matches the sources is unknown; rebuilding once records it`,
-    };
-  }
-  return { severity: 'ok', message: `C# bridge built (${exePath}) and matches its sources` };
+  return {
+    severity: 'ok',
+    message: `d365fo-mcp ${version} (git checkout) — ${status.branch} is up to date with ${status.upstream} as of the last fetch`,
+  };
 }
 
 /**
@@ -664,6 +657,37 @@ export function checkXrefConfigured(store: SettingsStore): CheckResult | null {
   };
 }
 
+/**
+ * A built bridge, judged against the sources it was compiled from (#1115). An
+ * update can leave an old binary in place while it moves the bridge sources,
+ * and parts of the adapter tolerate an older bridge without a word — so a
+ * bridge that merely exists is not enough to call healthy.
+ */
+export function checkBuiltBridge(
+  exePath: string,
+  freshness: Exclude<BridgeFreshness, 'missing'>,
+  buildCommand: string,
+): CheckResult {
+  // The running server holds the exe open, and the build cannot replace it.
+  const fix = `stop the MCP server (VS Code / Visual Studio), then: ${buildCommand}`;
+  switch (freshness) {
+    case 'current':
+      return { severity: 'ok', message: `C# bridge built from the current sources (${exePath})` };
+    case 'stale':
+      return {
+        severity: 'warn',
+        message: `C# bridge built from older sources (${exePath}) — the server runs this version's code against the old bridge`,
+        fix,
+      };
+    case 'unstamped':
+      return {
+        severity: 'info',
+        message: `C# bridge built (${exePath}), but before builds recorded their sources — whether it matches this version is unknown`,
+        fix,
+      };
+  }
+}
+
 export async function doctorCommand(): Promise<void> {
   p.intro('d365fo-mcp doctor');
   let failures = 0;
@@ -706,13 +730,13 @@ export async function doctorCommand(): Promise<void> {
   for (const r of checkPackagesRoot(root.store, 'Root')) emit(r);
   for (const r of checkPathSetting(root.store, 'Root', 'environment.customPackagesPath')) emit(r);
   for (const r of checkPathSetting(root.store, 'Root', 'environment.microsoftPackagesPath')) emit(r);
-  const rootTrace = checkTrace(root.store, 'Root');
-  if (rootTrace) emit(rootTrace);
   const rootSql = checkSqlSwitch(root.store, 'Root');
   if (rootSql) emit(rootSql);
 
   // Database (root)
   emit(checkDb(root.store, paths.defaultDb, 'Root'));
+  const rootTrace = checkTrace(root.store, 'Root');
+  if (rootTrace) emit(rootTrace);
 
   // Which source resolves the workspace, and the prefix that follows from it —
   // both were previously only inferable from a tool error (#833).
@@ -734,8 +758,9 @@ export async function doctorCommand(): Promise<void> {
 
   // C# bridge: the only write path; Windows-only.
   if (isWindows) {
-    if (fs.existsSync(paths.bridgeExe)) {
-      emit(checkBridgeFreshness(paths.bridgeExe, bridgeFreshness(), bridgeBuildCommand()));
+    const freshness = bridgeFreshness();
+    if (freshness !== 'missing') {
+      emit(checkBuiltBridge(paths.bridgeExe, freshness, bridgeBuildCommand()));
     } else if (await commandExists('dotnet')) {
       // Absolute path: outside a checkout the user is nowhere near the bridge,
       // and a relative `cd bridge\...` would just fail.
@@ -775,9 +800,9 @@ export async function doctorCommand(): Promise<void> {
       for (const r of checkPathSetting(target.store, `Instance '${inst.name}'`, 'environment.microsoftPackagesPath')) emit(r);
       const instanceSql = checkSqlSwitch(target.store, `Instance '${inst.name}'`);
       if (instanceSql) emit(instanceSql);
+      emit(checkDb(target.store, resolve(inst.dir, 'data', 'xpp-metadata.db'), `Instance '${inst.name}'`));
       const instanceTrace = checkTrace(target.store, `Instance '${inst.name}'`);
       if (instanceTrace) emit(instanceTrace);
-      emit(checkDb(target.store, resolve(inst.dir, 'data', 'xpp-metadata.db'), `Instance '${inst.name}'`));
       if (isWindows && isXppConfigStale(target.store)) {
         emit({
           severity: 'warn',

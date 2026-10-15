@@ -1490,15 +1490,26 @@ export function summarizeBpOutput(
   savedTo?: string,
 ): string {
   const verdict = text.split('\n')[0].trim();
-  const byRule = new Map<string, { count: number; severity?: string }>();
+  // Errors lead, whatever their count: one BP error among thousands of warnings is
+  // the finding that fails a pipeline, and ranking by count alone pushed it past the
+  // rule cut and out of the sample, leaving only a number in the totals line. The
+  // terse line shape carries no severity, so a BPError moniker counts as one too.
+  const isError = (f: { moniker: string | null; severity?: string }) =>
+    f.severity?.toLowerCase() === 'error' || /^BPError/i.test(f.moniker ?? '');
+  const byRule = new Map<string, { count: number; severity?: string; error: boolean }>();
   for (const f of findings) {
     const rule = f.moniker ?? '(rule not named on the line)';
-    const entry = byRule.get(rule) ?? { count: 0, severity: f.severity };
+    const entry = byRule.get(rule) ?? { count: 0, severity: f.severity, error: false };
     entry.count++;
     entry.severity ??= f.severity;
+    entry.error ||= isError(f);
     byRule.set(rule, entry);
   }
-  const rules = [...byRule.entries()].sort((a, b) => b[1].count - a[1].count);
+  const rules = [...byRule.entries()].sort((a, b) => Number(b[1].error) - Number(a[1].error) || b[1].count - a[1].count);
+  const sample = [...findings.filter(isError), ...findings.filter(f => !isError(f))].slice(0, BP_SAMPLE_FINDINGS);
+  // run_bp_check's caveat that BPErrorUnknownLabel may come from a failed label
+  // compile, not from the source: it qualifies the findings below, so it stays.
+  const labelCaveat = text.match(/^⚠️ Labels could not be compiled.*$/m)?.[0].trim();
   // xppbp's own tally is the total; the parser recognises only BP-moniker lines
   // (not CodeAnalysis ones, for instance), so its count can be lower.
   const total = (label: string) => [...text.matchAll(new RegExp(`^\\s*${label}\\s*:\\s*(\\d+)\\s*$`, 'gim'))].at(-1)?.[1];
@@ -1508,6 +1519,7 @@ export function summarizeBpOutput(
     verdict,
     '',
     ...(totals ? [`xppbp totals: ${totals}.`] : []),
+    ...(labelCaveat ? [labelCaveat] : []),
     `Counted below: ${findings.length} finding(s) the parser recognises (BP rule lines), across ${rules.length} rule(s). ` +
       `The full output (${text.split('\n').length} lines) is too large for a build result` +
       (savedTo ? ` and is saved to: ${savedTo}` : '') +
@@ -1519,8 +1531,8 @@ export function summarizeBpOutput(
       lines.push(`  ${count} × ${rule}${severity ? ` (${severity})` : ''}`);
     }
     if (rules.length > BP_SUMMARY_RULES) lines.push(`  … and ${rules.length - BP_SUMMARY_RULES} more rule(s)`);
-    lines.push('', `First ${Math.min(BP_SAMPLE_FINDINGS, findings.length)} finding(s):`);
-    for (const f of findings.slice(0, BP_SAMPLE_FINDINGS)) {
+    lines.push('', `First ${sample.length} finding(s), errors first:`);
+    for (const f of sample) {
       lines.push(`  • ${f.moniker ?? '(rule not named)'}: ${f.path ?? f.target}`);
     }
   }

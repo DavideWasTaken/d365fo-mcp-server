@@ -117,7 +117,7 @@ npm run build
 dotnet build bridge/D365MetadataBridge -c Release
 ```
 
-Restart MCP after updating. A bridge built by `setup` or `update` gets a `D365MetadataBridge.sources.json` stamp next to the binary, so `npx tsx src/cli/index.ts doctor` and `update` report a bridge that is older than its sources — including after a hand-run `git pull` — and `update` then requires the rebuild. After a hand-run `dotnet build` that state reads as unknown until the next `update`. Existing configuration is retained; use `npx tsx src/cli/index.ts config sql` when you want to enable or change SQL. Building the bridge and validating live AxDB access must be done on your developer VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
+Restart MCP after updating. Every bridge build — `setup`, `update` or a hand-run `dotnet build` — writes a `D365MetadataBridge.sources.json` stamp next to the binary, so `npx tsx src/cli/index.ts doctor` and `update` report a bridge that is older than its sources — including after a hand-run `git pull` — and `update` then requires the rebuild (upstream #1129). Existing configuration is retained; use `npx tsx src/cli/index.ts config sql` when you want to enable or change SQL. Building the bridge and validating live AxDB access must be done on your developer VM; see the [SQL guide](docs/AXDB_SQL.md#build-the-updated-bridge).
 
 ### Migrate from an upstream npm installation
 

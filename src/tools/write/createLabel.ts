@@ -992,10 +992,11 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
     //    locales owned by sibling label files too. The `languages` arg scopes the writes.
     // `en-US` and `en_US` are one folder: list it once, or it is written and then
     // reported as already existing.
-    const requestedLanguages = [...new Map((args.languages ?? [])
-      .map(l => l.trim().replace(/_/g, '-'))
-      .filter(Boolean)
-      .map(l => [l.toLowerCase(), l] as const)).values()];
+    // The FIRST spelling is kept, as in translationsByLocale (a Map built from pairs keeps the last).
+    const requestedLanguages: string[] = [];
+    for (const l of (args.languages ?? []).map(l => l.trim().replace(/_/g, '-')).filter(Boolean)) {
+      if (!requestedLanguages.some(r => r.toLowerCase() === l.toLowerCase())) requestedLanguages.push(l);
+    }
 
     let discoveredLanguages: string[] = [];
     try {

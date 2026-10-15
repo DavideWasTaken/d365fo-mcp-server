@@ -45,6 +45,19 @@ describe('AxDB SQL tool', () => {
     // A value keeps its own type: an int sent as text is still refused.
     expect(SqlInputSchema.safeParse({ action: 'query', sql: 'SELECT @p', parameters: [{ name: 'p', type: 'int', value: '5' }] }).success).toBe(false);
   });
+  it('reads blank text as an omitted argument and a whole number in any notation', () => {
+    // Clients fill unset optional fields with "": that is "use the default", not an error.
+    const blank = SqlInputSchema.parse({ action: 'query', sql: 'SELECT 1', maxRows: '', parameters: '  ' }) as Record<string, unknown>;
+    expect(blank.maxRows).toBeUndefined();
+    expect(blank.parameters).toBeUndefined();
+    const rows = (maxRows: unknown) => {
+      const r = SqlInputSchema.safeParse({ action: 'query', sql: 'SELECT 1', maxRows });
+      return r.success ? (r.data as { maxRows?: number }).maxRows : 'refused';
+    };
+    expect(rows('1e3')).toBe(1000);
+    expect(rows('50.0')).toBe(50);
+    for (const bad of ['50.5', '1e4', '-1', '0', '1e400', '10abc', '0x10']) expect(rows(bad), bad).toBe('refused');
+  });
   it('reads the bridge anew on identical requests', async () => {
     enable();
     const call = vi.fn().mockResolvedValueOnce({ success: true, rows: [{ value: 1 }] }).mockResolvedValueOnce({ success: true, rows: [{ value: 2 }] });
