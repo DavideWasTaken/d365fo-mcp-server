@@ -1,5 +1,24 @@
 name: Sync upstream
 
+# Merges upstream main into this fork's main every evening, keeping the fork's
+# own commits.
+#
+# 1. Merge upstream (no commit yet) and run the VM-free checks
+#    (.github/scripts/upstream-sync-gate.sh).
+# 2. If the merge conflicts or a check fails, Claude finishes the merge: it
+#    applies what upstream changed to the fork's code, drops fork code and tests
+#    that only existed for something upstream removed, and keeps the fork's
+#    features. It does not commit or push.
+# 3. The workflow re-verifies on its own (no conflict markers, upstream still
+#    merged, every check green) and only then pushes the merge commit to main.
+#    Otherwise it pushes a sync/upstream-* branch, opens a PR on the fork for a
+#    manual look, and fails, so GitHub notifies the owner.
+#
+# Secrets: UPSTREAM_SYNC_TOKEN (Contents + Workflows write on this fork; needed
+# when upstream edits .github/workflows), and ANTHROPIC_API_KEY or
+# CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) for step 2. Without either
+# Claude secret a merge that needs fixing goes straight to the PR.
+
 on:
   schedule:
     # Off the top of the hour, when GitHub delays scheduled runs the most.
@@ -9,17 +28,22 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: sync-upstream-main
   cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: dynamics365ninja/d365fo-mcp-server
+  NODE_VERSION: '24.x'
 
 jobs:
   sync:
     # Any repository except upstream itself, so renaming the fork keeps the sync running.
     if: github.repository != 'dynamics365ninja/d365fo-mcp-server' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 90
     steps:
       - name: Check out fork main with full history
         uses: actions/checkout@v7
@@ -30,44 +54,257 @@ jobs:
           # Contents and Workflows write permissions; otherwise fail safely.
           token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
 
-      - name: Merge upstream main while preserving fork commits
+      - name: Fetch upstream main
+        id: fetch
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
           if ! git fetch --no-tags --no-recurse-submodules \
-            https://github.com/dynamics365ninja/d365fo-mcp-server.git \
+            "https://github.com/${UPSTREAM_REPO}.git" \
             refs/heads/main:refs/remotes/upstream/main; then
             echo '::error::Could not fetch upstream main. No changes were pushed.'
-            echo 'Upstream fetch failed; no changes were pushed.' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-
           upstream_sha=$(git rev-parse refs/remotes/upstream/main)
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
           if git merge-base --is-ancestor "$upstream_sha" HEAD; then
-            echo 'Fork main already contains all upstream commits.'
             echo 'Already up to date with upstream; personal fork commits preserved.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'needed=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node
+        if: steps.fetch.outputs.needed == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # Installed for the fork's current main; the gate reinstalls when the
+      # merge changes the lockfile (a conflicted lockfile would not install).
+      - name: Install dependencies
+        if: steps.fetch.outputs.needed == 'true'
+        run: npm ci --no-audit --no-fund
+
+      - name: Merge upstream main without committing
+        id: merge
+        if: steps.fetch.outputs.needed == 'true'
+        shell: bash
+        env:
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+        run: |
+          # Actions runs bash with -e; a conflicting merge must not end the step.
+          set +e -uo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff "$UPSTREAM_SHA"
+          if ! git rev-parse -q --verify MERGE_HEAD > /dev/null; then
+            echo '::error::git merge stopped before starting (see the log above). No changes were pushed.'
+            exit 1
+          fi
+          conflicts=$(git diff --name-only --diff-filter=U)
+          if [ -n "$conflicts" ]; then
+            echo 'conflicts=true' >> "$GITHUB_OUTPUT"
+            { echo '### Conflicts'; echo "$conflicts" | sed 's/^/- /'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'conflicts=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check the merged tree
+        id: precheck
+        if: steps.merge.outputs.conflicts == 'false'
+        continue-on-error: true
+        run: bash .github/scripts/upstream-sync-gate.sh .sync/precheck.log
+
+      - name: Look for a Claude credential
+        id: auth
+        if: steps.merge.outputs.conflicts == 'true' || steps.precheck.outcome == 'failure'
+        shell: bash
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: |
+          echo "available=$HAS_KEY" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_KEY" != 'true' ]; then
+            echo '::warning::No ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN secret: the merge goes to a PR unresolved.'
+          fi
+
+      - name: Finish the merge with Claude
+        id: claude
+        if: steps.auth.outputs.available == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 120
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git grep:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(git checkout --conflict=diff3:*),Bash(npm run:*),Bash(npx vitest:*),Bash(npx tsc:*),Bash(npm ci:*),Bash(npm install --package-lock-only:*),Bash(bash .github/scripts/upstream-sync-gate.sh:*),Bash(grep:*),Bash(sed -n:*),Bash(wc:*)"
+          prompt: |
+            You are finishing an automatic merge of upstream main
+            (${{ env.UPSTREAM_REPO }} at ${{ steps.fetch.outputs.upstream_sha }})
+            into this fork's main. The merge is in progress in the working tree:
+            MERGE_HEAD is upstream, HEAD is the fork. The owner uses this fork
+            every day; it carries its own features on top of upstream
+            (`git log --oneline MERGE_HEAD..HEAD`), and upstream moves on
+            independently (`git log --oneline HEAD..MERGE_HEAD`).
+
+            Why you were called: textual conflicts = ${{ steps.merge.outputs.conflicts }};
+            checks after a clean textual merge = ${{ steps.precheck.outcome || 'not run' }}
+            (log in .sync/precheck.log when they ran).
+
+            Goal: a tree that has every upstream change, keeps every fork feature
+            working, and passes `bash .github/scripts/upstream-sync-gate.sh .sync/gate.log`.
+
+            How to resolve:
+            1. Upstream wins on what upstream changed. When upstream removed,
+               renamed or refactored something, carry that into the fork's code:
+               update fork call sites to the new shape, and delete fork code,
+               fork test cases and fork CHANGELOG entries that only existed for
+               what upstream removed. Never bring back code upstream deleted.
+            2. The fork's own features stay (comments marked "Fork:", fork-only
+               files and tests, the fork's README and docs), unless rule 1 makes
+               them dead.
+            3. Look at each conflict with `git checkout --conflict=diff3 <file>`
+               so you see the common base, and work out what each side changed
+               (`git diff HEAD...MERGE_HEAD -- <file>` is upstream's change,
+               `git diff MERGE_HEAD...HEAD -- <file>` is the fork's). Do not take
+               one side of a file wholesale when both sides changed it.
+            4. Tests: delete or adapt a fork test case only when it exercises
+               something upstream removed or changed on purpose. Never skip a
+               test, loosen an assertion or touch a snapshot just to get green.
+            5. Generated files are regenerated, not hand-merged:
+               docs/CONFIGURATION.md with `npm run config:docs`, eval/COVERAGE.md
+               and eval/coverage.json with `npm run eval:coverage`.
+            6. package-lock.json: start from upstream's version
+               (`git show MERGE_HEAD:package-lock.json`); when package.json
+               merged changes from both sides, run
+               `npm install --package-lock-only`, then `npm ci`.
+            7. bridge/: you cannot compile the C# bridge here. Resolve its
+               sources like any other code, keep bridge/build-attestation.json
+               as merged, and say in the summary that the bridge needs
+               `npm run bridge:build` on the D365FO VM.
+            8. Do not commit, push, create or switch branches, or abort the
+               merge: the workflow verifies and commits. Never edit
+               .github/workflows/sync-upstream.yml or .github/scripts/; a
+               conflict elsewhere under .github/ is resolved like any other file.
+            9. Run the gate script, fix what fails, repeat until it passes. If
+               something cannot be resolved safely, stop and explain it: the
+               workflow will open a PR for the owner instead of pushing.
+
+            Last, write .sync/summary.md in English, short: per file you changed,
+            what you kept from each side and why; the fork code or tests you
+            removed and which upstream change made them obsolete; anything left
+            for the owner (bridge rebuild, doubts); the final gate result.
+
+      - name: Verify the merge
+        id: verify
+        if: steps.fetch.outputs.needed == 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          PRECHECK: ${{ steps.precheck.outcome }}
+        run: |
+          set +e -uo pipefail
+          # Notes for this run, never committed.
+          mkdir -p "$RUNNER_TEMP/sync"
+          if [ -d .sync ]; then cp -r .sync/. "$RUNNER_TEMP/sync/"; rm -rf .sync; fi
+
+          ok=true
+          if [ "$(git symbolic-ref -q --short HEAD)" != main ] || \
+             [ "$(git rev-parse -q --verify MERGE_HEAD)" != "$UPSTREAM_SHA" ]; then
+            echo '::error::The working tree is no longer the merge of upstream into main.'
+            exit 1
+          fi
+          git add -A
+          if [ -n "$(git diff --cached --name-only --diff-filter=U)" ]; then
+            echo '::error::Unmerged paths remain.'; ok=false
+          fi
+          markers=$(git diff --cached --name-only -z --diff-filter=d HEAD |
+            xargs -0 -r grep -lE '^(<<<<<<<|>>>>>>>)( |$)' -- || true)
+          if [ -n "$markers" ]; then
+            echo "::error::Conflict markers left in: $markers"; ok=false
+          fi
+          # A clean merge that already passed the checks has nothing new to check.
+          if [ "$PRECHECK" = success ]; then
+            cp "$RUNNER_TEMP/sync/precheck.log" "$RUNNER_TEMP/sync/gate.log"
+          elif ! bash .github/scripts/upstream-sync-gate.sh "$RUNNER_TEMP/sync/gate.log"; then
+            ok=false
+          fi
+          [ "$ok" = true ]
+
+      - name: Push to main, or open a PR
+        if: ${{ !cancelled() && steps.merge.outcome == 'success' }}
+        shell: bash
+        env:
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          VERIFIED: ${{ steps.verify.outcome }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          short=${UPSTREAM_SHA:0:7}
+          summary="$RUNNER_TEMP/sync/summary.md"
+          {
+            echo "Merge upstream main ($short)"
+            echo
+            if [ -s "$summary" ]; then cat "$summary"; else echo 'Merged without changes beyond the upstream commits.'; fi
+          } > "$RUNNER_TEMP/sync/message.txt"
+
+          open_sync_prs() {
+            gh pr list -R "$GITHUB_REPOSITORY" --state open --json number,headRefName \
+              -q '.[] | select(.headRefName | startswith("sync/upstream-")) | .number'
+          }
+
+          if [ "$VERIFIED" = success ]; then
+            git commit -q -F "$RUNNER_TEMP/sync/message.txt"
+            # A normal push also rejects concurrent fork changes; never force it.
+            git push origin HEAD:refs/heads/main
+            for n in $(open_sync_prs); do
+              gh pr close "$n" -R "$GITHUB_REPOSITORY" --delete-branch \
+                -c "Superseded: upstream $short was merged into main automatically." || true
+            done
+            echo "Merged upstream $short into main." >> "$GITHUB_STEP_SUMMARY"
+            if [ -s "$summary" ]; then
+              { echo; cat "$summary"; } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if ! node scripts/bridgeAttest.mjs check > /dev/null 2>&1; then
+              echo '::warning::Bridge sources changed: run `npm run bridge:build` on the D365FO VM and commit bridge/build-attestation.json.'
+            fi
             exit 0
           fi
 
-          # A normal merge preserves both histories, including personal changes.
-          # Conflicts require manual resolution; never choose ours/theirs globally.
-          if ! git merge --no-edit "$upstream_sha"; then
-            if git rev-parse -q --verify MERGE_HEAD > /dev/null; then
-              git merge --abort
-            fi
-            echo '::error::Upstream merge failed or has conflicts. Fork main was not changed; resolve manually.'
-            echo 'Merge failed or has conflicts; no changes were pushed to main. Resolve manually.' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+          # Not verified: keep main as it was and hand the merge to the owner.
+          branch="sync/upstream-$(date -u +%Y%m%d-%H%M)-$short"
+          git add -A
+          git commit -q --no-verify -F "$RUNNER_TEMP/sync/message.txt"
+          git push origin "HEAD:refs/heads/$branch"
+          {
+            echo "The automatic merge of upstream $short could not be verified, so main was not changed."
+            echo
+            echo '### Claude summary'
+            if [ -s "$summary" ]; then cat "$summary"; else echo '(none: Claude did not run or wrote no summary)'; fi
+            echo
+            echo '### Failed checks'
+            echo '```'
+            tail -n 60 "$RUNNER_TEMP/sync/gate.log" 2>/dev/null || echo '(no gate log)'
+            echo '```'
+            echo
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/sync/pr.md"
+          previous=$(open_sync_prs)
+          if url=$(gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$branch" \
+                --title "Sync upstream $short (needs review)" --body-file "$RUNNER_TEMP/sync/pr.md"); then
+            for n in $previous; do
+              gh pr close "$n" -R "$GITHUB_REPOSITORY" --delete-branch -c "Superseded by $url." || true
+            done
+          else
+            # Creating PRs with GITHUB_TOKEN needs "Allow GitHub Actions to create
+            # and approve pull requests" in the repository settings.
+            url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$branch"
           fi
-
-          # A normal push also rejects concurrent fork changes; never force it.
-          if ! git push origin HEAD:refs/heads/main; then
-            echo '::error::Push failed or main changed concurrently. No forced update was attempted; check main and rerun.'
-            echo 'Push failed; no forced update was attempted. Check main and rerun.' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          echo "Merged upstream commit $upstream_sha into main, preserving fork history." >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/sync/pr.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::Upstream merge needs review: $url"
+          exit 1
