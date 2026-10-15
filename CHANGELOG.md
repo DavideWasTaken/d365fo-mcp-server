@@ -142,6 +142,12 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **`trace_d365fo(action="analyze")` refused when the bridge had not started.** The
+  analysis runs the bridge binary as a separate `--analyze-trace` process and needs no
+  D365FO assembly, but it took the binary's path from the running bridge only, so a
+  bridge that failed to start (no packages path, a cold-VM timeout) meant
+  `TRACE_BRIDGE_UNAVAILABLE`. It now falls back to the binary the server would start:
+  the configured `bridge.exePath`, else the first built candidate.
 - **`add-control` puts a control where it was asked, and moves one that exists.**
   On `objectType="form"` `previousSibling`/`positionType` were dropped (the bridge
   appends to the parent), and an existing control could not be moved at all:

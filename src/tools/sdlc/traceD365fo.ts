@@ -8,6 +8,7 @@ import {
   writeState, type CaptureState,
 } from './trace/capture.js';
 import { analysisFiles, analysisState, boundedAnalysis, startAnalysis, waitForAnalysis } from './trace/analysis.js';
+import { locateBridgeExe } from '../../bridge/bridgeClient.js';
 
 export interface TraceContext { bridge?: { exePath?: string } }
 
@@ -140,7 +141,9 @@ async function analyze(input: Extract<TraceInput, { action: 'analyze' }>, contex
     return fail('TRACE_ANALYSIS_FAILED', current.error.slice(0, 1500));
   }
   if (!current) {
-    const exe = process.env.D365FO_BRIDGE_EXE_PATH?.trim() || context.bridge?.exePath;
+    // The running bridge's binary, else the one it would start: the analysis needs only the binary,
+    // so a bridge that failed to start (no packages path, a cold-VM timeout) does not block it.
+    const exe = context.bridge?.exePath || locateBridgeExe();
     if (!exe || !fs.existsSync(exe)) return fail('TRACE_BRIDGE_UNAVAILABLE', 'The analysis runs in the Windows bridge binary, which was not found. Build it on the VM (dotnet build bridge/D365MetadataBridge -c Release) and restart MCP.');
     startAnalysis(exe, etl, options, files);
   }
