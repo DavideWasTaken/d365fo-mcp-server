@@ -28,6 +28,8 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+## [1.21.0] — 2026-10-15
+
 ### Added
 - **Optional `trace_d365fo`: measure X++ and SQL time with ETW instead of timer
   code.** Published only when `trace.enabled` is true (`config trace`). `start`
