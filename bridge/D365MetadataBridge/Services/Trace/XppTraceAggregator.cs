@@ -99,6 +99,11 @@ namespace D365MetadataBridge.Services.Trace
             public int ThreadId;
             public readonly Stack<Frame> Stack = new Stack<Frame>();
             public readonly Dictionary<string, int> OnStack = new Dictionary<string, int>(StringComparer.Ordinal);
+            /// <summary>
+            /// In-scope frames per method. Recursion is judged on these, not OnStack: in subtree scope a method
+            /// can sit both above the focus (out of scope) and below it, and only the in-scope one is counted.
+            /// </summary>
+            public readonly Dictionary<string, int> OnStackInScope = new Dictionary<string, int>(StringComparer.Ordinal);
             public readonly Dictionary<string, MethodStat> Methods = new Dictionary<string, MethodStat>(StringComparer.Ordinal);
             public readonly Dictionary<string, SqlStat> Sql = new Dictionary<string, SqlStat>(StringComparer.Ordinal);
             public readonly Dictionary<string, SqlStat> Fetch = new Dictionary<string, SqlStat>(StringComparer.Ordinal);
@@ -114,6 +119,8 @@ namespace D365MetadataBridge.Services.Trace
             public int FocusDepth;
             public bool MatchedFocus;
             public readonly Dictionary<string, int> RootCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            /// <summary>A BatchRun:: root was seen, even past the RootCounts cap.</summary>
+            public bool SawBatchRun;
             /// <summary>Roots a focus method ran under, listed first in threads[].roots.</summary>
             public readonly HashSet<string> FocusRoots = new HashSet<string>(StringComparer.Ordinal);
         }
@@ -166,15 +173,24 @@ namespace D365MetadataBridge.Services.Trace
         {
             string m = e.Method ?? "?";
             ts.Enters++;
-            if (ts.Stack.Count == 0 && ts.RootCounts.Count < 64)
-                ts.RootCounts[m] = ts.RootCounts.TryGetValue(m, out var rc) ? rc + 1 : 1;
+            if (ts.Stack.Count == 0)
+            {
+                // Capped by distinct roots, not by calls: a root already counted keeps counting.
+                if (ts.RootCounts.TryGetValue(m, out var rc)) ts.RootCounts[m] = rc + 1;
+                else if (ts.RootCounts.Count < 64) ts.RootCounts[m] = 1;
+                if (m.StartsWith("BatchRun::", StringComparison.Ordinal)) ts.SawBatchRun = true;
+            }
             bool focus = options.Focus.Count > 0 && IsFocus(m);
             if (focus) { ts.MatchedFocus = true; ts.FocusDepth++; }
             var frame = new Frame { Method = m, Start = e.Ticks, IsFocus = focus, InScope = !options.SubtreeOnly || ts.FocusDepth > 0 };
             ts.Stack.Push(frame);
             if (focus && ts.FocusRoots.Count < 8) ts.FocusRoots.Add(ts.Stack.Last().Method); // Last() is the bottom
             ts.OnStack[m] = ts.OnStack.TryGetValue(m, out var d) ? d + 1 : 1;
-            if (frame.InScope) Stat(ts.Methods, m).Calls++;
+            if (frame.InScope)
+            {
+                Stat(ts.Methods, m).Calls++;
+                ts.OnStackInScope[m] = ts.OnStackInScope.TryGetValue(m, out var di) ? di + 1 : 1;
+            }
         }
 
         private void Exit(ThreadState ts, XppTraceEvent e)
@@ -194,10 +210,10 @@ namespace D365MetadataBridge.Services.Trace
         private void Close(ThreadState ts, Frame f, long at)
         {
             long inclusive = Math.Max(0, at - f.Start);
-            int left = ts.OnStack[f.Method] - 1;
-            ts.OnStack[f.Method] = left;
+            ts.OnStack[f.Method]--;
             if (f.InScope)
             {
+                int left = --ts.OnStackInScope[f.Method];
                 var s = Stat(ts.Methods, f.Method);
                 s.Closed++;
                 s.ExclusiveTicks += Math.Max(0, inclusive - f.ChildTicks);
@@ -318,6 +334,10 @@ namespace D365MetadataBridge.Services.Trace
                 sqlWithoutFrame += t.SqlWithoutFrame;
                 // A root frame still open at the end was busy until the thread's last event.
                 if (t.Stack.Count > 0 && t.Stack.Last().InScope) busyTicks += Math.Max(0, t.Last - t.Stack.Last().Start);
+                // Likewise an outermost focus frame still open: its SQL is in the numerator, so its time
+                // so far belongs in the denominator, or the share can exceed 1.
+                var openFocus = t.Stack.LastOrDefault(f => f.IsFocus);
+                if (openFocus != null) focusTicks += Math.Max(0, t.Last - openFocus.Start);
                 result.Pairing.Enters += t.Enters;
                 result.Pairing.Exits += t.Exits;
                 result.Pairing.ExitsWithoutFrame += t.ExitsWithoutFrame;
@@ -358,7 +378,7 @@ namespace D365MetadataBridge.Services.Trace
                 SqlShareOfTime = denominator > 0 ? Round((sqlExecution + sqlPreparation) / denominator) : (double?)null,
                 RowFetchShareOfTime = denominator > 0 ? Round(rowFetch / denominator) : (double?)null,
                 ShareBasis = options.SubtreeOnly
-                    ? "time inside closed focus frames"
+                    ? "time inside focus frames (one still open at the end counts until the thread's last event)"
                     : "busySeconds: time the selected threads spent inside X++ root frames, plus SQL issued outside any frame; idle gaps excluded",
             };
 
@@ -421,9 +441,9 @@ namespace D365MetadataBridge.Services.Trace
             if (result.Pairing.FramesClosedByOuterExit > 0)
                 result.Caveats.Add($"{result.Pairing.FramesClosedByOuterExit} frames had no exit of their own and were closed by an outer method's exit (a lost event); their time is an upper bound.");
             if (options.Focus.Count > 0 && methods.Keys.Any(m => m == "Batch::insert" || m == "BatchHeader::save")
-                && !selected.Any(t => t.RootCounts.Keys.Any(r => r.StartsWith("BatchRun::", StringComparison.Ordinal))))
+                && !selected.Any(t => t.SawBatchRun))
                 result.Caveats.Add("The focus threads scheduled batch tasks (Batch::insert / BatchHeader::save) and none was seen running under BatchRun::. If this is the dialog or controller (a short thread in the web process), the work runs later in Batch.exe: analyse again with focus on the task's class and pid set to Batch.exe, whose threads[].roots start with BatchRun:: when the task began inside the capture.");
-            if (options.SubtreeOnly && focusTicks == 0)
+            if (options.SubtreeOnly && selected.All(t => t.FocusTicks == 0))
                 result.Caveats.Add("Subtree scope counted nothing closed: the focus method may have started before the capture. Use thread scope for a window taken mid-run.");
             return result;
         }

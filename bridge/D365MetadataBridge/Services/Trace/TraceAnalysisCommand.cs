@@ -76,7 +76,12 @@ namespace D365MetadataBridge.Services.Trace
                 var aggregator = new XppTraceAggregator(options);
                 var stats = EtlTraceReader.Read(etl!, aggregator, read =>
                 {
-                    if (progressFile != null) WriteAtomic(progressFile, new { eventsRead = read, elapsedSeconds = Math.Round(watch.Elapsed.TotalSeconds, 1) });
+                    if (progressFile == null) return;
+                    // Best effort: the server polls this file, and a replace that collides with its read
+                    // (or an antivirus scan) must not end an analysis that may have run for minutes.
+                    try { WriteAtomic(progressFile, new { eventsRead = read, elapsedSeconds = Math.Round(watch.Elapsed.TotalSeconds, 1) }); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
                 });
                 var result = aggregator.Build();
                 result.File = Path.GetFullPath(etl!);
