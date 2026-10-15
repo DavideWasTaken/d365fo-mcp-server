@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { p } from '../ui.js';
 import { serializeValue, settingByPath } from '../../config/settings.js';
+import { bridgeFreshness, type BridgeFreshness } from '../bridgeSources.js';
 import { bridgeBuildCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { commandExists } from '../exec.js';
 import { freeBytes, requiredFreeMB, sizeLimitMB } from '../../tools/sdlc/trace/capture.js';
@@ -623,6 +624,37 @@ export function checkXrefConfigured(store: SettingsStore): CheckResult | null {
   };
 }
 
+/**
+ * A built bridge, judged against the sources it was compiled from (#1115). An
+ * update can leave an old binary in place while it moves the bridge sources,
+ * and parts of the adapter tolerate an older bridge without a word — so a
+ * bridge that merely exists is not enough to call healthy.
+ */
+export function checkBuiltBridge(
+  exePath: string,
+  freshness: Exclude<BridgeFreshness, 'missing'>,
+  buildCommand: string,
+): CheckResult {
+  // The running server holds the exe open, and the build cannot replace it.
+  const fix = `stop the MCP server (VS Code / Visual Studio), then: ${buildCommand}`;
+  switch (freshness) {
+    case 'current':
+      return { severity: 'ok', message: `C# bridge built from the current sources (${exePath})` };
+    case 'stale':
+      return {
+        severity: 'warn',
+        message: `C# bridge built from older sources (${exePath}) — the server runs this version's code against the old bridge`,
+        fix,
+      };
+    case 'unstamped':
+      return {
+        severity: 'info',
+        message: `C# bridge built (${exePath}), but before builds recorded their sources — whether it matches this version is unknown`,
+        fix,
+      };
+  }
+}
+
 export async function doctorCommand(): Promise<void> {
   p.intro('d365fo-mcp doctor');
   let failures = 0;
@@ -693,8 +725,9 @@ export async function doctorCommand(): Promise<void> {
 
   // C# bridge: the only write path; Windows-only.
   if (isWindows) {
-    if (fs.existsSync(paths.bridgeExe)) {
-      emit({ severity: 'ok', message: `C# bridge built (${paths.bridgeExe})` });
+    const freshness = bridgeFreshness();
+    if (freshness !== 'missing') {
+      emit(checkBuiltBridge(paths.bridgeExe, freshness, bridgeBuildCommand()));
     } else if (await commandExists('dotnet')) {
       // Absolute path: outside a checkout the user is nowhere near the bridge,
       // and a relative `cd bridge\...` would just fail.

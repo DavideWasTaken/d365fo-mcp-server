@@ -243,6 +243,11 @@ cd bridge\D365MetadataBridge
 dotnet build -c Release        # output: bin\Release\D365MetadataBridge.exe (auto-detected)
 ```
 
+Every build also writes `D365MetadataBridge.sources.json` next to the exe: a hash of the sources it
+compiled. An update can change those sources and leave the exe in place (`git pull` never touches
+`bin\Release`; `npm install -g` never touches the data directory), so `d365fo-mcp update` requires
+a rebuild when the stamp is missing or differs, and `d365fo-mcp doctor` warns about it.
+
 ### Changing bridge sources — use `npm run bridge:build`
 
 The command above deploys a binary; it does **not** refresh `bridge/build-attestation.json`.
