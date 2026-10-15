@@ -1436,7 +1436,33 @@ async function renderFinishedBuildResult(
   const runtimeSection = workflow
     ? `\n\n--- AOS restart ---\n${runtimeFacts}${runtimeWarning ? '⚠️ ' : ''}${workflow.result?.message ?? 'AOS restart was not attempted because the build failed.'}`
     : '';
-  const savedSections = (workflow?.bpSection ?? '') + (workflow?.sync?.section ?? '') + runtimeSection;
+  // The note run_bp_check and verify_d365fo_project read, so a green verdict from a
+  // tool that compiles nothing can say whether anything ever did.
+  if (dataDir) {
+    recordBuild(dataDir, targetModel, {
+      builtAt: new Date().toISOString(),
+      fullBuild: !!finalState.fullBuild,
+      succeeded,
+    });
+  }
+
+  // "compile, then check best practices" was the second most common pair in the
+  // sampled sessions (10 build -> run_bp_check hand-offs). Opt-in, and only on a
+  // green build: when the compile failed, the compiler errors ARE the answer and
+  // a BP report on half-built metadata is noise. Run here, before the multi-model
+  // and single-model results part ways: the multi-model one used to read only what
+  // a restart workflow had saved, so a queued build without restartAos dropped
+  // bpCheck and dbSync (and this note) without a word.
+  const bpSection = workflow ? workflow.bpSection ?? ''
+    : succeeded ? await runPostBuildBpCheck(params, targetModel, context, `${finalState.logFile}.bp.txt`) : '';
+  // Same shape, same reason, for the database sync: a table change is not
+  // finished until AxDB is synchronised, and that sync always follows a
+  // successful build. Gated on `succeeded` for the same reason bpCheck is —
+  // syncing metadata the compiler just rejected is worse than not syncing.
+  const sync = workflow ? workflow.sync ?? { section: '', failed: false } : succeeded
+    ? await runPostBuildDbSync(params, targetModel, context)
+    : { section: '', failed: false };
+  const postBuildSections = bpSection + sync.section + runtimeSection;
 
   if (isQueued) {
     const totalDuration = allResults.reduce((sum, r) => sum + r.duration, 0);
@@ -1465,9 +1491,10 @@ async function renderFinishedBuildResult(
         text: `${statusIcon} — ${allResults.length} models, ${totalDuration}s total\n\n${modelLines}\n\n` +
           (unexplained ? `${unexplained}\n\n` : '') +
           (structured ? `${structured}\n\n` : '') +
-          `--- Log (${relevantResult?.modelName ?? targetModel}) ---\n${logContent}` + savedSections,
+          `--- Log (${relevantResult?.modelName ?? targetModel}) ---\n${logContent}` + postBuildSections,
       }],
-      ...((succeeded && !runtimeWarning) ? {} : { isError: true }),
+      // A failed sync is an error here as below: half of "build and sync" did not happen.
+      ...((succeeded && !sync.failed && !runtimeWarning) ? {} : { isError: true }),
     };
   }
 
@@ -1488,31 +1515,6 @@ async function renderFinishedBuildResult(
     ? trimSucceededLog(logTail)
     : await renderFailureLog(finalState.logFile, parsed.some(d => d.severity === 'error'));
 
-  // The note run_bp_check and verify_d365fo_project read, so a green verdict from a
-  // tool that compiles nothing can say whether anything ever did.
-  if (dataDir) {
-    recordBuild(dataDir, targetModel, {
-      builtAt: new Date().toISOString(),
-      fullBuild: !!finalState.fullBuild,
-      succeeded,
-    });
-  }
-
-  // "compile, then check best practices" was the second most common pair in the
-  // sampled sessions (10 build -> run_bp_check hand-offs). Opt-in, and only on a
-  // green build: when the compile failed, the compiler errors ARE the answer and
-  // a BP report on half-built metadata is noise.
-  const bpSection = workflow ? workflow.bpSection ?? ''
-    : succeeded ? await runPostBuildBpCheck(params, targetModel, context, `${finalState.logFile}.bp.txt`) : '';
-  // Same shape, same reason, for the database sync: a table change is not
-  // finished until AxDB is synchronised, and that sync always follows a
-  // successful build. Gated on `succeeded` for the same reason bpCheck is —
-  // syncing metadata the compiler just rejected is worse than not syncing.
-  const sync = workflow ? workflow.sync ?? { section: '', failed: false } : succeeded
-    ? await runPostBuildDbSync(params, targetModel, context)
-    : { section: '', failed: false };
-  const syncSection = sync.section;
-
   return {
     content: [{
       type: 'text',
@@ -1520,7 +1522,7 @@ async function renderFinishedBuildResult(
         incrementalScopeCaveat(succeeded, !!finalState.fullBuild) + '\n' +
         (unexplained ? `${unexplained}\n\n` : '') +
         (structured ? `${structured}\n\n` : '') +
-        `${logContent || '(no output)'}` + bpSection + syncSection + runtimeSection,
+        `${logContent || '(no output)'}` + postBuildSections,
     }],
     // A failed sync is an error even though the compile passed: the caller asked
     // for "build and sync", and half of that did not happen.

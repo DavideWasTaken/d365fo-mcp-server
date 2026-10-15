@@ -135,6 +135,12 @@ those are called out explicitly below.
   dangling include stops the project loading.
 
 ### Fixed
+- **A multi-model build without `restartAos` skipped `bpCheck` and `dbSync`.** When
+  `build_d365fo_project` built a queue of models, the result read the BP and sync
+  sections only from a restart workflow, so without `restartAos: true` both were
+  dropped silently (and the last-build note `run_bp_check` reads was not written).
+  They now run after a queued build as after a single-model one, and a failed sync
+  makes the result an error there too.
 - **`doctor` said nothing when `axdb_sql` was missing because `sql.enabled` was
   off.** The tool is published only when `sql.enabled` is true and `sql.server`
   is set. The wizard writes both, but a hand-edited config can carry the server

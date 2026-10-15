@@ -171,6 +171,35 @@ describe('optional AOS restart build workflow', () => {
     expect(response.content[0].text).not.toContain('✅ Build complete');
     expect(response.isError).toBe(true); expect(m.sync).toHaveBeenCalledTimes(1); expect(m.restart).toHaveBeenCalledTimes(1);
   });
+  it('runs bpCheck and dbSync after a queued (multi-model) build without restartAos', async () => {
+    const request = { modelName: 'MyModel', wait: false, bpCheck: true, dbSync: true };
+    await buildProjectTool(request, {}); await finish();
+    const [key, raw] = [...m.files.entries()].find(([p]) => p.includes('d365build_state'))!;
+    const saved = JSON.parse(raw);
+    saved.buildQueue = ['Dependency', 'MyModel'];
+    saved.queueResults.unshift({ modelName: 'Dependency', status: 'succeeded', duration: 2, logFile: 'dep.log' });
+    m.files.set(key, JSON.stringify(saved));
+    const response = await buildProjectTool(request, {});
+    expect(response.content[0].text).toContain('2 models');
+    expect(response.content[0].text).toContain('BP checked');
+    expect(response.content[0].text).toContain('Sync succeeded');
+    expect(m.bp).toHaveBeenCalledTimes(1); expect(m.sync).toHaveBeenCalledTimes(1);
+    expect(response.isError).toBeUndefined();
+    expect(m.restart).not.toHaveBeenCalled();
+  });
+  it('reports a failed sync after a queued build as an error', async () => {
+    m.sync.mockResolvedValue({ content: [{ type: 'text', text: 'Sync failed' }], isError: true });
+    const request = { modelName: 'MyModel', wait: false, dbSync: true };
+    await buildProjectTool(request, {}); await finish();
+    const [key, raw] = [...m.files.entries()].find(([p]) => p.includes('d365build_state'))!;
+    const saved = JSON.parse(raw);
+    saved.buildQueue = ['Dependency', 'MyModel'];
+    saved.queueResults.unshift({ modelName: 'Dependency', status: 'succeeded', duration: 2, logFile: 'dep.log' });
+    m.files.set(key, JSON.stringify(saved));
+    const response = await buildProjectTool(request, {});
+    expect(response.content[0].text).toContain('Sync failed');
+    expect(response.isError).toBe(true);
+  });
   it('refuses replay and forced builds after the server owning a workflow disappears', async () => {
     await buildProjectTool({ ...opts, dbSync: true }, {});
     const reservationKey = [...m.files.keys()].find(p => p.endsWith('d365build_aos_restart.json'))!;
