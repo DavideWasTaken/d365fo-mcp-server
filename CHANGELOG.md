@@ -35,7 +35,8 @@ those are called out explicitly below.
   arguments decided the post-build steps — the BP check and sync the build was
   started with were skipped without a word. The build now records them when it
   starts (as a restart build already did); a collecting call can still add a
-  `bpCheck`, and a `dbSync` scope given at the start is kept.
+  `bpCheck`, and a `dbSync` scope given at the start is kept (tables the collecting
+  call names are added to it).
 
 ## [1.21.0] — 2026-10-15
 

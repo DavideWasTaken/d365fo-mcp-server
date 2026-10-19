@@ -168,6 +168,12 @@ describe('optional AOS restart build workflow', () => {
     expect(m.sync).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(m.sync.mock.calls[0][0])).toContain('MyTable');
   });
+  it('adds the tables a collecting call names to the scope the build was started with', async () => {
+    await buildProjectTool({ modelName: 'MyModel', wait: false, dbSync: ['TableA'] }, {}); await finish();
+    await buildProjectTool({ modelName: 'MyModel', wait: false, dbSync: ['TableB', 'TableA'] }, {});
+    expect(m.sync).toHaveBeenCalledTimes(1);
+    expect(m.sync.mock.calls[0][0].tables).toEqual(['TableA', 'TableB']);
+  });
   it('still runs a bpCheck that only the collecting call asks for', async () => {
     await buildProjectTool({ modelName: 'MyModel', wait: false }, {}); await finish();
     const response = await buildProjectTool({ modelName: 'MyModel', wait: false, bpCheck: true }, {});

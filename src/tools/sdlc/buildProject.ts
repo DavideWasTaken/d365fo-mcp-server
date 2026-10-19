@@ -285,13 +285,24 @@ const asksFor = (v: unknown): boolean => v === true || v === 'true';
 
 type PostBuildRequest = { bpCheck?: boolean; dbSync?: boolean | string[]; projectPath?: string; packagePath?: string };
 
+/**
+ * The start's scope wins over a collecting `dbSync: true`, but tables a collecting
+ * call names are added to the start's list, never dropped: that call reads the
+ * sync section as covering them.
+ */
+function mergeDbSync(started: PostBuildRequest['dbSync'], collecting: unknown): unknown {
+  if (started === true) return true;
+  if (!Array.isArray(started)) return collecting;
+  return Array.isArray(collecting) ? [...new Set([...started, ...collecting])] : started;
+}
+
 /** What the build asked for, plus what the collecting call adds; the start's dbSync scope wins. */
 function postBuildParams(started: PostBuildRequest | undefined, collecting: any): PostBuildRequest & Record<string, unknown> {
   if (!started) return collecting ?? {};
   return {
     ...collecting,
     bpCheck: started.bpCheck || asksFor(collecting?.bpCheck),
-    dbSync: (Array.isArray(started.dbSync) || started.dbSync === true) ? started.dbSync : collecting?.dbSync,
+    dbSync: mergeDbSync(started.dbSync, collecting?.dbSync),
     projectPath: collecting?.projectPath ?? started.projectPath,
     packagePath: collecting?.packagePath ?? started.packagePath,
   };
