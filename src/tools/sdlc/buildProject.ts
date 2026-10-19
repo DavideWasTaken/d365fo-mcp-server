@@ -579,6 +579,19 @@ async function readTrackedBuildState(file: string): Promise<BuildJobState | null
   return null;
 }
 
+/**
+ * readBuildState for a waiter, which must tell a state that is GONE (ENOENT: its
+ * result was collected, or the build was cleared) from one caught mid-write
+ * (null) — writeBuildState is not atomic, so a failed parse is not an absence.
+ */
+async function readBuildStateForWait(targetModel: string, customPackagesPath: string): Promise<BuildJobState | null | 'gone'> {
+  try {
+    return JSON.parse(await readFile(stateFilePath(targetModel, customPackagesPath), 'utf-8')) as BuildJobState;
+  } catch (error: any) {
+    return error?.code === 'ENOENT' ? 'gone' : null;
+  }
+}
+
 async function writeBuildState(state: BuildJobState, customPackagesPath: string): Promise<void> {
   await writeFile(stateFilePath(state.targetModel, customPackagesPath), JSON.stringify(state, null, 2), 'utf-8');
 }
@@ -1642,7 +1655,9 @@ const FINALIZING_GRACE_MS = 5 * 60_000;
 const ORPHAN_GRACE_MS = 30_000;
 
 interface WaitOutcome {
-  outcome: 'finished' | 'orphaned' | 'timeout';
+  // 'gone': the state this call waited on was collected by another call, or
+  // cleared/replaced — it will never finish for THIS waiter.
+  outcome: 'finished' | 'orphaned' | 'timeout' | 'gone';
   state: BuildJobState | null;
 }
 
@@ -1652,6 +1667,8 @@ async function waitForBuildCompletion(
   timeoutMs: number,
   onProgress?: ProgressReporter,
   startedAt: number = Date.now(),
+  /** The job this call waits on; a state that disappears or changes job ends the wait. */
+  jobId?: string,
 ): Promise<WaitOutcome> {
   const deadline = Date.now() + timeoutMs;
   // Poll roughly every second; xppc builds typically take many seconds to
@@ -1667,7 +1684,16 @@ async function waitForBuildCompletion(
   let lastProgressAt = 0;
 
   while (Date.now() < deadline) {
-    const state = await readBuildState(targetModel, customPackagesPath);
+    const read = await readBuildStateForWait(targetModel, customPackagesPath);
+    // Two calls can wait on one build (a client gave up on the first and asked
+    // again). Whichever sees it finish first consumes the state; the other used
+    // to find nothing to read and poll on until its whole wait window ran out.
+    // Only a state this wait has SEEN can be gone: a file never read here is no
+    // evidence that anyone consumed it.
+    if (lastState && (read === 'gone' || (jobId && read?.jobId && read.jobId !== jobId))) {
+      return { outcome: 'gone', state: lastState };
+    }
+    const state = read === 'gone' ? null : read;
     if (state) {
       lastState = state;
       if (state.status !== 'running') return { outcome: 'finished', state };
@@ -1699,6 +1725,69 @@ async function waitForBuildCompletion(
     await new Promise(r => setTimeout(r, pollIntervalMs));
   }
   return { outcome: 'timeout', state: lastState };
+}
+
+/**
+ * Finished results handed to a caller by THIS process, by jobId, so a second
+ * call waiting on the same build gets the same result instead of a timeout.
+ * Shared, never re-rendered: rendering runs the post-build bpCheck and dbSync,
+ * and those must run once per build.
+ */
+const deliveredResults = new Map<string, Promise<BuildToolResult>>();
+const DELIVERED_RESULT_TTL_MS = 10 * 60_000;
+
+/**
+ * Registers `result` for other waiters. Call it before the state is consumed:
+ * a waiter that sees the state gone looks the result up straight away.
+ */
+function shareDeliveredResult(state: BuildJobState, result: Promise<BuildToolResult>): Promise<BuildToolResult> {
+  const jobId = state.jobId;
+  if (jobId) {
+    deliveredResults.set(jobId, result);
+    result.catch(() => {}); // the caller that rendered it gets the rejection
+    setTimeout(() => deliveredResults.delete(jobId), DELIVERED_RESULT_TTL_MS).unref();
+  }
+  return result;
+}
+
+/** Consumes a finished state and renders it once, sharing the result with other waiters. */
+function deliverFinishedState(
+  state: BuildJobState, customPackagesPath: string,
+  render: () => Promise<BuildToolResult>,
+): Promise<BuildToolResult> {
+  return shareDeliveredResult(state, (async () => {
+    await consumeFinishedState(state, customPackagesPath);
+    return render();
+  })());
+}
+
+/** What a waiter answers when the build it waited on was consumed by another call. */
+async function resultCollectedElsewhere(
+  jobId: string | undefined, last: BuildJobState, targetModel: string,
+): Promise<BuildToolResult> {
+  const shared = jobId ? deliveredResults.get(jobId) : undefined;
+  if (shared) {
+    try {
+      const result = await shared;
+      const note = 'ℹ️  Another call waiting on this build collected its result first. This is that same ' +
+        'result — nothing was recompiled, and any bpCheck/dbSync ran once, for that call.\n\n';
+      return { ...result, content: [{ type: 'text', text: note + (result.content[0]?.text ?? '') }] };
+    } catch { /* say what this call knows on its own */ }
+  }
+  const tailLog = await readLogTail(last.logFile);
+  return {
+    content: [{
+      type: 'text',
+      text: [
+        `ℹ️  The build of ${targetModel} is no longer tracked: another call collected its result ` +
+          `(possibly in another MCP server process), or the build was cleared or replaced.`,
+        `Its result cannot be shown here. Call build_d365fo_project again to get a result of your own.`,
+        ``,
+        `--- Latest log ---`,
+        tailLog,
+      ].join('\n'),
+    }],
+  };
 }
 
 /** One-line "what is happening right now" for a progress notification. */
@@ -1957,11 +2046,15 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
           const stateStartedAt = new Date(existingState.startTime).getTime();
           const startedAt = Number.isFinite(stateStartedAt) ? stateStartedAt : Date.now();
           const wait = await waitForBuildCompletion(
-            targetModel, customPackagesPath, timeoutMs, onProgress, startedAt,
+            targetModel, customPackagesPath, timeoutMs, onProgress, startedAt, existingState.jobId,
           );
           if (wait.outcome === 'finished' && wait.state) {
-            await consumeFinishedState(wait.state, customPackagesPath);
-            return await renderFinishedBuildResult(wait.state, targetModel, dataDir, params, context);
+            const finished = wait.state;
+            return await deliverFinishedState(finished, customPackagesPath,
+              () => renderFinishedBuildResult(finished, targetModel, dataDir, params, context));
+          }
+          if (wait.outcome === 'gone') {
+            return await resultCollectedElsewhere(existingState.jobId, wait.state ?? existingState, targetModel);
           }
           const tailLog = await readLogTail(existingState.logFile);
           if (wait.outcome === 'orphaned') {
@@ -2033,15 +2126,20 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       const stillCurrent = await finishedResultStillDescribesDisk(
         existingState, targetModel, customPackagesPath,
       );
-      if (!existingState.restartWorkflow || !stillCurrent) await clearBuildState(targetModel, customPackagesPath);
+      if (!stillCurrent) await clearBuildState(targetModel, customPackagesPath);
       if (stillCurrent) {
         // Admission is still held here, so write directly rather than through
         // consumeFinishedState, which takes it.
         if (existingState.restartWorkflow && !existingState.resultDelivered) {
           await writeBuildState({ ...existingState, resultDelivered: true }, customPackagesPath);
         }
-        releaseAdmission();
-        const result = await renderFinishedBuildResult(existingState, targetModel, dataDir, params, context);
+        // Shared before the state is cleared: a call still waiting on this
+        // build finds the result the moment it sees the state gone.
+        const result = await shareDeliveredResult(existingState, (async () => {
+          if (!existingState.restartWorkflow) await clearBuildState(targetModel, customPackagesPath);
+          releaseAdmission();
+          return renderFinishedBuildResult(existingState, targetModel, dataDir, params, context);
+        })());
         // Say plainly that nothing was compiled just now, so a reader can never
         // mistake a collected result for a fresh one.
         const collected =
@@ -2215,11 +2313,15 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       const timeoutMs = resolveWaitTimeoutMs(params);
       const startedAt = new Date(initState.startTime).getTime();
       const wait = await waitForBuildCompletion(
-        targetModel, customPackagesPath, timeoutMs, onProgress, startedAt,
+        targetModel, customPackagesPath, timeoutMs, onProgress, startedAt, initState.jobId,
       );
       if (wait.outcome === 'finished' && wait.state) {
-        await consumeFinishedState(wait.state, customPackagesPath);
-        return await renderFinishedBuildResult(wait.state, targetModel, dataDir, params, context);
+        const finished = wait.state;
+        return await deliverFinishedState(finished, customPackagesPath,
+          () => renderFinishedBuildResult(finished, targetModel, dataDir, params, context));
+      }
+      if (wait.outcome === 'gone') {
+        return await resultCollectedElsewhere(initState.jobId, wait.state ?? initState, targetModel);
       }
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
       const tailLog = await readLogTail(wait.state?.logFile ?? jobLogFile);

@@ -37,6 +37,14 @@ those are called out explicitly below.
   starts (as a restart build already did); a collecting call can still add a
   `bpCheck`, and a `dbSync` scope given at the start is kept (tables the collecting
   call names are added to it).
+- **A second call waiting on the same build waited out its whole window.** When
+  two `build_d365fo_project` calls wait on one build (typically a client that gave
+  up on the first call and asked again), whichever sees it finish first consumes
+  its state; the other found nothing left to read and polled until `waitTimeoutMs`
+  (30 min by default) ran out. It now returns as soon as the state is gone, with
+  the same result the first call got when that call ran in this server process —
+  the post-build `bpCheck`/`dbSync` still run once — and otherwise says the build
+  was collected elsewhere.
 
 ## [1.21.0] — 2026-10-15
 
