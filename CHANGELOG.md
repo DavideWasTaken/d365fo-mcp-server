@@ -28,6 +28,30 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Fixed
+- **`bpCheck` and `dbSync` were lost when a build was collected by a later call.**
+  A build that outlives its wait window (`wait: false`, or past `waitTimeoutMs`) is
+  collected by another call, usually with the model name alone, and that call's
+  arguments decided the post-build steps — the BP check and sync the build was
+  started with were skipped without a word. The build now records them when it
+  starts (as a restart build already did); a collecting call can still add a
+  `bpCheck`, and a `dbSync` scope given at the start is kept (tables the collecting
+  call names are added to it).
+  *Fork:* this fork already ran the start's `bpCheck`/`dbSync` once in the close
+  handler and saved them; a collecting call that adds a `bpCheck` or a table still
+  starts a new build instead of running it at collection.
+- **A second call waiting on the same build waited out its whole window.** When
+  two `build_d365fo_project` calls wait on one build (typically a client that gave
+  up on the first call and asked again), whichever sees it finish first consumes
+  its state; the other found nothing left to read and polled until `waitTimeoutMs`
+  (30 min by default) ran out. It now returns as soon as the state is gone, with
+  the same result the first call got when that call ran in this server process —
+  the post-build `bpCheck`/`dbSync` still run once — and otherwise says the build
+  was collected elsewhere.
+  *Fork:* collecting keeps the state here, so the second waiter sees the build
+  finish too and gets the first waiter's shared result; it waits only with
+  `wait: true`.
+
 ## [1.21.0] — 2026-10-15
 
 ### Added

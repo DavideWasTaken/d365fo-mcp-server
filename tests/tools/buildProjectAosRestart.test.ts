@@ -157,6 +157,51 @@ describe('optional AOS restart build workflow', () => {
     await buildProjectTool(opts, {}); await finish();
     expect(m.restart).toHaveBeenCalledWith(opts.aosUrl);
   });
+  it('runs the bpCheck and dbSync the build was started with, even when it is collected without them', async () => {
+    // A build that outlives its wait window (wait:false, or past waitTimeoutMs) is
+    // collected later, typically with the model name alone.
+    await buildProjectTool({ modelName: 'MyModel', wait: false, bpCheck: true, dbSync: true }, {}); await finish();
+    const response = await buildProjectTool({ modelName: 'MyModel', wait: false }, {});
+    expect(m.bp).toHaveBeenCalledTimes(1); expect(m.sync).toHaveBeenCalledTimes(1);
+    expect(response.content[0].text).toContain('BP checked');
+    expect(response.content[0].text).toContain('Sync succeeded');
+  });
+  it('keeps the dbSync scope the build was started with', async () => {
+    await buildProjectTool({ modelName: 'MyModel', wait: false, dbSync: ['MyTable'] }, {}); await finish();
+    await buildProjectTool({ modelName: 'MyModel', wait: false, dbSync: true }, {});
+    expect(m.sync).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(m.sync.mock.calls[0][0])).toContain('MyTable');
+  });
+  describe('a second call waiting on the same build', () => {
+    // isProcessAlive must see the xppc PID alive for a call to attach and wait.
+    const spawnAlive = () => m.spawn.mockImplementation(() => { const child = { pid: process.pid, unref: vi.fn(), handlers: {} as any, on(event: string, fn: any) { this.handlers[event] = fn; } }; m.children.push(child); return child; });
+    // Fork: a call blocks only with wait:true; the default returns at once.
+    it('gets the result the first waiter collected, at once, without a second bpCheck/dbSync', async () => {
+      spawnAlive();
+      const starter = buildProjectTool({ modelName: 'MyModel', wait: true, bpCheck: true, dbSync: true }, {});
+      await vi.waitFor(() => expect(m.children.length).toBe(1));
+      // Default wait window (30 min): before the fix this call ran it out.
+      const attacher = buildProjectTool({ modelName: 'MyModel', wait: true }, {});
+      await new Promise(r => setTimeout(r, 100));
+      await finish();
+      const [first, second] = await Promise.all([starter, attacher]);
+      expect(m.sync).toHaveBeenCalledTimes(1); expect(m.bp).toHaveBeenCalledTimes(1);
+      const texts = [first.content[0].text, second.content[0].text];
+      expect(texts.filter(t => t.includes('Another call waiting on this build collected its result first'))).toHaveLength(1);
+      for (const text of texts) { expect(text).toContain('✅ Build succeeded'); expect(text).toContain('Sync succeeded'); }
+    }, 10_000);
+    it('says the build is no longer tracked when the result went to a call it cannot see', async () => {
+      spawnAlive();
+      await buildProjectTool({ modelName: 'MyModel', wait: false }, {});
+      const attacher = buildProjectTool({ modelName: 'MyModel', wait: true }, {});
+      await new Promise(r => setTimeout(r, 100));
+      // Another MCP server process collected it: the state is gone, nothing shared here.
+      m.files.delete(stateKey('MyModel'));
+      const text = (await attacher).content[0].text;
+      expect(text).toContain('The build of MyModel is no longer tracked');
+      expect(m.sync).not.toHaveBeenCalled(); expect(m.spawn).toHaveBeenCalledTimes(1);
+    }, 10_000);
+  });
   it('keeps ordinary builds free of runtime actions', async () => {
     await buildProjectTool({ modelName: 'MyModel', wait: false }, {}); await finish();
     expect(m.restart).not.toHaveBeenCalled();
