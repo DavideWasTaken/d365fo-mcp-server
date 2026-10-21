@@ -87,6 +87,11 @@ vi.mock('../../src/utils/packagesRoot.js', async () => {
 
 const { pruneMock } = vi.hoisted(() => ({ pruneMock: vi.fn() }));
 vi.mock('../../src/tools/sdlc/compilerMetadataPrune.js', () => ({ pruneStaleCompilerMetadata: pruneMock }));
+const { scanMock } = vi.hoisted(() => ({ scanMock: vi.fn() }));
+vi.mock('../../src/tools/sdlc/odataActionGuard.js', async () => ({
+  ...(await vi.importActual<any>('../../src/tools/sdlc/odataActionGuard.js')),
+  scanODataActions: scanMock,
+}));
 
 import path from 'path';
 import { buildProjectTool, readFullLog, renderFailureLog, trimSucceededLog } from '../../src/tools/sdlc/buildProject';
@@ -155,6 +160,8 @@ const RNRPROJ_XML = `<Project><Model>${MODEL_NAME}</Model></Project>`;
 const PKG = 'C:\\AOSService\\PackagesLocalDirectory';
 const XPPC = path.join(PKG, 'bin', 'xppc.exe');
 
+const NO_ODATA_FINDINGS = { recompiled: [], missing: [], runtimeFile: null, errors: [] };
+
 function makeFakeChild(pid = 12345) {
   const child: any = {
     pid,
@@ -186,6 +193,7 @@ describe('build_d365fo_project', () => {
     // assume changed", so every finished result would be refused and rebuilt.
     statMock.mockResolvedValue({ mtimeMs: 0 });
     pruneMock.mockResolvedValue({ stale: [], phantoms: [], skippedModels: [], errors: [], scanned: 0 });
+    scanMock.mockResolvedValue(NO_ODATA_FINDINGS);
     cfgGetProjectPath.mockResolvedValue(PROJECT_PATH);
     cfgGetPackagePath.mockReturnValue(null);
     cfgGetContext.mockReturnValue({});
@@ -681,6 +689,75 @@ describe('build_d365fo_project', () => {
     const state = JSON.parse(lastStateWrite![1]);
     expect(state.status).toBe('succeeded');
     expect(state.exitCode).toBe(0);
+  });
+
+  describe('OData actions, which -incremental drops from ODataExtends.runtime', () => {
+    const lastState = () => writeFileMock.mock.calls.filter((c: any[]) => c[0].includes('d365build_state')).at(-1)![1];
+    const build = async (params: Record<string, unknown> = {}) => {
+      let closeCallback: ((code: number | null) => Promise<void>) | undefined;
+      spawnMock.mockReturnValue({
+        pid: 42,
+        unref: vi.fn(),
+        on: vi.fn().mockImplementation((event: string, cb: any) => { if (event === 'close') closeCallback = cb; }),
+      });
+      allowPaths([XPPC, PKG]);
+      const started = await buildProjectTool({ modelName: MODEL_NAME, wait: false, ...params }, {});
+      readFileMock.mockImplementation(async (p: string) => {
+        if (p.includes('d365build_state')) return lastState();
+        if (p.includes('d365build_log')) return 'Build complete.';
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      await closeCallback!(0);
+      const state = JSON.parse(lastState());
+      readdirMock.mockResolvedValue([]);
+      const collected = await buildProjectTool({ modelName: MODEL_NAME }, {});
+      return { started, state, args: spawnMock.mock.calls[0][1] as string[], text: collected.content[0].text };
+    };
+
+    it('runs a full build, as Visual Studio does, when a changed entity declares actions', async () => {
+      scanMock.mockResolvedValueOnce({ ...NO_ODATA_FINDINGS, recompiled: ['AxDataEntityView/ProbeEntity'] });
+      const { started, state, args, text } = await build();
+      expect(args).not.toContain('-incremental');
+      expect(pruneMock).not.toHaveBeenCalled();
+      expect(started.content[0].text).toContain('Full build started');
+      expect(state).toMatchObject({ fullBuild: true, autoFullBuild: { recompiled: ['AxDataEntityView/ProbeEntity'] } });
+      expect(text).toContain('✅ Build succeeded (xppc.exe, full build, switched from incremental');
+      expect(text).toContain('AxDataEntityView/ProbeEntity');
+      expect(text).not.toContain('Incremental: only CHANGED elements');
+    });
+
+    it('runs a full build when actions are already missing from the deployed file', async () => {
+      scanMock.mockResolvedValueOnce({ ...NO_ODATA_FINDINGS, missing: [{ entity: 'ProbeEntity', actions: ['ExistingAction'] }] });
+      const { args, text } = await build();
+      expect(args).not.toContain('-incremental');
+      expect(text).toContain('ProbeEntity (ExistingAction)');
+    });
+
+    it('stays incremental when no entity with actions is affected', async () => {
+      const { args, text } = await build();
+      expect(args).toContain('-incremental');
+      // Once before xppc (recompile + deployed file), once after it (deployed file only).
+      expect(scanMock.mock.calls.map(c => c[3])).toEqual([undefined, { checkRecompile: false }]);
+      expect(text).toContain('✅ Build succeeded (xppc.exe, incremental');
+    });
+
+    it('does not run the pre-build scan for a requested full build', async () => {
+      const { args, state } = await build({ fullBuild: true });
+      expect(args).not.toContain('-incremental');
+      expect(scanMock.mock.calls.map(c => c[3])).toEqual([{ checkRecompile: false }]);
+      expect(state.autoFullBuild).toBeUndefined();
+    });
+
+    it('warns instead of a green result when actions are still missing after the build', async () => {
+      scanMock
+        .mockResolvedValueOnce(NO_ODATA_FINDINGS)
+        .mockResolvedValueOnce({ ...NO_ODATA_FINDINGS, missing: [{ entity: 'ProbeEntity', actions: ['NewAction'] }] });
+      const { text } = await build();
+      expect(text).toContain('⚠️ Build succeeded; OData actions missing');
+      expect(text).not.toContain('✅ Build succeeded');
+      expect(text).toContain('ProbeEntity (NewAction)');
+      expect(text).toContain('fullBuild: true');
+    });
   });
 
   // Issue #1048 asked whether a build could pass while its log reports errors

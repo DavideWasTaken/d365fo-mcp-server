@@ -13,6 +13,7 @@ import { lookupErrorFix } from '../knowledge/d365foErrorHelp.js';
 import { generateRuntimeMetadata } from '../xml/generateMetadata.js';
 import { compileModelLabels, type CompileLabelsResult } from '../write/compileLabels.js';
 import { pruneStaleCompilerMetadata } from './compilerMetadataPrune.js';
+import { describeMissingODataActions, scanODataActions, type MissingODataActions } from './odataActionGuard.js';
 import { recordBuild } from '../../utils/buildMarker.js';
 import type { ProgressReporter } from '../../utils/progressReporter.js';
 import { restartAosRuntime, type RuntimeRestartResult } from './aosRuntime.js';
@@ -279,6 +280,18 @@ interface BuildJobState {
   // the model name alone, and that call's arguments used to decide: the bpCheck
   // and dbSync asked for at the start were dropped without a word.
   postBuildRequest?: PostBuildRequest;
+  // Why a build asked for as incremental ran as a full one: an incremental compile drops
+  // OData actions (see odataActionGuard.ts). Absent when fullBuild was requested.
+  autoFullBuild?: AutoFullBuildReason;
+  // Declared OData actions that ODataExtends.runtime still lacks after this build.
+  odataActionsMissing?: MissingODataActions[];
+}
+
+interface AutoFullBuildReason {
+  /** `<AxType>/<Name>` of the elements with OData actions this build had to recompile. */
+  recompiled: string[];
+  /** Entities whose ODataExtends.runtime entry had already lost actions. */
+  missing: MissingODataActions[];
 }
 
 const asksFor = (v: unknown): boolean => v === true || v === 'true';
@@ -990,6 +1003,65 @@ async function pruneModelCompilerMetadata(
 }
 
 /**
+ * Whether a requested incremental build of the target model has to run as a full one, as Visual
+ * Studio's does, to keep its OData actions — see odataActionGuard.ts for why `-incremental` drops
+ * them. Null when incremental is safe. Like the metadata prune, it never fails the build: a scan
+ * that fails leaves the build incremental, and the check after it still reports lost actions.
+ */
+async function odataActionsNeedFullBuild(ctx: XppcBuildContext, modelName: string): Promise<AutoFullBuildReason | null> {
+  const started = Date.now();
+  try {
+    const r = await scanODataActions(ctx.compilerMetadataPath, ctx.customPackagesPath, modelName);
+    if (r.errors.length > 0) {
+      await buildLog('WARN', `OData action check of ${modelName} could not read ${r.errors.length} file(s): ${r.errors.slice(0, 5).join('; ')}`);
+    }
+    if (r.recompiled.length === 0 && r.missing.length === 0) return null;
+    const reason = { recompiled: r.recompiled, missing: r.missing };
+    await buildLog('INFO', `Incremental build of ${modelName} switched to a full build (${Date.now() - started}ms): ${describeAutoFullBuild(reason)}`);
+    return reason;
+  } catch (err: any) {
+    await buildLog('WARN', `OData action check of ${modelName} failed (${err?.message ?? err}) — building incrementally`);
+    return null;
+  }
+}
+
+/** Declared actions ODataExtends.runtime lacks after a successful build; [] when none or unknown. */
+async function odataActionsMissingAfterBuild(ctx: XppcBuildContext, modelName: string): Promise<MissingODataActions[]> {
+  try {
+    const r = await scanODataActions(ctx.compilerMetadataPath, ctx.customPackagesPath, modelName, { checkRecompile: false });
+    if (r.missing.length > 0) {
+      await buildLog('WARN', `OData actions missing from ${r.runtimeFile} after the build: ${describeMissingODataActions(r.missing)}`);
+    }
+    return r.missing;
+  } catch (err: any) {
+    await buildLog('WARN', `OData action check of ${modelName} after the build failed: ${err?.message ?? err}`);
+    return [];
+  }
+}
+
+function describeOdataActionsMissing(missing: MissingODataActions[], fullBuild: boolean): string {
+  return `⚠️ OData actions declared in source are missing from ODataExtends.runtime: ${describeMissingODataActions(missing)}. ` +
+    'The AOS reads that file at startup, so after the next restart these actions are not exposed. ' +
+    (fullBuild
+      ? 'A full build did not write them either: check the methods\' SysODataActionAttribute and that the entity is public.'
+      : 'Run build_d365fo_project with fullBuild: true before restarting the AOS.');
+}
+
+function describeAutoFullBuild(reason: AutoFullBuildReason): string {
+  const parts: string[] = [];
+  if (reason.recompiled.length > 0) {
+    const names = reason.recompiled.slice(0, 10).join(', ') + (reason.recompiled.length > 10 ? `, … (+${reason.recompiled.length - 10})` : '');
+    parts.push(`changed elements with OData actions: ${names}`);
+  }
+  if (reason.missing.length > 0) {
+    parts.push(`actions already missing from ODataExtends.runtime: ${describeMissingODataActions(reason.missing)}`);
+  }
+  return `ℹ️ Full build instead of incremental — ${parts.join('; ')}. ` +
+    'An incremental xppc build rewrites a recompiled entity\'s ODataExtends.runtime entry without its OData actions, ' +
+    'so they would disappear from OData at the next AOS restart.';
+}
+
+/**
  * Delete the compiler-metadata stub an earlier build left in the framework directory.
  *
  * While `-compilermetadata` pointed at the framework directory, every build of a customer
@@ -1056,7 +1128,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
   // incremental. They are already compiled; a full rebuild of every dep in
   // the chain would be very slow and is only needed when a dep itself has
   // stale symbols, which the user can fix by building that model directly.
-  const useFullBuild = fullBuild && modelName === targetModel;
+  let useFullBuild = fullBuild && modelName === targetModel;
 
   assertSafePath(xppcExe, 'xppc.exe path');
   assertSafePath(modelName, 'Model name');
@@ -1065,6 +1137,17 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
   assertSafePath(compilerMetadataPath, 'Compiler metadata path');
 
   await removeStaleFrameworkCompilerMetadata(ctx, modelName);
+
+  // Before the prune below, which deletes the metadata this compares against. Recorded on the
+  // state itself — the caller's initState too — so everything that reads it reports a full build.
+  if (!useFullBuild && modelName === targetModel) {
+    const reason = await odataActionsNeedFullBuild(ctx, modelName);
+    if (reason) {
+      useFullBuild = true;
+      state.fullBuild = true;
+      state.autoFullBuild = reason;
+    }
+  }
 
   // Without this, xppc's write-back can leave changed elements stale in XppMetadata, and the
   // runtime .md manifests generated from it then contradict the compiled netmodule. A full build
@@ -1139,7 +1222,7 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
     INVOCATION_HEADER_END,
     '',
     '',
-  ].join('\n');
+  ].join('\n') + (state.autoFullBuild ? `${describeAutoFullBuild(state.autoFullBuild)}\n\n` : '');
 
   // Truncate the log with the invocation and label outcome, then append xppc's
   // output to it, so a single tail read shows the whole build in the order it
@@ -1252,11 +1335,19 @@ async function spawnXppcForState(ctx: XppcBuildContext, state: BuildJobState): P
         await appendFile(state.logFile, `\n⚠️ Runtime metadata (.md) regeneration failed — VS build required for deployment of new classes:\n${metaResult.message}\n`, 'utf-8').catch(() => {});
       }
 
+      // What the AOS will read at its next start. Only the target model: it is the one compiled.
+      const odataActionsMissing = modelName === liveState.targetModel ? await odataActionsMissingAfterBuild(ctx, modelName) : [];
+      if (!(await ownsBuild(liveState, customPackagesPath))) return;
+      if (odataActionsMissing.length > 0) {
+        await appendFile(state.logFile, `\n⚠️ OData actions missing from ODataExtends.runtime: ${describeMissingODataActions(odataActionsMissing)}\n`, 'utf-8').catch(() => {});
+      }
+
       const final: BuildJobState = {
         ...liveState,
         status: 'succeeded',
         exitCode,
         endTime: new Date().toISOString(),
+        ...(odataActionsMissing.length > 0 ? { odataActionsMissing } : {}),
       };
       if (final.restartWorkflow) {
         // The build verdict stays the one every build gets; a log that still
@@ -1316,6 +1407,14 @@ async function finishRestartWorkflow(
     workflow.result = { status: 'blocked', message: 'AOS restart blocked: the xppc log reports errors (see the diagnostics above).' };
   } else if (!metadata.success || metadata.skipped) {
     workflow.result = { status: 'blocked', message: `AOS restart blocked: runtime metadata was not generated. ${metadata.message}` };
+  } else if (!state.fullBuild && state.odataActionsMissing?.length) {
+    // The restart is what takes them out of OData; a full build puts them back first. After a
+    // full build that still lacks them a restart cannot make things worse, so it goes ahead.
+    workflow.result = {
+      status: 'blocked',
+      message: `AOS restart blocked: OData actions are missing from ODataExtends.runtime (${describeMissingODataActions(state.odataActionsMissing)}). ` +
+        'Rebuild with fullBuild: true, restartAos: true.',
+    };
   } else if (syncRequested && (workflow.sync.failed || !workflow.sync.section ||
     // An empty selection or response cannot establish that requested sync ran.
     (Array.isArray(workflow.request.dbSync) && !workflow.request.dbSync.some(t => typeof t === 'string' && t.trim())))) {
@@ -1374,8 +1473,12 @@ async function renderFinishedBuildResult(
     : '';
   const logTail       = await readLogTail(finalState.logFile);
   const hasWarnings   = succeeded && logTail.split(/\r?\n/).some(l => /Warning:\s/.test(l) && DIAG_LINE_TEST.test(l.trim()));
-  const statusIcon    = !succeeded ? '❌ Build FAILED' : runtimeWarning ? '⚠️ Build succeeded; AOS requires attention' : hasWarnings ? '⚠️ Build succeeded with warnings' : '✅ Build succeeded';
-  const buildMode     = finalState.fullBuild ? 'full build' : 'incremental';
+  const odataMissing  = succeeded ? finalState.odataActionsMissing ?? [] : [];
+  const statusIcon    = !succeeded ? '❌ Build FAILED' : runtimeWarning ? '⚠️ Build succeeded; AOS requires attention' :
+    odataMissing.length > 0 ? '⚠️ Build succeeded; OData actions missing' : hasWarnings ? '⚠️ Build succeeded with warnings' : '✅ Build succeeded';
+  const buildMode     = finalState.autoFullBuild ? 'full build, switched from incremental' : finalState.fullBuild ? 'full build' : 'incremental';
+  const odataSection  = (finalState.autoFullBuild ? `\n${describeAutoFullBuild(finalState.autoFullBuild)}\n` : '') +
+    (odataMissing.length > 0 ? `\n${describeOdataActionsMissing(odataMissing, !!finalState.fullBuild)}\n` : '');
   const duration      = finalState.endTime
     ? Math.round((new Date(finalState.endTime).getTime() - new Date(finalState.startTime).getTime()) / 1000)
     : '?';
@@ -1419,6 +1522,7 @@ async function renderFinishedBuildResult(
     content: [{
       type: 'text',
       text: `${statusIcon} (${finalState.tool}, ${buildMode}, ${duration}s)\n\nModel: ${targetModel}\n` +
+        odataSection +
         incrementalScopeCaveat(succeeded, !!finalState.fullBuild) + '\n' +
         (unexplained ? `${unexplained}\n\n` : '') +
         (structured ? `${structured}\n\n` : '') +
@@ -2302,7 +2406,8 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
     // ------------------------------------------------------------------
     // Return "build started" message OR wait for completion
     // ------------------------------------------------------------------
-    const modeLabel = fullBuild ? 'Full build' : 'Incremental build';
+    // initState, not fullBuild: the launch may already have switched it to a full build.
+    const modeLabel = initState.fullBuild ? 'Full build' : 'Incremental build';
 
     // wait defaults to true — single call returns the final result. When the
     // caller passes wait:false explicitly we keep the legacy fire-and-forget
