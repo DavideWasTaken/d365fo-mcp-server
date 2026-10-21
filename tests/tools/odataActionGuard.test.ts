@@ -190,6 +190,20 @@ describe('scanODataActions', () => {
     expect(r.errors).toEqual([]);
   });
 
+  it('does not call an action just added to a changed entity "already missing"', async () => {
+    write(meta('AxDataEntityView', 'ProbeEntity'), '<x/>', OLD);
+    write(src('AxDataEntityView', 'ProbeEntity'), entitySource([
+      "[SysODataActionAttribute('ExistingAction', false)]",
+      "[SysODataActionAttribute('NewAction', false)]",
+    ].join('\n')), NEWER);
+    write(bin(), runtimeFile(entry('ProbeEntity', [action('ExistingAction', 'existingAction')])));
+
+    const r = await scanODataActions(root, root, PKG);
+
+    expect(r.recompiled).toEqual(['AxDataEntityView/ProbeEntity']);
+    expect(r.missing).toEqual([]);
+  });
+
   it('flags an entity with actions that was never compiled', async () => {
     write(src('AxDataEntityView', 'NewEntity'), withAction, NEWER);
     expect((await scanODataActions(root, root, PKG)).recompiled).toEqual(['AxDataEntityView/NewEntity']);

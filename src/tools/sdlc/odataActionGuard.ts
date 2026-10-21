@@ -129,7 +129,8 @@ export interface ODataActionScanResult {
  * metadata files and touches their sources. `missing` catches what an earlier incremental build
  * already dropped — a build whose entities are all current would otherwise never put them back.
  * An entity without an entry is skipped: a non-public entity has none, and an entity compiled for
- * the first time is in `recompiled` anyway.
+ * the first time is in `recompiled` anyway. So is an entity in `recompiled`: an action it lacks is
+ * one just added in the source, not one an earlier build dropped.
  *
  * Sources are read only when they matter: every entity (to know its actions), and the other types
  * only when they are about to be recompiled. Everything else costs two stats.
@@ -203,7 +204,11 @@ export async function scanODataActions(
 
   if (runtimeFile && declared.size > 0) {
     try {
-      result.missing = compareWithRuntime(declared, parseODataExtendsRuntime(await readFile(runtimeFile, 'utf-8')));
+      const recompiledEntities = new Set(
+        result.recompiled.filter(r => r.startsWith(`${ENTITY_TYPE}/`)).map(r => r.slice(ENTITY_TYPE.length + 1).toLowerCase()),
+      );
+      result.missing = compareWithRuntime(declared, parseODataExtendsRuntime(await readFile(runtimeFile, 'utf-8')))
+        .filter(m => !recompiledEntities.has(m.entity.toLowerCase()));
     } catch (err: any) {
       result.errors.push(`${runtimeFile}: ${err?.message ?? err}`);
     }
