@@ -1022,22 +1022,22 @@ describe('build_d365fo_project', () => {
     };
 
     it('runs a full build, as Visual Studio does, when a changed entity declares actions', async () => {
-      scanMock.mockResolvedValueOnce({ ...NO_ODATA_FINDINGS, recompiled: ['AxDataEntityView/AVABOMPdfEntity'] });
+      scanMock.mockResolvedValueOnce({ ...NO_ODATA_FINDINGS, recompiled: ['AxDataEntityView/ProbeEntity'] });
       const { started, args, collected } = await build();
       expect(args).not.toContain('-incremental');
       expect(pruneMock).not.toHaveBeenCalled();
       expect(started.content[0].text).toContain('Full build started');
       const text = collected.content[0].text;
       expect(text).toContain('✅ Build succeeded (xppc.exe, full build, switched from incremental');
-      expect(text).toContain('AxDataEntityView/AVABOMPdfEntity');
+      expect(text).toContain('AxDataEntityView/ProbeEntity');
       expect(text).not.toContain('Incremental: only CHANGED elements');
     });
 
     it('runs a full build when actions are already missing from the deployed file', async () => {
-      scanMock.mockResolvedValueOnce({ ...NO_ODATA_FINDINGS, missing: [{ entity: 'AVABOMPdfEntity', actions: ['GetBOMPdf'] }] });
+      scanMock.mockResolvedValueOnce({ ...NO_ODATA_FINDINGS, missing: [{ entity: 'ProbeEntity', actions: ['ExistingAction'] }] });
       const { args, collected } = await build();
       expect(args).not.toContain('-incremental');
-      expect(collected.content[0].text).toContain('AVABOMPdfEntity (GetBOMPdf)');
+      expect(collected.content[0].text).toContain('ProbeEntity (ExistingAction)');
     });
 
     it('stays incremental when no entity with actions is affected', async () => {
@@ -1058,12 +1058,12 @@ describe('build_d365fo_project', () => {
     it('warns instead of a green result when actions are still missing after the build', async () => {
       scanMock
         .mockResolvedValueOnce(NO_ODATA_FINDINGS)
-        .mockResolvedValueOnce({ ...NO_ODATA_FINDINGS, missing: [{ entity: 'AVABOMPdfEntity', actions: ['PingBOMPdf'] }] });
+        .mockResolvedValueOnce({ ...NO_ODATA_FINDINGS, missing: [{ entity: 'ProbeEntity', actions: ['NewAction'] }] });
       const { collected } = await build();
       const text = collected.content[0].text;
       expect(text).toContain('⚠️ Build succeeded; OData actions missing');
       expect(text).not.toContain('✅ Build succeeded');
-      expect(text).toContain('AVABOMPdfEntity (PingBOMPdf)');
+      expect(text).toContain('ProbeEntity (NewAction)');
       expect(text).toContain('fullBuild: true');
     });
   });

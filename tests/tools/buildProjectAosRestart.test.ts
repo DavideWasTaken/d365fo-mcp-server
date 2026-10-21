@@ -39,7 +39,7 @@ vi.mock('../../src/tools/sdlc/odataActionGuard.js', async () => ({
   ...(await vi.importActual<any>('../../src/tools/sdlc/odataActionGuard.js')), scanODataActions: m.scan,
 }));
 const noOdataFindings = { recompiled: [], missing: [], runtimeFile: null, errors: [] };
-const lostGetBOMPdf = { ...noOdataFindings, missing: [{ entity: 'AVABOMPdfEntity', actions: ['GetBOMPdf'] }] };
+const lostExistingAction = { ...noOdataFindings, missing: [{ entity: 'ProbeEntity', actions: ['ExistingAction'] }] };
 import { buildProjectTool } from '../../src/tools/sdlc/buildProject.js';
 const opts = { modelName: 'MyModel', restartAos: true, aosUrl: 'https://dev.example.test/', wait: false };
 const webConfig = path.join('C:\\Packages', '..', 'WebRoot', 'web.config');
@@ -65,15 +65,15 @@ describe('optional AOS restart build workflow', () => {
   });
   it('blocks the restart that would take OData actions out of an incremental build', async () => {
     // Nothing flagged before xppc, actions missing after it: the restart is what loses them.
-    m.scan.mockResolvedValueOnce(noOdataFindings).mockResolvedValueOnce(lostGetBOMPdf);
+    m.scan.mockResolvedValueOnce(noOdataFindings).mockResolvedValueOnce(lostExistingAction);
     await buildProjectTool(opts, {}); await finish();
     expect(m.restart).not.toHaveBeenCalled();
     const text = (await buildProjectTool({ modelName: 'MyModel', wait: false }, {})).content[0].text;
-    expect(text).toContain('AOS restart blocked: OData actions are missing from ODataExtends.runtime (AVABOMPdfEntity (GetBOMPdf))');
+    expect(text).toContain('AOS restart blocked: OData actions are missing from ODataExtends.runtime (ProbeEntity (ExistingAction))');
     expect(text).toContain('fullBuild: true, restartAos: true');
   });
   it('still restarts after a full build that lacks actions — a restart cannot lose them then', async () => {
-    m.scan.mockResolvedValue(lostGetBOMPdf);
+    m.scan.mockResolvedValue(lostExistingAction);
     await buildProjectTool({ ...opts, fullBuild: true }, {}); await finish();
     expect(m.restart).toHaveBeenCalledTimes(1);
     expect((await buildProjectTool({ modelName: 'MyModel', wait: false }, {})).content[0].text).toContain('A full build did not write them either');

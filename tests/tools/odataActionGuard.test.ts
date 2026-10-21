@@ -36,13 +36,13 @@ describe('parseODataExtendsRuntime', () => {
   it("reads each entity's action names, keyed by the AOT name before the tab", () => {
     const parsed = parseODataExtendsRuntime(
       runtimeFile(
-        entry('AVABOMPdfEntity', [action('GetBOMPdf', 'getBOMPdf')], ['dataAreaId', 'BOMId', 'Name']),
-        entry('AVAShiftEntity', []),
+        entry('ProbeEntity', [action('ExistingAction', 'existingAction')], ['dataAreaId', 'ProbeId', 'Name']),
+        entry('PlainEntity', []),
       ),
     );
     expect([...parsed]).toEqual([
-      ['AVABOMPdfEntity', ['GetBOMPdf']],
-      ['AVAShiftEntity', []],
+      ['ProbeEntity', ['ExistingAction']],
+      ['PlainEntity', []],
     ]);
   });
 
@@ -55,7 +55,7 @@ describe('parseODataExtendsRuntime', () => {
         '</a:Value></a:KeyValueOfstringAxODataCollectionAttributeLjh4bohd></Items>',
     );
     const instance = action('GetProjectTypes', 'GetProjectTypes', 'BoundToEntityInstance');
-    const parsed = parseODataExtendsRuntime(runtimeFile(entry('BudgetEntity', [lookup, instance], ['GetBOMPdf'])));
+    const parsed = parseODataExtendsRuntime(runtimeFile(entry('BudgetEntity', [lookup, instance], ['ExistingAction'])));
     expect(parsed.get('BudgetEntity')).toEqual(['BudgetRuleLookup', 'GetProjectTypes']);
   });
 
@@ -73,9 +73,9 @@ describe('parseODataExtendsRuntime', () => {
 describe('extractODataActionNames', () => {
   it("takes the attribute's first argument, not the method name", () => {
     const src = entitySource(
-      `[SysODataActionAttribute('GetBOMPdf', false)]\npublic static str getBOMPdf(BOMId _bomId) { return ''; }`,
+      `[SysODataActionAttribute('ExistingAction', false)]\npublic static str existingAction(str _id) { return ''; }`,
     );
-    expect(extractODataActionNames(src)).toEqual(['GetBOMPdf']);
+    expect(extractODataActionNames(src)).toEqual(['ExistingAction']);
   });
 
   it('accepts double quotes, the suffix-less form and a combined attribute list', () => {
@@ -106,15 +106,15 @@ describe('compareWithRuntime', () => {
   it('reports only the declared actions an entry lacks, ignoring case', () => {
     const missing = compareWithRuntime(
       new Map([
-        ['AVABOMPdfEntity', ['GetBOMPdf', 'PingBOMPdf']],
+        ['ProbeEntity', ['ExistingAction', 'NewAction']],
         ['Other', ['run']],
       ]),
       new Map([
-        ['avabompdfentity', ['getbompdf']],
+        ['probeentity', ['existingaction']],
         ['Other', ['Run']],
       ]),
     );
-    expect(missing).toEqual([{ entity: 'AVABOMPdfEntity', actions: ['PingBOMPdf'] }]);
+    expect(missing).toEqual([{ entity: 'ProbeEntity', actions: ['NewAction'] }]);
   });
 
   it('skips an entity with no entry — a non-public entity has none', () => {
@@ -174,18 +174,18 @@ describe('findODataExtendsRuntime', () => {
 
 describe('scanODataActions', () => {
   const withAction = entitySource(
-    `[SysODataActionAttribute('GetBOMPdf', false)]\npublic static str getBOMPdf() { return ''; }`,
+    `[SysODataActionAttribute('ExistingAction', false)]\npublic static str existingAction() { return ''; }`,
   );
   const withoutAction = entitySource('public void insert() { super(); }');
 
-  it('flags a changed entity with actions — the case that lost GetBOMPdf', async () => {
-    write(meta('AxDataEntityView', 'AVABOMPdfEntity'), '<x/>', OLD);
-    write(src('AxDataEntityView', 'AVABOMPdfEntity'), withAction, NEWER);
-    write(bin(), runtimeFile(entry('AVABOMPdfEntity', [action('GetBOMPdf', 'getBOMPdf')])));
+  it('flags a changed entity with actions — the case that lost ExistingAction', async () => {
+    write(meta('AxDataEntityView', 'ProbeEntity'), '<x/>', OLD);
+    write(src('AxDataEntityView', 'ProbeEntity'), withAction, NEWER);
+    write(bin(), runtimeFile(entry('ProbeEntity', [action('ExistingAction', 'existingAction')])));
 
     const r = await scanODataActions(root, root, PKG);
 
-    expect(r.recompiled).toEqual(['AxDataEntityView/AVABOMPdfEntity']);
+    expect(r.recompiled).toEqual(['AxDataEntityView/ProbeEntity']);
     expect(r.missing).toEqual([]);
     expect(r.errors).toEqual([]);
   });
@@ -196,29 +196,29 @@ describe('scanODataActions', () => {
   });
 
   it('reports actions an earlier incremental build already dropped, though nothing changed', async () => {
-    compiled('AxDataEntityView', 'AVABOMPdfEntity', withAction);
-    write(bin(), runtimeFile(entry('AVABOMPdfEntity', [])));
+    compiled('AxDataEntityView', 'ProbeEntity', withAction);
+    write(bin(), runtimeFile(entry('ProbeEntity', [])));
 
     const r = await scanODataActions(root, root, PKG);
 
     expect(r.recompiled).toEqual([]);
-    expect(r.missing).toEqual([{ entity: 'AVABOMPdfEntity', actions: ['GetBOMPdf'] }]);
+    expect(r.missing).toEqual([{ entity: 'ProbeEntity', actions: ['ExistingAction'] }]);
     expect(r.runtimeFile).toBe(bin());
   });
 
   it('finds nothing when compiled entities and their entries agree', async () => {
-    compiled('AxDataEntityView', 'AVABOMPdfEntity', withAction);
-    compiled('AxDataEntityView', 'AVAShiftEntity', withoutAction);
+    compiled('AxDataEntityView', 'ProbeEntity', withAction);
+    compiled('AxDataEntityView', 'PlainEntity', withoutAction);
     write(
       bin(),
-      runtimeFile(entry('AVABOMPdfEntity', [action('GetBOMPdf', 'getBOMPdf')]), entry('AVAShiftEntity', [])),
+      runtimeFile(entry('ProbeEntity', [action('ExistingAction', 'existingAction')]), entry('PlainEntity', [])),
     );
 
     expect(await scanODataActions(root, root, PKG)).toMatchObject({ recompiled: [], missing: [], errors: [] });
   });
 
   it('ignores a changed entity, extension or class without actions', async () => {
-    write(src('AxDataEntityView', 'AVAShiftEntity'), withoutAction, NEWER);
+    write(src('AxDataEntityView', 'PlainEntity'), withoutAction, NEWER);
     write(src('AxDataEntityViewExtension', 'CustomersV3.Ext'), '<AxDataEntityViewExtension/>', NEWER);
     write(src('AxClass', 'Helper'), '<AxClass><Source><![CDATA[class Helper {}]]></Source></AxClass>', NEWER);
     expect((await scanODataActions(root, root, PKG)).recompiled).toEqual([]);
@@ -240,13 +240,13 @@ describe('scanODataActions', () => {
   });
 
   it('with checkRecompile off, only compares entities against the deployed file', async () => {
-    write(src('AxDataEntityView', 'AVABOMPdfEntity'), withAction, NEWER);
-    write(bin(), runtimeFile(entry('AVABOMPdfEntity', [])));
+    write(src('AxDataEntityView', 'ProbeEntity'), withAction, NEWER);
+    write(bin(), runtimeFile(entry('ProbeEntity', [])));
 
     const r = await scanODataActions(root, root, PKG, { checkRecompile: false });
 
     expect(r.recompiled).toEqual([]);
-    expect(r.missing).toEqual([{ entity: 'AVABOMPdfEntity', actions: ['GetBOMPdf'] }]);
+    expect(r.missing).toEqual([{ entity: 'ProbeEntity', actions: ['ExistingAction'] }]);
   });
 
   it('reports a missing package folder as an error rather than throwing', async () => {

@@ -8,8 +8,8 @@ import { readdir, readFile, stat } from 'fs/promises';
  * one entry per data entity with its fields and actions, and the OData service reads the actions
  * from there when the AOS starts. With `-incremental`, an entity that xppc recompiles gets its entry
  * rewritten WITHOUT its actions; a full build writes them. Measured on a CHE box: a Visual Studio
- * build of an entity listed `GetBOMPdf`; an incremental build after adding a second action
- * `PingBOMPdf` listed neither — the action that had worked was gone too — while the entity's
+ * build of an entity listed `ExistingAction`; an incremental build after adding a second action
+ * `NewAction` listed neither — the action that had worked was gone too — while the entity's
  * XppMetadata file held both methods; a full build listed both. So a green incremental build of an
  * entity with actions removes them from OData at the next AOS restart. The `.md` manifests are not
  * involved: they are byte-identical to Visual Studio's.
@@ -34,7 +34,7 @@ const ODATA_ACTION_NAME_RE = /\bSysODataAction(?:Attribute)?\s*\(\s*(?:"([^"]*)"
 
 /**
  * The public action names a source declares: the FIRST argument of each SysODataActionAttribute,
- * which is what ODataExtends.runtime keys the action by (`GetBOMPdf`), not the method (`getBOMPdf`).
+ * which is what ODataExtends.runtime keys the action by (`ExistingAction`), not the method (`existingAction`).
  * A name that is not a string literal cannot be checked and is left out.
  */
 export function extractODataActionNames(source: string): string[] {
@@ -228,7 +228,7 @@ export function compareWithRuntime(
   return missing.sort((a, b) => a.entity.localeCompare(b.entity));
 }
 
-/** `AVABOMPdfEntity (GetBOMPdf, PingBOMPdf)`, for logs and results. */
+/** `ProbeEntity (ExistingAction, NewAction)`, for logs and results. */
 export function describeMissingODataActions(missing: MissingODataActions[], max = 10): string {
   const shown = missing
     .slice(0, max)
