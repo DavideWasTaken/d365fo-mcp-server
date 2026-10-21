@@ -142,7 +142,7 @@ async function markStaleRows<T extends { filePath?: string }>(
 const SearchArgsSchema = z.object({
   query: z.string().describe('Search query (class name, method name, etc.)'),
   type: z.enum([
-    'class', 'table', 'form', 'field', 'method', 'enum', 'edt', 'query', 'view', 'report',
+    'class', 'table', 'form', 'field', 'method', 'enum', 'edt', 'query', 'view', 'map', 'report',
     'security-privilege', 'security-duty', 'security-role',
     'menu-item-display', 'menu-item-action', 'menu-item-output',
     'table-extension', 'class-extension', 'form-extension',

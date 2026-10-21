@@ -25,6 +25,7 @@ const AOT_FOLDER_BY_OBJECT_TYPE: Record<string, string> = {
   enum: 'AxEnum',
   query: 'AxQuery',
   view: 'AxView',
+  map: 'AxMap',
   edt: 'AxEdt',
   'data-entity': 'AxDataEntityView',
   report: 'AxReport',

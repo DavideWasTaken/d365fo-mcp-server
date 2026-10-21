@@ -24,7 +24,7 @@ export const searchTool = {
         query: { type: 'string', description: '[single|extensions] Search query (class name, method name, table name, etc.). REQUIRED unless using batch `queries[]`.' },
         type: {
           type: 'string',
-          enum: ['class', 'table', 'field', 'method', 'enum', 'edt', 'form', 'query', 'view', 'report',
+          enum: ['class', 'table', 'field', 'method', 'enum', 'edt', 'form', 'query', 'view', 'map', 'report',
             'security-privilege', 'security-duty', 'security-role',
             'menu-item-display', 'menu-item-action', 'menu-item-output',
             'table-extension', 'class-extension', 'form-extension',

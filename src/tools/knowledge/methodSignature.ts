@@ -21,7 +21,7 @@ import { indexedPathIsMissing, renderStaleIndexNote } from '../../utils/indexedX
 import { hasTableDataMethods, lookupTableDataMethod } from '../../knowledge/tableDataMethods.js';
 
 /** Object types that can own methods. */
-const OBJECT_TYPES = ['class', 'table', 'view', 'data-entity'] as const;
+const OBJECT_TYPES = ['class', 'table', 'view', 'data-entity', 'map'] as const;
 const OBJECT_TYPES_SQL = `(${OBJECT_TYPES.map(t => `'${t}'`).join(', ')})`;
 
 

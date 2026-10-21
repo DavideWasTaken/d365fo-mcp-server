@@ -137,8 +137,11 @@ export async function handleGenerateD365Xml(
       `[generate_d365fo_xml] Generated XML content: ${xmlContent.length} bytes`
     );
 
-    // Construct recommended file path
-    const recommendedPath = `K:\\AosService\\PackagesLocalDirectory\\${modelName}\\${modelName}\\${objectFolder}\\${args.objectName}.xml`;
+    // Construct recommended file path under the CONFIGURED packages root —
+    // a hardcoded K:\ used to recommend paths on boxes where the AOT lives on C:.
+    await configManager.ensureLoaded();
+    const packagesRoot = configManager.getPackagePath() || 'C:\\AosService\\PackagesLocalDirectory';
+    const recommendedPath = `${packagesRoot}\\${modelName}\\${modelName}\\${objectFolder}\\${args.objectName}.xml`;
 
     // Return XML content with instructions
     const instructions = `✅ Generated D365FO ${args.objectType} XML for: ${args.objectName}

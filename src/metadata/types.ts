@@ -88,6 +88,8 @@ export interface XppTableInfo {
   indexes: XppIndexInfo[];
   relations: XppRelationInfo[];
   methods: XppMethodInfo[];
+  /** Table→map bindings this table declares (mappings live in the TABLE's XML). */
+  mapMappings?: { map: string; fieldConnections: number }[];
 }
 
 export interface XppFieldInfo {

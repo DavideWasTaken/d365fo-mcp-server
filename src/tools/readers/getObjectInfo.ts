@@ -166,7 +166,7 @@ function applyCompactTranslation(objectType: string, options: Record<string, any
  * is the tool this option delegates to, and the two disagreeing is what made a
  * table's `validateWrite` unreadable through the folded call.
  */
-const METHOD_OWNER_TYPES = new Set(['class', 'table', 'view', 'data-entity']);
+const METHOD_OWNER_TYPES = new Set(['class', 'table', 'view', 'data-entity', 'map']);
 
 /**
  * The get_object_info `objectType` that reads an index row of this type, or null

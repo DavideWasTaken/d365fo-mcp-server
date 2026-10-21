@@ -229,6 +229,9 @@ export class XppMetadataParser {
         indexes: this.parseIndexes(axTable.Indexes?.AxTableIndex),
         relations: this.parseRelations(axTable.Relations?.AxTableRelation),
         methods: this.parseMethods(axTable.SourceCode?.Methods?.Method, tableName),
+        // Table→map bindings live in the TABLE's <Mappings>, not in the map's
+        // XML — see parseMapFile for the map side of the same relationship.
+        mapMappings: this.parseTableMapMappings(axTable.Mappings),
       };
 
       return { success: true, data: tableInfo };
@@ -378,6 +381,23 @@ export class XppMetadataParser {
     const lower = vis.toLowerCase();
     if (lower === 'private' || lower === 'protected' || lower === 'internal') return lower;
     return 'public';
+  }
+
+  /**
+   * Parses the table's <Mappings> element: zero or more <AxTableMapping>
+   * blocks, each binding this table to a map (MappingTable) through field
+   * connections. D365FO stores the mapping on the TABLE side; a map's own XML
+   * has no <Mappings> element at all.
+   */
+  private parseTableMapMappings(mappingsData: any): { map: string; fieldConnections: number }[] {
+    if (!mappingsData) return [];
+    const raw = mappingsData.AxTableMapping;
+    const arr = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    return arr.map((m: any) => {
+      const rawConn = m.Connections?.AxTableMappingConnection;
+      const connArr = Array.isArray(rawConn) ? rawConn : rawConn ? [rawConn] : [];
+      return { map: m.MappingTable || '', fieldConnections: connArr.length };
+    }).filter((m: { map: string }) => m.map);
   }
 
   /**
@@ -1106,7 +1126,9 @@ export class XppMetadataParser {
     name: string;
     extends?: string;
     sourcePath: string;
-    methods: string[];
+    declaration: string;
+    fields: { name: string; type: string; edt?: string; enumType?: string }[];
+    methods: XppMethodInfo[];
     mappings: { table: string; fieldConnections: number }[];
   }>> {
     try {
@@ -1115,12 +1137,21 @@ export class XppMetadataParser {
       const root = parsed?.AxMap;
       if (!root) return { success: false, error: 'Not an AxMap file' };
 
-      const decl: string = root.SourceCode?.Declaration || '';
+      const decl: string = this.cdataText(root.SourceCode?.Declaration) || root.SourceCode?.Declaration || '';
       const extendsMatch = decl.match(/\bextends\s+(\w+)/i);
 
-      const rawMethods = root.SourceCode?.Methods?.Method;
-      const methodArr = Array.isArray(rawMethods) ? rawMethods : rawMethods ? [rawMethods] : [];
-      const methods: string[] = methodArr.map((m: any) => m.Name || '').filter(Boolean);
+      const parsedMethods = this.parseMethods(root.SourceCode?.Methods?.Method, root.Name || 'Map');
+
+      const rawFields = root.Fields?.AxMapBaseField;
+      const fieldArr = Array.isArray(rawFields) ? rawFields : rawFields ? [rawFields] : [];
+      const fields = fieldArr.map((f: any) => ({
+        name: f.Name || '',
+        // i:type is an XML attribute; the parser runs with mergeAttrs:true, so
+        // it lands on the node itself (not under $). Flavour: AxMapFieldString etc.
+        type: (f['i:type'] || '').replace(/^AxMapField/, '') || 'Unknown',
+        edt: f.ExtendedDataType || undefined,
+        enumType: f.EnumType || undefined,
+      })).filter((f: { name: string }) => f.name);
 
       const rawMappings = root.Mappings?.AxTableMapping;
       const mapArr = Array.isArray(rawMappings) ? rawMappings : rawMappings ? [rawMappings] : [];
@@ -1132,7 +1163,15 @@ export class XppMetadataParser {
 
       return {
         success: true,
-        data: { name: root.Name || '', extends: extendsMatch?.[1], sourcePath: filePath, methods, mappings },
+        data: {
+          name: root.Name || '',
+          extends: extendsMatch?.[1],
+          sourcePath: filePath,
+          declaration: decl,
+          fields,
+          methods: parsedMethods,
+          mappings,
+        },
       };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
