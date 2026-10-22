@@ -29,6 +29,13 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Fixed
+- **`run_systest_class` could not find, or ran a stale, `SysTestConsole`** (#1143).
+  Current platforms ship the runner as `Bin\SysTestConsole.17.0.exe`; the tool looked
+  only for `SysTestConsole.exe`, so on an install without it no test could run, and on
+  an upgraded box that still has one it ran that leftover — on a 7.0.7858 VM it was
+  7.0.7452 from December 2024, beside a 17.0 build matching xppc. The highest versioned
+  `SysTestConsole.<version>.exe` now wins, the plain name is the fallback, and the
+  login and binding-redirect diagnoses read and name the `.config` of the binary that ran.
 - **`bpCheck` and `dbSync` were lost when a build was collected by a later call.**
   A build that outlives its wait window (`wait: false`, or past `waitTimeoutMs`) is
   collected by another call, usually with the model name alone, and that call's

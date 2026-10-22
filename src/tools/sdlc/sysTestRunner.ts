@@ -65,10 +65,12 @@ function describeSetting(key: string, value: string | undefined): string {
 export async function compareSysTestDataAccess(
   packagesRoot: string,
   webConfigPath = path.join(packagesRoot, '..', 'WebRoot', 'web.config'),
+  /** The .config of the binary that ran: a versioned SysTestConsole has its own. */
+  runnerConfigPath = path.join(packagesRoot, 'Bin', 'SysTestConsole.exe.config'),
 ): Promise<DataAccessDrift[] | undefined> {
   try {
     const [runnerXml, aosXml] = await Promise.all([
-      fs.readFile(path.join(packagesRoot, 'Bin', 'SysTestConsole.exe.config'), 'utf-8'),
+      fs.readFile(runnerConfigPath, 'utf-8'),
       fs.readFile(webConfigPath, 'utf-8'),
     ]);
 
@@ -84,6 +86,46 @@ export async function compareSysTestDataAccess(
   } catch {
     return undefined;
   }
+}
+
+/** `SysTestConsole.exe`, or a versioned `SysTestConsole.17.0.exe`; group 1 is the version. */
+const SYSTEST_CONSOLE_RE = /^SysTestConsole((?:\.\d+)+)?\.exe$/i;
+
+/**
+ * The SysTestConsole binary in `binDir`, or null when there is none.
+ *
+ * Current platforms ship it named after the test platform it targets — `SysTestConsole.17.0.exe`
+ * (#1143) — and an upgraded box keeps the plain `SysTestConsole.exe` of the platform it started on.
+ * Seen on a 7.0.7858 dev VM: `SysTestConsole.17.0.exe` at 7.0.7858.111, the same build as xppc.exe,
+ * beside a `SysTestConsole.exe` at 7.0.7452.66 left from December 2024. So the highest versioned
+ * name wins, compared as numbers, and the plain name is the fallback for installs that have only it.
+ */
+export async function findSysTestConsole(binDir: string): Promise<string | null> {
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(binDir);
+  } catch { /* unreadable: only the plain name can still be probed */ }
+  const versioned = names
+    .map(name => ({ name, version: SYSTEST_CONSOLE_RE.exec(name)?.[1] }))
+    .filter((c): c is { name: string; version: string } => !!c.version)
+    .map(c => ({ name: c.name, parts: c.version.slice(1).split('.').map(Number) }))
+    .sort((a, b) => compareVersionParts(b.parts, a.parts));
+  if (versioned.length > 0) return path.join(binDir, versioned[0].name);
+  const plain = path.join(binDir, 'SysTestConsole.exe');
+  try {
+    await fs.access(plain);
+    return plain;
+  } catch {
+    return null;
+  }
+}
+
+function compareVersionParts(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
 }
 
 // This handler has no schema of its own — it is reached through a unified
@@ -155,6 +197,8 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
   // runner's own .config out of this directory, and a diagnosis that cannot
   // find the file falls back to generic advice rather than guessing.
   let packagesRoot = '';
+  // Named after the binary that ran, so a versioned SysTestConsole points at its own .config.
+  let runnerConfigName = 'SysTestConsole.exe.config';
   try {
     const configManager = getConfigManager();
     await configManager.ensureLoaded();
@@ -174,20 +218,20 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
     // SysTestConsole.exe is the binary D365FO ships for running SysTest classes from the CLI
     // (`/test:<class> /xml:<file>`). xppbp.exe is the BP checker and cannot run tests.
     // SysTestRunner.exe is a legacy/forward-compat fallback, not observed on real installs.
-    const sysTestConsolePath = path.join(packagesRoot, 'Bin', 'SysTestConsole.exe');
+    const sysTestConsolePath = await findSysTestConsole(path.join(packagesRoot, 'Bin'));
     const sysTestRunnerPath = path.join(packagesRoot, 'Bin', 'SysTestRunner.exe');
 
     let runnerPath: string;
-    try {
-      await fs.access(sysTestConsolePath);
+    if (sysTestConsolePath) {
       runnerPath = sysTestConsolePath;
-    } catch {
+      runnerConfigName = `${path.basename(sysTestConsolePath)}.config`;
+    } else {
       try {
         await fs.access(sysTestRunnerPath);
         runnerPath = sysTestRunnerPath;
       } catch {
         return {
-          content: [{ type: 'text', text: `❌ Neither SysTestConsole.exe nor SysTestRunner.exe found in:\n${path.join(packagesRoot, 'Bin')}\n\nMake sure PackagesLocalDirectory is correctly configured.` }],
+          content: [{ type: 'text', text: `❌ Neither SysTestConsole.exe nor SysTestRunner.exe found in:\n${path.join(packagesRoot, 'Bin')}\n\nNo versioned SysTestConsole.<version>.exe (e.g. SysTestConsole.17.0.exe) either. Make sure PackagesLocalDirectory is correctly configured.` }],
           isError: true
         };
       }
@@ -319,7 +363,7 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
       const missingFile = /cannot find the file specified|FileNotFoundException/i.test(output);
       if (versionMismatch || missingFile) {
         const diagnosis = versionMismatch
-          ? `PackagesLocalDirectory\\Bin\\SysTestConsole.exe.config redirects ${assembly} to ${wanted}, ` +
+          ? `PackagesLocalDirectory\\Bin\\${runnerConfigName} redirects ${assembly} to ${wanted}, ` +
             'while the DLL shipped next to it is a different version. Read the version actually ' +
             'present and point the redirect at it:\n' +
             `  [Reflection.AssemblyName]::GetAssemblyName("<PackagesLocalDirectory>\\Bin\\${assembly}.dll").Version\n` +
@@ -358,18 +402,20 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
     // password for weeks when nothing had rotated. So compare them and say which.
     const sqlLogin = /Login failed for user '([^']+)'/i.exec(output);
     if (sqlLogin) {
-      const drift = packagesRoot ? await compareSysTestDataAccess(packagesRoot) : undefined;
+      const drift = packagesRoot
+        ? await compareSysTestDataAccess(packagesRoot, undefined, path.join(packagesRoot, 'Bin', runnerConfigName))
+        : undefined;
       const diagnosis = drift?.length
         ? 'The runner\'s own configuration does not match this machine\'s AOS. ' +
-          `\`Bin\\SysTestConsole.exe.config\` disagrees with \`WebRoot\\web.config\` on ` +
+          `\`Bin\\${runnerConfigName}\` disagrees with \`WebRoot\\web.config\` on ` +
           `${drift.length} of the four DataAccess settings:\n\n` +
           drift.map(d => `  • \`${d.key}\` — runner: ${d.runner}, AOS: ${d.aos}`).join('\n') +
           '\n\nThat is a template that was never filled in for this install, not a credential that ' +
-          'stopped working. Copy the four values from web.config into SysTestConsole.exe.config ' +
+          `stopped working. Copy the four values from web.config into ${runnerConfigName} ` +
           '(keep a backup beside it). It touches the PLATFORM install, so make it deliberately — ' +
           'and note that the password there is an encrypted blob: copy it verbatim, do not retype it.'
         : 'SysTestConsole opens the AOS connection itself, using its own configuration in ' +
-          '`Bin\\SysTestConsole.exe.config`. Compare its DataAccess.Database / SqlUser / SqlPwd / ' +
+          `\`Bin\\${runnerConfigName}\`. Compare its DataAccess.Database / SqlUser / SqlPwd / ` +
           'DbServer against `WebRoot\\web.config`: the shipped template ships a placeholder password ' +
           'and its own guesses for the rest, and a mismatch there reads exactly like a rotated ' +
           'credential. If they already agree, the login itself is the problem — check that SQL Server ' +
