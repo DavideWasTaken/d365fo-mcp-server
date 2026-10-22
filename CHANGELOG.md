@@ -36,6 +36,7 @@ those are called out explicitly below.
   7.0.7452 from December 2024, beside a 17.0 build matching xppc. The highest versioned
   `SysTestConsole.<version>.exe` now wins, the plain name is the fallback, and the
   login and binding-redirect diagnoses read and name the `.config` of the binary that ran.
+  The debugger-prompt and per-method notes name that binary too.
 - **`bpCheck` and `dbSync` were lost when a build was collected by a later call.**
   A build that outlives its wait window (`wait: false`, or past `waitTimeoutMs`) is
   collected by another call, usually with the model name alone, and that call's

@@ -197,8 +197,9 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
   // runner's own .config out of this directory, and a diagnosis that cannot
   // find the file falls back to generic advice rather than guessing.
   let packagesRoot = '';
-  // Named after the binary that ran, so a versioned SysTestConsole points at its own .config.
-  let runnerConfigName = 'SysTestConsole.exe.config';
+  // The binary that ran, so messages and the .config a diagnosis reads name a
+  // versioned SysTestConsole rather than the plain one.
+  let runnerName = 'SysTestConsole.exe';
   try {
     const configManager = getConfigManager();
     await configManager.ensureLoaded();
@@ -224,7 +225,7 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
     let runnerPath: string;
     if (sysTestConsolePath) {
       runnerPath = sysTestConsolePath;
-      runnerConfigName = `${path.basename(sysTestConsolePath)}.config`;
+      runnerName = path.basename(sysTestConsolePath);
     } else {
       try {
         await fs.access(sysTestRunnerPath);
@@ -309,7 +310,7 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
 
     const status = hasFailed ? '❌ Tests FAILED' : passed ? '✅ Tests passed' : '⚠️ Tests completed (check output)';
     const methodNote = testMethod && runnerPath === sysTestConsolePath
-      ? `\n⚠️ testMethod="${testMethod}" was requested but SysTestConsole.exe has no per-method filter — the whole class ran.`
+      ? `\n⚠️ testMethod="${testMethod}" was requested but ${runnerName} has no per-method filter — the whole class ran.`
       : '';
 
     // Per-method lines first: which test failed and why is the answer being asked
@@ -346,6 +347,7 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
   } catch (error: any) {
     console.error('Error running test:', error);
     const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n');
+    const runnerConfigName = `${runnerName}.config`;
 
     // A binding redirect that names a version the install does not have. Seen on
     // 10.0.4x: SysTestConsole.exe.config redirects Microsoft.ApplicationInsights
@@ -439,7 +441,7 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
       return {
         content: [{
           type: 'text',
-          text: '❌ SysTestConsole.exe stopped at its debugger-attach prompt (Console.ReadKey).\n\n' +
+          text: `❌ ${runnerName} stopped at its debugger-attach prompt (Console.ReadKey).\n\n` +
             'This tool already passes /unattended, which is what normally skips that prompt. If it ' +
             'still appears, run the test from an interactive RDP/console session on the dev VM, or ' +
             'from Visual Studio Test Explorer.\n\n' + output,

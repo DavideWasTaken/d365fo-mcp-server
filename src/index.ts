@@ -969,7 +969,7 @@ async function main() {
           { name: 'run_bp_check',                 desc: 'Run Microsoft Best Practices (xppbp.exe) analysis' },
           { name: 'axdb_sql',                     desc: 'Optional: query AxDB on the dev VM (shown only when SQL is configured)' },
           { name: 'trace_d365fo',                 desc: 'Optional: ETW trace of X++/SQL time on the dev VM (shown only when tracing is enabled)' },
-          { name: 'run_systest_class',            desc: 'Execute unit tests using SysTestConsole.exe' },
+          { name: 'run_systest_class',            desc: 'Execute unit tests using SysTestConsole' },
         ]},
         { icon: '🧪', category: 'Code Quality & Grounding', tools: [
           { name: 'validate_code',                     desc: 'mode=syntax (offline BP validator, SEL/COC/BP/TTS/XML) | references (semantic symbol resolver vs index)' },

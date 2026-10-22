@@ -149,6 +149,15 @@ describe('run_systest_class — binary resolution', () => {
 
     expect(result.content[0].text).toContain('no per-method filter');
   });
+
+  it('names the versioned SysTestConsole in that note', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.17.0.exe']);
+    allowPaths([SYSTEST_CONSOLE_17]);
+
+    const result = await sysTestRunnerTool({ className: 'ContosoMyTest', testMethod: 'testFoo' }, {});
+
+    expect(result.content[0].text).toContain('but SysTestConsole.17.0.exe has no per-method filter');
+  });
 });
 
 describe('run_systest_class — interactive console blocker', () => {
@@ -181,6 +190,22 @@ describe('run_systest_class — interactive console blocker', () => {
     // prompt appears anyway.
     expect(result.content[0].text).toContain('debugger-attach prompt');
     expect(result.content[0].text).toContain('/unattended');
+  });
+
+  it('names the versioned SysTestConsole that stopped at the prompt', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.17.0.exe']);
+    allowPaths([SYSTEST_CONSOLE_17]);
+    execFileMock.mockImplementation((_f: string, _a: string[], _o: any, cb: Function) => {
+      cb(Object.assign(new Error('Command failed'), {
+        stdout: '',
+        stderr: 'Unhandled Exception: System.InvalidOperationException: Cannot read keys when either ' +
+          'application does not have a console or when console input has been redirected from a file.',
+      }));
+    });
+
+    const text = (await sysTestRunnerTool({ className: 'ContosoMyTest' }, {})).content[0].text;
+
+    expect(text).toContain('SysTestConsole.17.0.exe stopped at its debugger-attach prompt');
   });
 
   it('a plain test failure is NOT misclassified as the interactive-console blocker', async () => {
@@ -231,6 +256,22 @@ describe('run_systest_class — the platform binding mismatch that stops a run',
     expect(text).toMatch(/No test ran/i);
     // It must not read as a test failure — nothing was executed.
     expect(text).not.toContain('Tests FAILED');
+  });
+
+  it('names the .config of the versioned SysTestConsole that ran', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.exe', 'SysTestConsole.17.0.exe']);
+    allowPaths([SYSTEST_CONSOLE, SYSTEST_CONSOLE_17]);
+    execFileMock.mockImplementation((_f: string, _a: string[], _o: any, cb: Function) => {
+      cb(Object.assign(new Error('Command failed'), {
+        stdout: "Could not load file or assembly 'Microsoft.ApplicationInsights, Version=2.22.0.997, " +
+          "Culture=neutral, PublicKeyToken=31bf3856ad364e35'. (Exception from HRESULT: 0x80131040)",
+        stderr: '',
+      }));
+    });
+
+    const text = (await sysTestRunnerTool({ className: 'ContosoMyTest' }, {})).content[0].text;
+
+    expect(text).toContain('Bin\\SysTestConsole.17.0.exe.config redirects Microsoft.ApplicationInsights');
   });
 
   it('passes /unattended so the runner does not stop at the debugger prompt', async () => {
