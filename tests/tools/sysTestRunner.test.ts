@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // --- hoisted mocks -----------------------------------------------------------
-const { accessMock, execFileMock, readFileMock, cfgEnsureLoaded, cfgGetModelName, cfgGetPackagePath } = vi.hoisted(() => {
+const { accessMock, readdirMock, execFileMock, readFileMock, cfgEnsureLoaded, cfgGetModelName, cfgGetPackagePath } = vi.hoisted(() => {
   const accessMock = vi.fn();
+  // Bin listing for the versioned SysTestConsole lookup; empty unless a test lists files.
+  const readdirMock = vi.fn().mockResolvedValue([]);
   const readFileMock = vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
   // execFile needs a callback-style API for util.promisify
   const execFileMock: any = vi.fn((_file: string, _args: string[], _opts: any, cb: Function) => {
@@ -11,12 +13,12 @@ const { accessMock, execFileMock, readFileMock, cfgEnsureLoaded, cfgGetModelName
   const cfgEnsureLoaded = vi.fn();
   const cfgGetModelName = vi.fn().mockReturnValue('Contoso');
   const cfgGetPackagePath = vi.fn().mockReturnValue('K:\\AOSService\\PackagesLocalDirectory');
-  return { accessMock, execFileMock, readFileMock, cfgEnsureLoaded, cfgGetModelName, cfgGetPackagePath };
+  return { accessMock, readdirMock, execFileMock, readFileMock, cfgEnsureLoaded, cfgGetModelName, cfgGetPackagePath };
 });
 
 vi.mock('child_process', () => ({ execFile: execFileMock }));
 vi.mock('fs/promises', () => {
-  const m = { access: accessMock, readFile: readFileMock };
+  const m = { access: accessMock, readFile: readFileMock, readdir: readdirMock };
   return { ...m, default: m };
 });
 vi.mock('../../src/utils/configManager.js', () => ({
@@ -31,11 +33,12 @@ vi.mock('../../src/utils/operationLocks.js', () => ({
 }));
 
 import path from 'path';
-import { sysTestRunnerTool, compareSysTestDataAccess } from '../../src/tools/sdlc/sysTestRunner';
+import { sysTestRunnerTool, compareSysTestDataAccess, findSysTestConsole, findSysTestConsoles } from '../../src/tools/sdlc/sysTestRunner';
 
 const PKG = 'K:\\AOSService\\PackagesLocalDirectory';
 const SYSTEST_CONSOLE = path.join(PKG, 'Bin', 'SysTestConsole.exe');
 const SYSTEST_RUNNER = path.join(PKG, 'Bin', 'SysTestRunner.exe');
+const SYSTEST_CONSOLE_17 = path.join(PKG, 'Bin', 'SysTestConsole.17.0.exe');
 
 function allowPaths(paths: string[]) {
   accessMock.mockImplementation(async (p: string) => {
@@ -52,6 +55,7 @@ function capturedArgs(callIndex = 0): string[] {
 describe('run_systest_class — binary resolution', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    readdirMock.mockResolvedValue([]);
     cfgEnsureLoaded.mockResolvedValue(undefined);
     cfgGetModelName.mockReturnValue('Contoso');
     cfgGetPackagePath.mockReturnValue(PKG);
@@ -96,6 +100,28 @@ describe('run_systest_class — binary resolution', () => {
     expect(args).toContain('-model:Contoso');
   });
 
+  it('runs SysTestConsole.17.0.exe when that is the only SysTestConsole in Bin (#1143)', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.17.0.exe', 'SysTestConsole.17.0.exe.config', 'xppc.exe']);
+    allowPaths([SYSTEST_CONSOLE_17]);
+
+    const result = await sysTestRunnerTool({ className: 'ContosoMyTest' }, {});
+
+    expect(result.isError).toBeFalsy();
+    expect(execFileMock.mock.calls[0][0]).toBe(SYSTEST_CONSOLE_17);
+    expect(capturedArgs(0)).toEqual(expect.arrayContaining(['/test:ContosoMyTest', '/unattended']));
+  });
+
+  it('prefers the versioned SysTestConsole over a plain one left by an older platform', async () => {
+    // A 7.0.7858 dev VM: SysTestConsole.17.0.exe is 7.0.7858.111, like xppc.exe;
+    // SysTestConsole.exe is 7.0.7452.66, from December 2024.
+    readdirMock.mockResolvedValue(['SysTestConsole.exe', 'SysTestConsole.exe.config', 'SysTestConsole.17.0.exe', 'SysTestConsole.17.0.exe.config']);
+    allowPaths([SYSTEST_CONSOLE, SYSTEST_CONSOLE_17]);
+
+    await sysTestRunnerTool({ className: 'ContosoMyTest' }, {});
+
+    expect(execFileMock.mock.calls[0][0]).toBe(SYSTEST_CONSOLE_17);
+  });
+
   it('errors when neither binary is found', async () => {
     allowPaths([]);
 
@@ -123,11 +149,21 @@ describe('run_systest_class — binary resolution', () => {
 
     expect(result.content[0].text).toContain('no per-method filter');
   });
+
+  it('names the versioned SysTestConsole in that note', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.17.0.exe']);
+    allowPaths([SYSTEST_CONSOLE_17]);
+
+    const result = await sysTestRunnerTool({ className: 'ContosoMyTest', testMethod: 'testFoo' }, {});
+
+    expect(result.content[0].text).toContain('but SysTestConsole.17.0.exe has no per-method filter');
+  });
 });
 
 describe('run_systest_class — interactive console blocker', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    readdirMock.mockResolvedValue([]);
     cfgEnsureLoaded.mockResolvedValue(undefined);
     cfgGetModelName.mockReturnValue('Contoso');
     cfgGetPackagePath.mockReturnValue(PKG);
@@ -156,6 +192,22 @@ describe('run_systest_class — interactive console blocker', () => {
     expect(result.content[0].text).toContain('/unattended');
   });
 
+  it('names the versioned SysTestConsole that stopped at the prompt', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.17.0.exe']);
+    allowPaths([SYSTEST_CONSOLE_17]);
+    execFileMock.mockImplementation((_f: string, _a: string[], _o: any, cb: Function) => {
+      cb(Object.assign(new Error('Command failed'), {
+        stdout: '',
+        stderr: 'Unhandled Exception: System.InvalidOperationException: Cannot read keys when either ' +
+          'application does not have a console or when console input has been redirected from a file.',
+      }));
+    });
+
+    const text = (await sysTestRunnerTool({ className: 'ContosoMyTest' }, {})).content[0].text;
+
+    expect(text).toContain('SysTestConsole.17.0.exe stopped at its debugger-attach prompt');
+  });
+
   it('a plain test failure is NOT misclassified as the interactive-console blocker', async () => {
     execFileMock.mockImplementation((_f: string, _a: string[], _o: any, cb: Function) => {
       cb(null, { stdout: '❌ Tests FAILED\n\nContosoMyTest::testFoo failed: assertion error', stderr: '' });
@@ -172,6 +224,7 @@ describe('run_systest_class — interactive console blocker', () => {
 describe('run_systest_class — the platform binding mismatch that stops a run', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    readdirMock.mockResolvedValue([]);
     cfgEnsureLoaded.mockResolvedValue(undefined);
     cfgGetModelName.mockReturnValue('Contoso');
     cfgGetPackagePath.mockReturnValue(PKG);
@@ -205,6 +258,23 @@ describe('run_systest_class — the platform binding mismatch that stops a run',
     expect(text).not.toContain('Tests FAILED');
   });
 
+  it('names the .config of the versioned SysTestConsole that ran', async () => {
+    // Only the versioned one: with the plain one beside it, a run that cannot start falls back to it.
+    readdirMock.mockResolvedValue(['SysTestConsole.17.0.exe']);
+    allowPaths([SYSTEST_CONSOLE_17]);
+    execFileMock.mockImplementation((_f: string, _a: string[], _o: any, cb: Function) => {
+      cb(Object.assign(new Error('Command failed'), {
+        stdout: "Could not load file or assembly 'Microsoft.ApplicationInsights, Version=2.22.0.997, " +
+          "Culture=neutral, PublicKeyToken=31bf3856ad364e35'. (Exception from HRESULT: 0x80131040)",
+        stderr: '',
+      }));
+    });
+
+    const text = (await sysTestRunnerTool({ className: 'ContosoMyTest' }, {})).content[0].text;
+
+    expect(text).toContain('Bin\\SysTestConsole.17.0.exe.config redirects Microsoft.ApplicationInsights');
+  });
+
   it('passes /unattended so the runner does not stop at the debugger prompt', async () => {
     let capturedArgs: string[] = [];
     execFileMock.mockImplementation((_f: string, a: string[], _o: any, cb: Function) => {
@@ -221,6 +291,7 @@ describe('run_systest_class — the platform binding mismatch that stops a run',
 describe('run_systest_class — a MISSING assembly is not the same fault as a wrong version', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    readdirMock.mockResolvedValue([]);
     cfgEnsureLoaded.mockResolvedValue(undefined);
     cfgGetModelName.mockReturnValue('Contoso');
     cfgGetPackagePath.mockReturnValue(PKG);
@@ -253,9 +324,137 @@ describe('run_systest_class — a MISSING assembly is not the same fault as a wr
   });
 });
 
+describe('findSysTestConsole', () => {
+  const BIN = path.join(PKG, 'Bin');
+  beforeEach(() => {
+    vi.resetAllMocks();
+    readdirMock.mockResolvedValue([]);
+    allowPaths([]);
+  });
+
+  it('takes the highest version, compared as numbers', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.9.0.exe', 'SysTestConsole.17.10.exe', 'SysTestConsole.17.2.exe']);
+    expect(await findSysTestConsole(BIN)).toBe(path.join(BIN, 'SysTestConsole.17.10.exe'));
+  });
+
+  it('ignores configs and look-alike names, case aside', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.17.0.exe.config', 'SysTestConsoleX.exe', 'SysTestConsole..exe', 'systestconsole.17.0.EXE']);
+    expect(await findSysTestConsole(BIN)).toBe(path.join(BIN, 'systestconsole.17.0.EXE'));
+  });
+
+  it('falls back to SysTestConsole.exe, and to null, when no versioned one exists', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.exe']);
+    allowPaths([path.join(BIN, 'SysTestConsole.exe')]);
+    expect(await findSysTestConsole(BIN)).toBe(path.join(BIN, 'SysTestConsole.exe'));
+
+    allowPaths([]);
+    readdirMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    expect(await findSysTestConsole(BIN)).toBeNull();
+  });
+
+  it('lists every SysTestConsole, versioned first and the plain one last', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.exe', 'SysTestConsole.17.0.exe']);
+    allowPaths([path.join(BIN, 'SysTestConsole.exe')]);
+    expect(await findSysTestConsoles(BIN)).toEqual([
+      path.join(BIN, 'SysTestConsole.17.0.exe'),
+      path.join(BIN, 'SysTestConsole.exe'),
+    ]);
+  });
+});
+
+/**
+ * A 7.0.7858 VM where SysTestConsole.17.0.exe cannot start: System.ValueTuple 4.0.3.0 is not in Bin
+ * (exit -1, no test run) and its .config is the unconfigured template, while the plain
+ * SysTestConsole.exe beside it was configured and runs green. Preferring the versioned binary must
+ * not take a working runner away.
+ */
+describe('run_systest_class — a SysTestConsole that cannot start hands over to the next', () => {
+  const VALUE_TUPLE_MISSING = "System.IO.FileNotFoundException: Could not load file or assembly 'System.ValueTuple, " +
+    "Version=4.0.3.0, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51' or one of its dependencies. The system cannot find the file specified.";
+
+  /** Per binary: an error to fail with, or undefined to pass. */
+  function runners(failures: Record<string, { stdout?: string; stderr?: string } | undefined>) {
+    execFileMock.mockImplementation((file: string, _a: string[], _o: any, cb: Function) => {
+      const failure = failures[path.basename(file)];
+      if (failure) cb(Object.assign(new Error('Command failed'), { stdout: '', stderr: '', ...failure }));
+      else cb(null, { stdout: 'Rainier Test Suite : 1 Run, 0 Failed', stderr: '' });
+    });
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    cfgEnsureLoaded.mockResolvedValue(undefined);
+    cfgGetModelName.mockReturnValue('Contoso');
+    cfgGetPackagePath.mockReturnValue(PKG);
+    readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    readdirMock.mockResolvedValue(['SysTestConsole.exe', 'SysTestConsole.exe.config', 'SysTestConsole.17.0.exe', 'SysTestConsole.17.0.exe.config']);
+    allowPaths([SYSTEST_CONSOLE, SYSTEST_CONSOLE_17]);
+  });
+
+  it('runs the plain SysTestConsole when the versioned one is missing an assembly, and says so', async () => {
+    runners({ 'SysTestConsole.17.0.exe': { stdout: VALUE_TUPLE_MISSING } });
+
+    const result = await sysTestRunnerTool({ className: 'ContosoMyTest' }, {});
+    const text = result.content[0].text;
+
+    expect(result.isError).toBeFalsy();
+    expect(execFileMock.mock.calls.map(c => c[0])).toEqual([SYSTEST_CONSOLE_17, SYSTEST_CONSOLE]);
+    expect(text).toContain('SysTestConsole.17.0.exe could not start (System.ValueTuple 4.0.3.0 would not load), so SysTestConsole.exe ran instead.');
+    expect(text).not.toContain('could not start: System.ValueTuple');
+  });
+
+  it('runs the plain SysTestConsole when the versioned one cannot log in', async () => {
+    runners({ 'SysTestConsole.17.0.exe': { stdout: "Login failed for user 'AOSUser'." } });
+
+    const result = await sysTestRunnerTool({ className: 'ContosoMyTest' }, {});
+
+    expect(result.isError).toBeFalsy();
+    expect(execFileMock.mock.calls.map(c => c[0])).toEqual([SYSTEST_CONSOLE_17, SYSTEST_CONSOLE]);
+    expect(result.content[0].text).toContain("its .config could not log in as 'AOSUser'");
+  });
+
+  it('diagnoses the last runner when none can start, and still names the one before it', async () => {
+    runners({
+      'SysTestConsole.17.0.exe': { stdout: VALUE_TUPLE_MISSING },
+      'SysTestConsole.exe': { stdout: "Login failed for user 'AOSUser'." },
+    });
+
+    const result = await sysTestRunnerTool({ className: 'ContosoMyTest' }, {});
+    const text = result.content[0].text;
+
+    expect(result.isError).toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(text).toContain("could not log in as 'AOSUser'");
+    expect(text).toContain('Bin\\SysTestConsole.exe.config');
+    expect(text).toContain('SysTestConsole.17.0.exe could not start (System.ValueTuple 4.0.3.0 would not load)');
+  });
+
+  it('does not retry a failure that is not a startup fault', async () => {
+    runners({ 'SysTestConsole.17.0.exe': { stdout: 'ContosoMyTest::testFoo failed: assertion error' } });
+
+    const result = await sysTestRunnerTool({ className: 'ContosoMyTest' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(result.content[0].text).not.toContain('ran instead');
+  });
+
+  it('keeps the versioned diagnosis when it is the only SysTestConsole', async () => {
+    readdirMock.mockResolvedValue(['SysTestConsole.17.0.exe']);
+    allowPaths([SYSTEST_CONSOLE_17]);
+    runners({ 'SysTestConsole.17.0.exe': { stdout: VALUE_TUPLE_MISSING } });
+
+    const result = await sysTestRunnerTool({ className: 'ContosoMyTest' }, {});
+
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(result.content[0].text).toContain('❌ The test runner could not start: System.ValueTuple 4.0.3.0.');
+  });
+});
+
 describe('run_systest_class — reaching the database and failing to log in', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    readdirMock.mockResolvedValue([]);
     cfgEnsureLoaded.mockResolvedValue(undefined);
     cfgGetModelName.mockReturnValue('Contoso');
     cfgGetPackagePath.mockReturnValue(PKG);
@@ -285,6 +484,26 @@ describe('run_systest_class — reaching the database and failing to log in', ()
     expect(text).toContain('SysTestConsole.exe.config');
     expect(text).toContain('web.config');
     expect(text).not.toContain('Tests FAILED');
+  });
+
+  it('compares and names the .config of the versioned SysTestConsole that ran', async () => {
+    // Only the versioned one: with the plain one beside it, a run that cannot start falls back to it.
+    readdirMock.mockResolvedValue(['SysTestConsole.17.0.exe']);
+    allowPaths([SYSTEST_CONSOLE_17]);
+    readFileMock.mockImplementation(async (file: string) => {
+      const f = String(file).replace(/\\/g, '/').toLowerCase();
+      if (f.endsWith('/bin/systestconsole.17.0.exe.config')) return '<configuration><appSettings><add key="DataAccess.Database" value="AxDbRain" /></appSettings></configuration>';
+      if (f.endsWith('web.config')) return '<configuration><appSettings><add key="DataAccess.Database" value="AxDB" /></appSettings></configuration>';
+      throw Object.assign(new Error(`ENOENT: ${file}`), { code: 'ENOENT' });
+    });
+    execFileMock.mockImplementation((_f: string, _a: string[], _o: any, cb: Function) => {
+      cb(Object.assign(new Error('Command failed'), { stdout: "Login failed for user 'AOSUser'.", stderr: '' }));
+    });
+
+    const text = (await sysTestRunnerTool({ className: 'ContosoMyTest' }, {})).content[0].text;
+
+    expect(text).toContain('SysTestConsole.17.0.exe.config` disagrees');
+    expect(text).toContain('DataAccess.Database');
   });
 });
 
@@ -328,7 +547,10 @@ describe('compareSysTestDataAccess', () => {
     });
   };
 
-  beforeEach(() => { vi.resetAllMocks(); });
+  beforeEach(() => {
+    vi.resetAllMocks();
+    readdirMock.mockResolvedValue([]);
+  });
 
   it('reports every setting the runner disagrees with the AOS about', async () => {
     serve(RUNNER, AOS);

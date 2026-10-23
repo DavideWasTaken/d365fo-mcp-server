@@ -43,6 +43,18 @@ those are called out explicitly below.
 - **A write said an object outside every `.rnrproj` "will not compile".** xppc compiles
   the whole model folder, project or not; the message now says the object compiles but no
   project shows it in Visual Studio.
+- **`run_systest_class` could not find, or ran a stale, `SysTestConsole`** (#1143).
+  Current platforms ship the runner as `Bin\SysTestConsole.17.0.exe`; the tool looked
+  only for `SysTestConsole.exe`, so on an install without it no test could run, and on
+  an upgraded box that still has one it ran that leftover — on a 7.0.7858 VM it was
+  7.0.7452 from December 2024, beside a 17.0 build matching xppc. The highest versioned
+  `SysTestConsole.<version>.exe` now wins, the plain name is the fallback, and the
+  login and binding-redirect diagnoses read and name the `.config` of the binary that ran.
+  The debugger-prompt and per-method notes name that binary too. A versioned runner that
+  cannot start (an assembly missing from `Bin`, or a `.config` that cannot log in) hands
+  over to the plain one, and the reply says so: on another 7.0.7858 VM the 17.0 runner
+  lacks `System.ValueTuple 4.0.3.0` and has the unconfigured template, while the plain
+  one beside it runs green.
 - **`bpCheck` and `dbSync` were lost when a build was collected by a later call.**
   A build that outlives its wait window (`wait: false`, or past `waitTimeoutMs`) is
   collected by another call, usually with the model name alone, and that call's
