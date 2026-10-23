@@ -32,7 +32,7 @@ export const buildD365foProjectTool = {
         },
         fullBuild: {
           type: 'boolean',
-          description: 'Full recompile of the TARGET model only; deps are not built. Use when xppc reports stale symbol errors.',
+          description: 'Full recompile of TARGET model (not deps). Fixes stale symbols; auto when an entity with OData actions changes.',
         },
         bpCheck: {
           type: 'boolean',

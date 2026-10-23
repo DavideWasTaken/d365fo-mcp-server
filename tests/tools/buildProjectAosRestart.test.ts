@@ -5,7 +5,7 @@ import os from 'os';
 import { createHash } from 'crypto';
 const m = vi.hoisted(() => ({
   files: new Map<string, string>(), children: [] as any[],
-  spawn: vi.fn(), restart: vi.fn(), metadata: vi.fn(), sync: vi.fn(), bp: vi.fn(), lockTail: Promise.resolve(),
+  spawn: vi.fn(), restart: vi.fn(), metadata: vi.fn(), sync: vi.fn(), bp: vi.fn(), scan: vi.fn(), lockTail: Promise.resolve(),
 }));
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async (p: string) => { if (m.files.has(p)) return m.files.get(p); throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }),
@@ -35,6 +35,11 @@ vi.mock('../../src/tools/xml/generateMetadata.js', () => ({ generateRuntimeMetad
 vi.mock('../../src/tools/sdlc/aosRuntime.js', () => ({ restartAosRuntime: m.restart }));
 vi.mock('../../src/tools/sdlc/dbSync.js', () => ({ dbSyncTool: m.sync }));
 vi.mock('../../src/tools/sdlc/runBpCheck.js', () => ({ runBpCheckTool: m.bp }));
+vi.mock('../../src/tools/sdlc/odataActionGuard.js', async () => ({
+  ...(await vi.importActual<any>('../../src/tools/sdlc/odataActionGuard.js')), scanODataActions: m.scan,
+}));
+const noOdataFindings = { recompiled: [], missing: [], runtimeFile: null, errors: [] };
+const lostExistingAction = { ...noOdataFindings, missing: [{ entity: 'ProbeEntity', actions: ['ExistingAction'] }] };
 import { buildProjectTool } from '../../src/tools/sdlc/buildProject.js';
 const opts = { modelName: 'MyModel', restartAos: true, aosUrl: 'https://dev.example.test/', wait: false };
 const webConfig = path.join('C:\\Packages', '..', 'WebRoot', 'web.config');
@@ -56,6 +61,22 @@ describe('optional AOS restart build workflow', () => {
     m.sync.mockResolvedValue({ content: [{ type: 'text', text: 'Sync succeeded' }] });
     m.bp.mockResolvedValue({ content: [{ type: 'text', text: 'BP checked' }] });
     m.restart.mockResolvedValue({ status: 'ready', message: 'AOS ready' });
+    m.scan.mockResolvedValue(noOdataFindings);
+  });
+  it('blocks the restart that would take OData actions out of an incremental build', async () => {
+    // Nothing flagged before xppc, actions missing after it: the restart is what loses them.
+    m.scan.mockResolvedValueOnce(noOdataFindings).mockResolvedValueOnce(lostExistingAction);
+    await buildProjectTool(opts, {}); await finish();
+    expect(m.restart).not.toHaveBeenCalled();
+    const text = (await buildProjectTool({ modelName: 'MyModel', wait: false }, {})).content[0].text;
+    expect(text).toContain('AOS restart blocked: OData actions are missing from ODataExtends.runtime (ProbeEntity (ExistingAction))');
+    expect(text).toContain('fullBuild: true, restartAos: true');
+  });
+  it('still restarts after a full build that lacks actions — a restart cannot lose them then', async () => {
+    m.scan.mockResolvedValue(lostExistingAction);
+    await buildProjectTool({ ...opts, fullBuild: true }, {}); await finish();
+    expect(m.restart).toHaveBeenCalledTimes(1);
+    expect((await buildProjectTool({ modelName: 'MyModel', wait: false }, {})).content[0].text).toContain('A full build did not write them either');
   });
   it('executes original sync/BP and restart before completion with wait:false; collection never replays', async () => {
     await buildProjectTool({ ...opts, dbSync: ['MyTable'], bpCheck: true, projectPath: 'C:\\Proj.rnrproj' }, {});

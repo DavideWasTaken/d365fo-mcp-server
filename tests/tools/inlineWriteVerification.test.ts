@@ -153,7 +153,10 @@ describe('renderWriteVerification', () => {
       onDisk: true, bytes: 120, membership: m('missing'), axFolder: 'AxTable', objectName: 'T',
     });
     expect(text).toMatch(/no \.rnrproj of this model/i);
-    expect(text).toMatch(/will not compile/i);
+    // xppc compiles the whole model folder: membership is about Visual Studio, not the build.
+    expect(text).toMatch(/still compiles/i);
+    expect(text).not.toMatch(/will not compile/i);
+    expect(text).toMatch(/addToProject=true/);
   });
 
   // 'other' is neither a pass nor a build failure. The element compiles — a

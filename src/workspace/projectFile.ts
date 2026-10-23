@@ -99,11 +99,13 @@ export async function registerFileInActiveProject(
     : '';
 
   if (!projectPath) {
-    // Nothing to add it TO. Only worth saying when no project has it at all;
-    // a sibling already references it, so the element does compile.
+    // Nothing to add it TO. Only worth saying when no project has it at all:
+    // it compiles either way (xppc builds the whole model folder), but a
+    // sibling project already shows it in Visual Studio.
     if (alsoIn) return '';
     return `\n\n⚠️ No project of model "${modelName ?? '(unknown)'}" references \`${axFolder}\\${objectName}\`, ` +
-      `and no active projectPath is configured to add it to. It will not compile until some project does.`;
+      `and no active projectPath is configured to add it to. It still compiles (xppc builds the whole model folder), ` +
+      `but no project shows it in Visual Studio.`;
   }
   try {
     const added = await new ProjectFileManager({ withinSolutionRoots: true }).addToProject(projectPath, objectType, objectName, '');
