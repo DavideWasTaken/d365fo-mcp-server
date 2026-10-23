@@ -960,6 +960,17 @@ export class XppSymbolIndex {
       CREATE INDEX IF NOT EXISTS idx_mm_table ON map_mappings(mapping_table);
       CREATE INDEX IF NOT EXISTS idx_mm_model ON map_mappings(model);
     `);
+    // Migrate old indexes once: retain the latest duplicate binding.
+    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_mm_binding'").get()) {
+      this.db.transaction(() => {
+        this.db.exec(`
+          DELETE FROM map_mappings WHERE id NOT IN (
+            SELECT MAX(id) FROM map_mappings GROUP BY map_name, mapping_table, model
+          );
+          CREATE UNIQUE INDEX idx_mm_binding ON map_mappings(map_name, mapping_table, model);
+        `);
+      })();
+    }
 
     // Security policies (row-level / OLS)
     // Indexed by primary table so get_security_coverage_for_object can report
@@ -2747,6 +2758,20 @@ export class XppSymbolIndex {
             }
           }
         }
+        // Index table→map bindings into map_mappings. Most bindings are declared
+        // on the table's side (1,913 shipped, against 147 in maps' own XML, which
+        // indexMaps stores), so without this most maps listed no tables.
+        if (tableData.mapMappings && Array.isArray(tableData.mapMappings)) {
+          const stmt = this.db.prepare(`
+            INSERT INTO map_mappings (map_name, mapping_table, field_connections, model)
+            VALUES (?, ?, ?, ?) ON CONFLICT(map_name, mapping_table, model) DO UPDATE SET field_connections = excluded.field_connections
+          `);
+          for (const mapping of tableData.mapMappings) {
+            if (mapping.map) {
+              stmt.run(mapping.map, tableData.name, mapping.fieldConnections || 0, model);
+            }
+          }
+        }
       } catch (error) {
         log.warn(`Skipped table ${file}: ${error instanceof Error ? error.message : error}`);
       }
@@ -3281,7 +3306,7 @@ export class XppSymbolIndex {
     const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.json'));
     const insertMapping = this.db.prepare(`
       INSERT INTO map_mappings (map_name, mapping_table, field_connections, model)
-      VALUES (?, ?, ?, ?)
+      VALUES (?, ?, ?, ?) ON CONFLICT(map_name, mapping_table, model) DO UPDATE SET field_connections = excluded.field_connections
     `);
     for (const file of files) {
       try {
@@ -3295,6 +3320,24 @@ export class XppSymbolIndex {
           model,
           extendsClass: data.extends || undefined,
         });
+        // Map methods are indexed like class methods (type 'method', parent =
+        // the map) so search and the index-fallback method reader see them.
+        if (Array.isArray(data.methods)) {
+          for (const method of data.methods) {
+            if (!method?.name) continue;
+            this.addSymbol({
+              name: method.name,
+              type: 'method',
+              parentName: name,
+              signature: renderMethodSignature(method),
+              filePath: data.sourcePath || filePath,
+              model,
+              description: method.documentation,
+              sourceSnippet: method.sourceSnippet,
+              source: method.source,
+            });
+          }
+        }
         if (Array.isArray(data.mappings)) {
           for (const m of data.mappings) {
             if (!m?.table) continue;
