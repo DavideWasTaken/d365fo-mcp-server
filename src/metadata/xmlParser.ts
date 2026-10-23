@@ -229,8 +229,8 @@ export class XppMetadataParser {
         indexes: this.parseIndexes(axTable.Indexes?.AxTableIndex),
         relations: this.parseRelations(axTable.Relations?.AxTableRelation),
         methods: this.parseMethods(axTable.SourceCode?.Methods?.Method, tableName),
-        // Table→map bindings live in the TABLE's <Mappings>, not in the map's
-        // XML — see parseMapFile for the map side of the same relationship.
+        // Table→map bindings this table declares in its own <Mappings>. A map can
+        // declare bindings too — see parseMapFile for that side.
         mapMappings: this.parseTableMapMappings(axTable.Mappings),
       };
 
@@ -386,8 +386,8 @@ export class XppMetadataParser {
   /**
    * Parses the table's <Mappings> element: zero or more <AxTableMapping>
    * blocks, each binding this table to a map (MappingTable) through field
-   * connections. D365FO stores the mapping on the TABLE side; a map's own XML
-   * has no <Mappings> element at all.
+   * connections. Either side can declare a binding, and the shipped AOT uses
+   * both without overlap: 1,913 bindings in 1,134 tables' XML, 147 in 56 maps'.
    */
   private parseTableMapMappings(mappingsData: any): { map: string; fieldConnections: number }[] {
     if (!mappingsData) return [];

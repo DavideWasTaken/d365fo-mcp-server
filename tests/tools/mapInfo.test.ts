@@ -3,7 +3,7 @@
  *
  * Maps used to render a stub: name/model/extends plus "Mapped tables (0)",
  * because methods and fields were never extracted and mappings were looked for
- * on the wrong side (the map's XML has none — tables declare them). These
+ * only on the map's side (most bindings are declared by the tables). These
  * tests pin the full render: declaration, fields, method signatures and the
  * mapped-tables table, plus the index-only fallback when the XML is gone.
  */

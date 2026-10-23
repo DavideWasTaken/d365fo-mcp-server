@@ -53,24 +53,31 @@ describe('AxMap indexing regressions', () => {
     const tablePath = path.join(tables, 'Table.xml');
     const write = (mappings: string) => fs.writeFileSync(tablePath, `<AxTable><Name>Table</Name>${mappings}</AxTable>`);
     write('<Mappings><AxTableMapping><MappingTable>TestMap</MappingTable><Connections><AxTableMappingConnection><MapField>A</MapField><MapFieldTo>B</MapFieldTo></AxTableMappingConnection></Connections></AxTableMapping></Mappings>');
+    // A binding the MAP declares, in the same model as the table, as indexMaps stores it.
+    // 86 of 147 shipped map-side bindings are shaped like this one.
+    const maps = path.join(packages, 'DifferentPackage', 'TestModel', 'AxMap');
+    fs.mkdirSync(maps, { recursive: true });
+    fs.writeFileSync(path.join(maps, 'SiblingMap.xml'), '<AxMap><Name>SiblingMap</Name><Mappings><AxTableMapping><MappingTable>Table</MappingTable></AxTableMapping></Mappings></AxMap>');
+    const db = new DatabaseSync(dbPath);
+    db.prepare("INSERT INTO map_mappings (map_name, mapping_table, field_connections, model) VALUES ('SiblingMap', 'Table', 3, 'TestModel')").run();
+    db.close();
+    const count = () => {
+      const d = new DatabaseSync(dbPath);
+      try { return d.prepare('SELECT map_name FROM map_mappings ORDER BY map_name').all().map(r => r.map_name); } finally { d.close(); }
+    };
     // @ts-expect-error standalone maintenance script has no declaration file
     const { backfillMapMappings } = await import('../../scripts/backfill-map-mappings.mjs');
     await backfillMapMappings(dbPath, packages, ['TestModel']);
     await backfillMapMappings(dbPath, packages, ['TestModel']);
-    let db = new DatabaseSync(dbPath);
-    expect(db.prepare('SELECT COUNT(*) AS n FROM map_mappings').get()?.n).toBe(1);
-    db.close();
+    expect(count()).toEqual(['SiblingMap', 'TestMap']);
     // A malformed file must roll back the earlier table updates as well.
     write('');
     fs.writeFileSync(path.join(tables, 'ZBroken.xml'), '<AxTable>');
     await expect(backfillMapMappings(dbPath, packages)).rejects.toThrow();
-    db = new DatabaseSync(dbPath);
-    expect(db.prepare('SELECT COUNT(*) AS n FROM map_mappings').get()?.n).toBe(1);
-    db.close();
+    expect(count()).toEqual(['SiblingMap', 'TestMap']);
     fs.unlinkSync(path.join(tables, 'ZBroken.xml'));
     await backfillMapMappings(dbPath, packages);
-    db = new DatabaseSync(dbPath);
-    expect(db.prepare('SELECT COUNT(*) AS n FROM map_mappings').get()?.n).toBe(0);
-    db.close();
+    // The stale table-side binding goes; the one the map declares stays.
+    expect(count()).toEqual(['SiblingMap']);
   });
 });

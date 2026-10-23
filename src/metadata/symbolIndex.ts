@@ -2758,9 +2758,9 @@ export class XppSymbolIndex {
             }
           }
         }
-        // Index table→map bindings into map_mappings. D365FO stores the mapping
-        // on the table's side; the map's own JSON carries no mappings, so this
-        // is the only source for that table.
+        // Index table→map bindings into map_mappings. Most bindings are declared
+        // on the table's side (1,913 shipped, against 147 in maps' own XML, which
+        // indexMaps stores), so without this most maps listed no tables.
         if (tableData.mapMappings && Array.isArray(tableData.mapMappings)) {
           const stmt = this.db.prepare(`
             INSERT INTO map_mappings (map_name, mapping_table, field_connections, model)

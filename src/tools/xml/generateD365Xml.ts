@@ -9,6 +9,7 @@ import type { CallToolRequest } from '@modelcontextprotocol/sdk/types.js';
 import { escapeXml } from '../../utils/xmlEscape.js';
 import { z } from 'zod';
 import { getConfigManager } from '../../utils/configManager.js';
+import { defaultPackagesRoot } from '../../utils/packagesRoot.js';
 
 const GenerateD365XmlArgsSchema = z.object({
   objectType: z
@@ -140,7 +141,7 @@ export async function handleGenerateD365Xml(
     // Construct recommended file path under the CONFIGURED packages root —
     // a hardcoded K:\ used to recommend paths on boxes where the AOT lives on C:.
     await configManager.ensureLoaded();
-    const packagesRoot = configManager.getPackagePath() || 'C:\\AosService\\PackagesLocalDirectory';
+    const packagesRoot = configManager.getPackagePath() || defaultPackagesRoot();
     const recommendedPath = `${packagesRoot}\\${modelName}\\${modelName}\\${objectFolder}\\${args.objectName}.xml`;
 
     // Return XML content with instructions

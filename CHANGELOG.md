@@ -29,6 +29,14 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Fixed
+- **A map listed no fields or method signatures, and most maps no mapped tables.**
+  `get_object_info` on an AxMap now renders its declaration, fields and method
+  signatures; map methods are indexed (search with `type: "map"`, `get_method_source`,
+  and the SQLite body fallback when the XML is unreachable). Table-to-map bindings were
+  read only from the map's own `<Mappings>`, which holds 147 of the shipped AOT's
+  bindings; the other 1,913 are declared by the tables and are now indexed too. Re-extract
+  metadata and rebuild the index to pick them up, or run
+  `scripts/backfill-map-mappings.mjs` against an existing index.
 - **`bpCheck` and `dbSync` were lost when a build was collected by a later call.**
   A build that outlives its wait window (`wait: false`, or past `waitTimeoutMs`) is
   collected by another call, usually with the model name alone, and that call's
