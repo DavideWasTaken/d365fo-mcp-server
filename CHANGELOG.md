@@ -29,6 +29,20 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Fixed
+- **An incremental build silently removed a data entity's OData actions.** xppc's
+  `-incremental` mode rewrites the `bin\Dynamics.AX.<Package>.ODataExtends.runtime`
+  entry of every entity it recompiles without its actions, and the AOS reads them from
+  there at startup: after any edit to an entity with a `SysODataActionAttribute` method,
+  a green build and an AOS restart took every action of that entity out of OData —
+  including ones that had worked. A build asked for as incremental now runs as a full one,
+  as Visual Studio's does, when it would recompile an entity, entity extension or class
+  that declares an OData action, or when the deployed file already lacks one; the result
+  says why. A successful build whose file still lacks a declared action no longer reads
+  `✅ Build succeeded`, and after an incremental build `restartAos` is withheld until a
+  full build has written them.
+- **A write said an object outside every `.rnrproj` "will not compile".** xppc compiles
+  the whole model folder, project or not; the message now says the object compiles but no
+  project shows it in Visual Studio.
 - **`run_systest_class` could not find, or ran a stale, `SysTestConsole`** (#1143).
   Current platforms ship the runner as `Bin\SysTestConsole.17.0.exe`; the tool looked
   only for `SysTestConsole.exe`, so on an install without it no test could run, and on

@@ -165,6 +165,8 @@ Two things shared by `create` and `modify`:
 
 `build_d365fo_project` also accepts `restartAos: true`, with the local environment root in `aosUrl` — optional on a classic AOSService VM, where it defaults to `Infrastructure.HostUrl` from `AosService\WebRoot\web.config`. After successful compilation, runtime metadata generation and requested database synchronization, it restarts the matching IIS/IIS Express AOS and checks host readiness. This is opt-in; the default `wait: true` behavior is unchanged. Collecting a completed result does not repeat the restart, and a blocked or unsuccessful restart is reported explicitly. See [Optional AOS restart](AOS_RUNTIME_RESTART.md) for requirements and limitations.
 
+**OData actions need a full build.** xppc writes a package's OData resources to `bin\Dynamics.AX.<Package>.ODataExtends.runtime`, one entry per data entity, and the AOS reads the actions from it at startup. An incremental compile rewrites the entry of every entity it recompiles *without its actions*; a full build — like Visual Studio's — writes them. So when an incremental build would recompile an entity, entity extension or class that declares a `SysODataActionAttribute` action, or an entity's entry already lacks one, `build_d365fo_project` runs a full build instead and says why (`full build, switched from incremental`). A successful build whose entries still lack a declared action reports `⚠️ Build succeeded; OData actions missing`, and after an incremental build `restartAos` is withheld until a full build has written them.
+
 > Local-only — require a Windows D365FO VM; excluded from the Azure `read-only` mode.
 
 | Tool | What it does | Example prompt |
