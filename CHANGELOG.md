@@ -29,6 +29,20 @@ those are called out explicitly below.
 ## [Unreleased]
 
 ### Fixed
+- **An incremental build silently removed a data entity's OData actions.** xppc's
+  `-incremental` mode rewrites the `bin\Dynamics.AX.<Package>.ODataExtends.runtime`
+  entry of every entity it recompiles without its actions, and the AOS reads them from
+  there at startup: after any edit to an entity with a `SysODataActionAttribute` method,
+  a green build and an AOS restart took every action of that entity out of OData —
+  including ones that had worked. A build asked for as incremental now runs as a full one,
+  as Visual Studio's does, when it would recompile an entity, entity extension or class
+  that declares an OData action, or when the deployed file already lacks one; the result
+  says why. A successful build whose file still lacks a declared action no longer reads
+  `✅ Build succeeded`, and after an incremental build `restartAos` is withheld until a
+  full build has written them.
+- **A write said an object outside every `.rnrproj` "will not compile".** xppc compiles
+  the whole model folder, project or not; the message now says the object compiles but no
+  project shows it in Visual Studio.
 - **`bpCheck` and `dbSync` were lost when a build was collected by a later call.**
   A build that outlives its wait window (`wait: false`, or past `waitTimeoutMs`) is
   collected by another call, usually with the model name alone, and that call's
