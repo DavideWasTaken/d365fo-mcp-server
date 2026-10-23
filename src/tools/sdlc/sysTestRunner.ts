@@ -92,32 +92,54 @@ export async function compareSysTestDataAccess(
 const SYSTEST_CONSOLE_RE = /^SysTestConsole((?:\.\d+)+)?\.exe$/i;
 
 /**
- * The SysTestConsole binary in `binDir`, or null when there is none.
+ * Every SysTestConsole binary in `binDir`, in the order to try them; empty when there is none.
  *
  * Current platforms ship it named after the test platform it targets — `SysTestConsole.17.0.exe`
  * (#1143) — and an upgraded box keeps the plain `SysTestConsole.exe` of the platform it started on.
  * Seen on a 7.0.7858 dev VM: `SysTestConsole.17.0.exe` at 7.0.7858.111, the same build as xppc.exe,
  * beside a `SysTestConsole.exe` at 7.0.7452.66 left from December 2024. So the highest versioned
- * name wins, compared as numbers, and the plain name is the fallback for installs that have only it.
+ * name comes first, compared as numbers, and the plain name last.
+ *
+ * Last, not dropped: on another 7.0.7858 VM the versioned one cannot start at all (System.ValueTuple
+ * 4.0.3.0 is not in Bin) and its .config is the unconfigured template, while the plain one beside it
+ * was configured and runs green. The caller falls back along this list when a runner cannot start.
  */
-export async function findSysTestConsole(binDir: string): Promise<string | null> {
+export async function findSysTestConsoles(binDir: string): Promise<string[]> {
   let names: string[] = [];
   try {
     names = await fs.readdir(binDir);
   } catch { /* unreadable: only the plain name can still be probed */ }
-  const versioned = names
+  const found = names
     .map(name => ({ name, version: SYSTEST_CONSOLE_RE.exec(name)?.[1] }))
     .filter((c): c is { name: string; version: string } => !!c.version)
     .map(c => ({ name: c.name, parts: c.version.slice(1).split('.').map(Number) }))
-    .sort((a, b) => compareVersionParts(b.parts, a.parts));
-  if (versioned.length > 0) return path.join(binDir, versioned[0].name);
+    .sort((a, b) => compareVersionParts(b.parts, a.parts))
+    .map(c => path.join(binDir, c.name));
   const plain = path.join(binDir, 'SysTestConsole.exe');
   try {
     await fs.access(plain);
-    return plain;
-  } catch {
-    return null;
-  }
+    found.push(plain);
+  } catch { /* none */ }
+  return found;
+}
+
+/** The SysTestConsole to try first in `binDir`, or null when there is none. */
+export async function findSysTestConsole(binDir: string): Promise<string | null> {
+  return (await findSysTestConsoles(binDir))[0] ?? null;
+}
+
+/**
+ * Why a SysTestConsole run never got as far as a test, or null when it did (or failed some other
+ * way). Only these two are worth retrying with another SysTestConsole: both live in the binary's
+ * own .config and Bin, which a second binary does not share.
+ */
+function runnerStartupFault(error: any): string | null {
+  const output = [error?.stdout, error?.stderr, error?.message].filter(Boolean).join('\n');
+  const assembly = /Could not load file or assembly '([^']+?),\s*Version=([\d.]+)/i.exec(output);
+  if (assembly) return `${assembly[1]} ${assembly[2]} would not load`;
+  const login = /Login failed for user '([^']+)'/i.exec(output);
+  if (login) return `its .config could not log in as '${login[1]}'`;
+  return null;
 }
 
 function compareVersionParts(a: number[], b: number[]): number {
@@ -200,6 +222,10 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
   // The binary that ran, so messages and the .config a diagnosis reads name a
   // versioned SysTestConsole rather than the plain one.
   let runnerName = 'SysTestConsole.exe';
+  // A SysTestConsole that could not start, and the one tried after it. Said in
+  // every reply, so a run on the plain binary never passes for the versioned one.
+  const fallbackNotes: string[] = [];
+  const fallbackNote = () => fallbackNotes.map(n => `\n⚠️ ${n}`).join('');
   try {
     const configManager = getConfigManager();
     await configManager.ensureLoaded();
@@ -219,13 +245,13 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
     // SysTestConsole.exe is the binary D365FO ships for running SysTest classes from the CLI
     // (`/test:<class> /xml:<file>`). xppbp.exe is the BP checker and cannot run tests.
     // SysTestRunner.exe is a legacy/forward-compat fallback, not observed on real installs.
-    const sysTestConsolePath = await findSysTestConsole(path.join(packagesRoot, 'Bin'));
+    const sysTestConsoles = await findSysTestConsoles(path.join(packagesRoot, 'Bin'));
     const sysTestRunnerPath = path.join(packagesRoot, 'Bin', 'SysTestRunner.exe');
 
     let runnerPath: string;
-    if (sysTestConsolePath) {
-      runnerPath = sysTestConsolePath;
-      runnerName = path.basename(sysTestConsolePath);
+    if (sysTestConsoles.length > 0) {
+      runnerPath = sysTestConsoles[0];
+      runnerName = path.basename(runnerPath);
     } else {
       try {
         await fs.access(sysTestRunnerPath);
@@ -274,16 +300,32 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
       args = [`/test:${className}`, `/xml:${xmlResultPath}`, '/unattended'];
     }
 
-    console.error(`[run_systest_class] Running: "${runnerPath}" ${args.join(' ')}`);
-
-    const { stdout, stderr } = await withOperationLock(
-      `systest:${resolvedModelName}:${className}`,
-      () => execFileAsync(runnerPath, args, {
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 300_000, // 5 minutes
-        windowsHide: true,
-      }),
-    );
+    // A SysTestConsole that cannot start (an assembly its Bin lacks, a .config never
+    // filled in for this machine) hands over to the next one; any other failure is
+    // the answer and is not retried.
+    let stdout = '';
+    let stderr = '';
+    for (let attempt = 0; ; attempt++) {
+      console.error(`[run_systest_class] Running: "${runnerPath}" ${args.join(' ')}`);
+      try {
+        ({ stdout, stderr } = await withOperationLock(
+          `systest:${resolvedModelName}:${className}`,
+          () => execFileAsync(runnerPath, args, {
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: 300_000, // 5 minutes
+            windowsHide: true,
+          }),
+        ));
+        break;
+      } catch (error: any) {
+        const next = sysTestConsoles[attempt + 1];
+        const fault = next && runnerPath === sysTestConsoles[attempt] ? runnerStartupFault(error) : null;
+        if (!fault) throw error;
+        fallbackNotes.push(`${runnerName} could not start (${fault}), so ${path.basename(next)} ran instead.`);
+        runnerPath = next;
+        runnerName = path.basename(next);
+      }
+    }
 
     let xmlResult = '';
     if (xmlResultPath) {
@@ -309,7 +351,7 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
       : /passed|success/i.test(output);
 
     const status = hasFailed ? '❌ Tests FAILED' : passed ? '✅ Tests passed' : '⚠️ Tests completed (check output)';
-    const methodNote = testMethod && runnerPath === sysTestConsolePath
+    const methodNote = testMethod && runnerPath !== sysTestRunnerPath
       ? `\n⚠️ testMethod="${testMethod}" was requested but ${runnerName} has no per-method filter — the whole class ran.`
       : '';
 
@@ -337,6 +379,7 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
         text: `${status}\n\nClass: ${className}` +
           (testMethod && runnerPath === sysTestRunnerPath ? `::${testMethod}` : '') +
           `\nModel: ${resolvedModelName}` +
+          fallbackNote() +
           methodNote +
           perMethod +
           focusNote +
@@ -348,6 +391,8 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
     console.error('Error running test:', error);
     const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n');
     const runnerConfigName = `${runnerName}.config`;
+    // What ran before the runner that failed: the reply would otherwise blame only the last one.
+    const shownOutput = (fallbackNotes.length ? `${fallbackNote().slice(1)}\n\n` : '') + output;
 
     // A binding redirect that names a version the install does not have. Seen on
     // 10.0.4x: SysTestConsole.exe.config redirects Microsoft.ApplicationInsights
@@ -383,7 +428,7 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
               `the PLATFORM install, not in the model.\n\n${diagnosis}\n\n` +
               'Either fix touches the platform installation, so make it deliberately and keep a backup. ' +
               'Until then the tests still run from Visual Studio Test Explorer, which does not go ' +
-              'through this binary.\n\n' + output,
+              'through this binary.\n\n' + shownOutput,
           }],
           isError: true,
         };
@@ -431,7 +476,7 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
             'No test ran, and nothing is wrong with the test class or the model.\n\n' +
             `${diagnosis}\n\n` +
             'Until then the tests still run from Visual Studio Test Explorer, which uses the ' +
-            'developer session\'s own connection and does not go through this binary.\n\n' + output,
+            'developer session\'s own connection and does not go through this binary.\n\n' + shownOutput,
         }],
         isError: true,
       };
@@ -444,14 +489,14 @@ export const sysTestRunnerTool = async (params: any, _context: any) => {
           text: `❌ ${runnerName} stopped at its debugger-attach prompt (Console.ReadKey).\n\n` +
             'This tool already passes /unattended, which is what normally skips that prompt. If it ' +
             'still appears, run the test from an interactive RDP/console session on the dev VM, or ' +
-            'from Visual Studio Test Explorer.\n\n' + output,
+            'from Visual Studio Test Explorer.\n\n' + shownOutput,
         }],
         isError: true,
       };
     }
 
     return {
-      content: [{ type: 'text', text: '❌ Tests failed:\n\n' + output }],
+      content: [{ type: 'text', text: '❌ Tests failed:\n\n' + shownOutput }],
       isError: true
     };
   }
