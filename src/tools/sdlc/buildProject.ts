@@ -294,30 +294,11 @@ interface BuildJobState {
   exitCode?: number;
   endTime?: string;
   fullBuild?: boolean;
-<<<<<<< HEAD
-=======
-  // The post-build actions the build was STARTED with (a restart build keeps them
-  // in restartWorkflow.request instead). A build that outlives its wait window —
-  // wait:false, or past waitTimeoutMs — is collected by a later call, usually with
-  // the model name alone, and that call's arguments used to decide: the bpCheck
-  // and dbSync asked for at the start were dropped without a word.
-  postBuildRequest?: PostBuildRequest;
->>>>>>> 2bc5213712fd0ac4d87a6c5ad629f55e1c294617
   // Why a build asked for as incremental ran as a full one: an incremental compile drops
   // OData actions (see odataActionGuard.ts). Absent when fullBuild was requested.
   autoFullBuild?: AutoFullBuildReason;
   // Declared OData actions that ODataExtends.runtime still lacks after this build.
   odataActionsMissing?: MissingODataActions[];
-<<<<<<< HEAD
-=======
-}
-
-interface AutoFullBuildReason {
-  /** `<AxType>/<Name>` of the elements with OData actions this build had to recompile. */
-  recompiled: string[];
-  /** Entities whose ODataExtends.runtime entry had already lost actions. */
-  missing: MissingODataActions[];
->>>>>>> 2bc5213712fd0ac4d87a6c5ad629f55e1c294617
 }
 
 interface AutoFullBuildReason {
@@ -1579,13 +1560,8 @@ async function renderFinishedBuildResult(
   return {
     content: [{
       type: 'text',
-<<<<<<< HEAD
       text: userAction + `${statusIcon} (${finalState.tool}, ${buildMode}, ${duration}s)\n\nModel: ${targetModel}\nLog: ${finalState.logFile}\n` +
         odataSection + restartAdvice + requestNote +
-=======
-      text: `${statusIcon} (${finalState.tool}, ${buildMode}, ${duration}s)\n\nModel: ${targetModel}\n` +
-        odataSection +
->>>>>>> 2bc5213712fd0ac4d87a6c5ad629f55e1c294617
         incrementalScopeCaveat(succeeded, !!finalState.fullBuild) + '\n' +
         (unexplained ? `${unexplained}\n\n` : '') +
         (structured ? `${structured}\n\n` : '') +

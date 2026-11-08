@@ -191,8 +191,6 @@ those are called out explicitly below.
   ignored.
 
 ### Fixed
-<<<<<<< HEAD
-=======
 - **`search` put an extension's base object in front of its name.** The exact-match line
   prefixes the owner to tell same-named members apart, and an extension's index row
   carries its base object as owner, so a menu extension read
@@ -372,7 +370,6 @@ those are called out explicitly below.
   reads was the model's first 60 names in (type, name) order, so in a 3,800-object
   `xyz` model with 69 `xyz3PL` names (digits sort first) inference answered `xyz3PL`;
   the sample is now drawn as eight short runs spread over the model's rows.
->>>>>>> 2bc5213712fd0ac4d87a6c5ad629f55e1c294617
 - **`add-method` and `remove-method` failed on a data entity.** The bridge has no
   data-entity arm for either, so `d365fo_file` modify returned "add-method not supported
   for objectType 'data-entity' via bridge (use XML fallback)" and applied nothing — the
@@ -382,8 +379,6 @@ those are called out explicitly below.
   applies, and read back before the reply says it landed. `replace-code` already fell back.
   A multi-method `add-method` also stops at the first refusal and reports it, instead of
   summarising a failed write as "Added N methods".
-<<<<<<< HEAD
-=======
 - **`find_references` called the owner of a field or method "not a class".** The hint for
   a form or table name passed as a class also checked the owner of every `Owner.member`
   target, so `SalesTable.SalesId` as a field, or `SalesTable.initFromSalesQuotationTable`
@@ -489,7 +484,6 @@ those are called out explicitly below.
   the name … could be found under the source path". The root is now resolved as
   `build_d365fo_project` resolves it: `D365FO_PACKAGE_PATH` before the drive scan, and an
   explicit `packagePath` over both.
->>>>>>> 2bc5213712fd0ac4d87a6c5ad629f55e1c294617
 - **`run_systest_class` could not find, or ran a stale, `SysTestConsole`** (#1143).
   Current platforms ship the runner as `Bin\SysTestConsole.17.0.exe`; the tool looked
   only for `SysTestConsole.exe`, so on an install without it no test could run, and on
@@ -497,22 +491,6 @@ those are called out explicitly below.
   7.0.7452 from December 2024, beside a 17.0 build matching xppc. The highest versioned
   `SysTestConsole.<version>.exe` now wins, the plain name is the fallback, and the
   login and binding-redirect diagnoses read and name the `.config` of the binary that ran.
-<<<<<<< HEAD
-- **An incremental build silently removed a data entity's OData actions.** xppc's
-  `-incremental` mode rewrites the `bin\Dynamics.AX.<Package>.ODataExtends.runtime`
-  entry of every entity it recompiles without its actions, and the AOS reads them from
-  there at startup: after any edit to an entity with a `SysODataActionAttribute` method,
-  a green build and an AOS restart took every action of that entity out of OData —
-  including ones that had worked. A build asked for as incremental now runs as a full one,
-  as Visual Studio's does, when it would recompile an entity, entity extension or class
-  that declares an OData action, or when the deployed file already lacks one; the result
-  says why. A successful build whose file still lacks a declared action no longer reads
-  `✅ Build succeeded`, and after an incremental build `restartAos` is withheld until a
-  full build has written them.
-- **A write said an object outside every `.rnrproj` "will not compile".** xppc compiles
-  the whole model folder, project or not; the message now says the object compiles but no
-  project shows it in Visual Studio.
-=======
   The debugger-prompt and per-method notes name that binary too. A versioned runner that
   cannot start (an assembly missing from `Bin`, or a `.config` that cannot log in) hands
   over to the plain one, and the reply says so: on another 7.0.7858 VM the 17.0 runner
@@ -526,7 +504,6 @@ those are called out explicitly below.
   bindings; the other 1,913 are declared by the tables and are now indexed too. Re-extract
   metadata and rebuild the index to pick them up, or run
   `scripts/backfill-map-mappings.mjs` against an existing index.
->>>>>>> 2bc5213712fd0ac4d87a6c5ad629f55e1c294617
 - **`bpCheck` and `dbSync` were lost when a build was collected by a later call.**
   A build that outlives its wait window (`wait: false`, or past `waitTimeoutMs`) is
   collected by another call, usually with the model name alone, and that call's

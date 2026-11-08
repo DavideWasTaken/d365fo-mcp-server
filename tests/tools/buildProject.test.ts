@@ -92,7 +92,6 @@ vi.mock('../../src/tools/sdlc/odataActionGuard.js', async () => ({
   ...(await vi.importActual<any>('../../src/tools/sdlc/odataActionGuard.js')),
   scanODataActions: scanMock,
 }));
-<<<<<<< HEAD
 const { bpMock, syncMock, labelsMock, metadataMock, restartMock } = vi.hoisted(() => ({ bpMock: vi.fn(), syncMock: vi.fn(), labelsMock: vi.fn(), metadataMock: vi.fn(), restartMock: vi.fn() }));
 vi.mock('../../src/tools/sdlc/runBpCheck.js', async () => ({
   runBpCheckTool: bpMock,
@@ -103,8 +102,6 @@ vi.mock('../../src/tools/sdlc/dbSync.js', () => ({ dbSyncTool: syncMock }));
 vi.mock('../../src/tools/write/compileLabels.js', () => ({ compileModelLabels: labelsMock }));
 vi.mock('../../src/tools/xml/generateMetadata.js', () => ({ generateRuntimeMetadata: metadataMock }));
 vi.mock('../../src/tools/sdlc/aosRuntime.js', () => ({ restartAosRuntime: restartMock }));
-=======
->>>>>>> 2bc5213712fd0ac4d87a6c5ad629f55e1c294617
 
 import path from 'path';
 import { buildProjectTool, readFullLog, renderFailureLog, trimSucceededLog } from '../../src/tools/sdlc/buildProject';
@@ -232,14 +229,11 @@ describe('build_d365fo_project', () => {
     statMock.mockResolvedValue({ mtimeMs: 0 });
     pruneMock.mockResolvedValue({ stale: [], phantoms: [], skippedModels: [], errors: [], scanned: 0 });
     scanMock.mockResolvedValue(NO_ODATA_FINDINGS);
-<<<<<<< HEAD
     bpMock.mockResolvedValue({ content: [{ type: 'text', text: 'BP findings saved' }] });
     syncMock.mockResolvedValue({ content: [{ type: 'text', text: 'Tables synced' }] });
     labelsMock.mockResolvedValue({ success: true, skipped: true, message: 'No labels' });
     metadataMock.mockResolvedValue({ success: true, message: 'Metadata generated' });
     restartMock.mockResolvedValue({ status: 'ready', message: 'Actual runtime restarted and verified' });
-=======
->>>>>>> 2bc5213712fd0ac4d87a6c5ad629f55e1c294617
     cfgGetProjectPath.mockResolvedValue(PROJECT_PATH);
     cfgGetPackagePath.mockReturnValue(null);
     cfgGetContext.mockReturnValue({});
