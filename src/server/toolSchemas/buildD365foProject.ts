@@ -30,7 +30,11 @@ export const buildD365foProjectTool = {
         },
         fullBuild: {
           type: 'boolean',
+<<<<<<< HEAD
           description: 'Recompile the target model fully; fixes stale symbols. Automatic when an entity with OData actions changed (incremental drops them). Omit on status calls.',
+=======
+          description: 'Full recompile of TARGET model (not deps). Fixes stale symbols; auto when an entity with OData actions changes.',
+>>>>>>> 2bc5213712fd0ac4d87a6c5ad629f55e1c294617
         },
         bpCheck: {
           type: 'boolean',

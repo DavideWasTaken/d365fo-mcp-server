@@ -3,13 +3,18 @@
  * Optimized for MCP-capable AI clients (GitHub Copilot, Claude Code) in Visual Studio 2022 / 2026
  *
  * NOTE: This file is the MCP prompt source of truth for AI system instructions.
- * The static instruction layers (.github/copilot-instructions.md, CLAUDE.md)
- * mirror these rules. If you update rules here, sync them there too.
+ * The static instruction layer (.github/copilot-instructions.md, which users
+ * also copy into their workspace as CLAUDE.md — docs/SETUP.md) mirrors these
+ * rules. If you update rules here, sync them there too. The repo-root
+ * CLAUDE.md is for contributors to this repo and must NOT mirror these rules.
  *
  * Kept deliberately under 200 lines: the prompt holds only the tool decision
  * tree and hard prohibitions. Everything that is a rule about CODE lives in
  * the queryable knowledge base — get_knowledge (see the ID table below).
  */
+
+import { isAsGivenNamingMode } from '../utils/modelClassifier.js';
+import { classFormatsActive } from '../utils/extensionNameFormat.js';
 
 /**
  * Get the system instructions prompt definition
@@ -122,7 +127,11 @@ To find why something is slow, use \`trace_d365fo\` if it is published (fetch it
 - No function calls in \`where\` — assign to a local variable first
 - No nested \`while select\` — use \`join\` or pre-load to \`Map\`/temp table
 - \`crossCompany\` goes on the OUTER (driving) buffer only
-- CoC: NEVER copy default parameter values into the wrapper signature; \`next\` at first-level statement scope; extension class \`final\` + \`[ExtensionOf(...)]\`, named \`{Target}{Prefix}_Extension\`
+- CoC: NEVER copy default parameter values into the wrapper signature; \`next\` at first-level statement scope; extension class \`final\` + \`[ExtensionOf(...)]\`, ${classFormatsActive()
+  ? 'named by the configured class name format — pass the base name and the [ExtensionOf] (its kind picks the format); with no format for the case the tool asks for the name'
+  : isAsGivenNamingMode()
+  ? 'named by the project\'s instruction file — the server renames nothing (naming.prefixSource=as-given); the name must end in `_Extension`'
+  : 'named `{Target}{Prefix}_Extension`'}
 - \`doInsert\`/\`doUpdate\`/\`doDelete\` only for data-fix/migration
 - No literal strings in \`Info()\`/\`error()\`/labels — use \`@Model:LabelId\` (reuse via \`labels(action="search")\` first)
 - Every public/protected member needs a meaningful \`/// <summary>\` (not "MyClass class.")

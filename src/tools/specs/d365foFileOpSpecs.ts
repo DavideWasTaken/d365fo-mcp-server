@@ -507,6 +507,12 @@ export const D365FO_FILE_PARAM_SPECS: Record<string, { type: string; description
     type: 'string (display | action | output)',
     description: 'Menu item kind: display (form), action (class), output (report). Default: display.',
   },
+  parentMenuElement: {
+    type: 'string',
+    description: 'Submenu the item or submenu goes under, plain name (e.g. "Inquiries", nested ones too). Omit for the top level.',
+  },
+  submenuName: { type: 'string', description: 'Name of the submenu to add (e.g. "ContosoRentals").' },
+  submenuLabel: { type: 'string', description: 'Label id of the new submenu (e.g. "@ContosoRental:Rentals").' },
 };
 
 export interface D365FileOpSpec {
@@ -901,7 +907,26 @@ export const D365FO_FILE_OP_SPECS: Record<string, D365FileOpSpec> = {
   'remove-enum-value': { required: ['enumValueName'], optional: [] },
   'add-menu-item-to-menu': {
     required: ['menuItemToAdd'],
-    optional: ['menuItemToAddType'],
+    optional: ['menuItemToAddType', 'parentMenuElement'],
+    note:
+      'objectType="menu" or "menu-extension". An item for a STANDARD menu goes into a menu-extension ' +
+      '("<BaseMenu>.<Prefix>Extension"): parentMenuElement names the submenu of the base menu it goes ' +
+      'under (e.g. "Inquiries", also a nested one by its plain name), omitted = top level. It is checked ' +
+      'against the base menu and the submenus this and the other indexed extensions of it add; an ' +
+      'unknown one is refused with the list. A submenu this extension adds takes the item inside it. ' +
+      'Appended at the end of its parent; the same item under the same parent again is skipped. ' +
+      'Element names are unique in the whole menu: an item whose name another element has is named <item>N. ' +
+      'On objectType="menu" (a menu of your own model) parentMenuElement is a submenu of that menu.',
+  },
+  'add-submenu': {
+    required: ['submenuName'],
+    optional: ['submenuLabel', 'parentMenuElement'],
+    note:
+      'objectType="menu" (a menu of your own model: an inline submenu) or "menu-extension" (a standard ' +
+      'menu). parentMenuElement = the submenu it goes under, plain name, omitted = top level; checked like ' +
+      'add-menu-item-to-menu\'s. The name must be new in the whole menu, items included (a <Parent> names submenus by plain ' +
+      'name): one that exists elsewhere is refused, the same one under the same parent again is skipped. ' +
+      'Then fill it with add-menu-item-to-menu, parentMenuElement=<submenuName>.',
   },
   'modify-property': {
     required: ['propertyPath', 'propertyValue'],
@@ -962,6 +987,11 @@ export const D365FO_FILE_CREATE_PROPERTY_SPECS: Record<string, string> = {
     'CHOOSE isExtensible DELIBERATELY: it also bars `<`/`>`/`<=`/`>=` on the enum ("Cannot use extensible ' +
     'enumerated type in non-equality comparison"), so any enum whose values get RANKED in X++ — a tier, a ' +
     'severity, a no-downgrade check — must be isExtensible:false',
+  'class-extension':
+    'baseClass? (the extended object; default: the [ExtensionOf] in sourceCode), baseObjectType? (class|table|form|' +
+    'view|map|form-datasource|… — default: the [ExtensionOf] kind). The type picks the configured extension class ' +
+    'name format (EXTENSION_CLASS_NAME_FORMAT*); without one, or for a type no format covers, the reply asks for ' +
+    'the full name — pass it as objectName (ending in _Extension). No format configured: both are optional as before',
   'enum-extension': 'enumValues[{name,label?,value?,countryRegionCodes?}]',
   'table-extension':
     'fields[{name,edt?,enumType?,label?,mandatory?,fieldType?}] — enum fields need ' +
