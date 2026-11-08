@@ -28,7 +28,348 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+## [1.23.0] — 2026-11-05
+
+### Added
+- **`reserved-words` knowledge topic.** `get_knowledge(topic="reserved keywords")`
+  answered with the `switch` topic. The new topic lists the compiler's own keyword
+  set (`XPP_KEYWORDS`, read when the module loads, so a recapture updates it),
+  grouped by kind, with the `in` exemption, the `@` escape, the positions the
+  compiler rejects and where the language reference differs from the compiler.
+- **Exact label lookup: `labels(action="search", exact=true)`.** The search matches
+  words in the label id, text and comment, ranked by relevance, so "the label whose text
+  is exactly X" came back as dozens of candidates to compare by hand; and from the third
+  search call every answer opened with a STOP notice, which ended a legitimate workflow
+  that checks one text per label and language before creating it. With `exact=true` the
+  answer is the labels whose text equals the given text after normalising both sides
+  (Unicode NFC, trimmed, inner whitespace collapsed, case-insensitive including non-ASCII
+  such as umlauts), across every label file and model of that language (`model` /
+  `labelFileId` narrow it). Text from `query` (string or array, in `language`) and/or
+  `texts=[{language, text}, …]` (max 12). Each match is listed as
+  `@File:Id  [model]  <language>: "<text>"` with the label's other indexed translations,
+  in a fixed order: custom models first (`CUSTOM_MODELS`, `EXTENSION_PREFIX`,
+  `D365FO_MODEL_NAME`), then label file id, then label id. `maxMatches` (1..50, default
+  20) sets how many are listed; the cut comes after sorting, so a custom copy is never the
+  one left out ("Buchungen" alone is 45 standard labels). With more than one match, a
+  distribution line says where all of them are
+  (`46 exact matches: ApplicationPlatform: SYS 27, RET 17, GLS 1`). A miss is `no exact match for "<text>" (<language>)`, with "language X is not indexed"
+  when it has no rows. The lookup is deterministic, so it is not counted toward the
+  search-call budget, records no search history and never carries the STOP notice or the
+  "create your own label" advice. `exact`, `texts` and `maxMatches` are accepted flat or in `params` and
+  documented in the op-spec (`get_knowledge(kind="op-spec", topic="labels")`); the
+  published schema is unchanged. Normal searches are byte-for-byte unchanged.
+- **`update_symbol_index(model="X")` re-indexes what changed in one custom model,
+  without naming the files.** After a git pull, a branch switch or a Visual Studio
+  session the agent does not know which files moved, so it listed them one by one or
+  worked on a stale index until the next full build. The model form walks the model's
+  folder and re-indexes every file whose mtime differs from the one recorded when it was
+  last indexed, adds new files, and removes the rows of files deleted from disk, with
+  one bridge refresh for the lot. Changes are judged per file (new table
+  `indexed_files`, filled by every incremental index of a file), not against
+  `last_indexed_at`, which every write bumps and which therefore hides a file changed
+  before an unrelated write. A model's first pass reads all its files once (1,474 files
+  in about 16 s on a real ISV model), later passes about 1.5 s when nothing changed.
+  Standard models are refused (build-database owns them), and so is `filePath` together
+  with `model`. The stale-index warning in `get_workspace_info` now suggests this call
+  instead of the single newest file. The tool's description was tightened so the schema
+  stays inside its budget.
+- **Every object type can be read from the database alone, and data entities show their
+  entity properties.** Builds on the stored form XML from 1.22.0 (#1178): the index now
+  stores every object's original XML (gzipped, table `object_source`, keyed by object type,
+  name and model), so on a host with no AOT files and no bridge, such as the Azure
+  read-only instance, `options={include:"xml"}` returns the XML of any stored object
+  (including `data-entity`, and `class-extension` through its AxClass), and views, data
+  entities, maps, queries and reports render from the stored copy, labelled as such.
+  `findBaseObjectXml` (clone and extension scaffolding) reads it too. A file on the host
+  always wins over the stored copy. When the XML is read (no bridge, no older extracted
+  JSON), the data-entity reader now shows public entity and collection name, OData
+  (`IsPublic`), DMF, category, the data source tree, each field's data source and label
+  text. Single-file `update_symbol_index` keeps the copy in step. Extensions are not
+  stored. Extracted JSON for every non-extension type now carries `raw` and grows
+  accordingly (sizes in SETUP_AZURE.md); stored copies appear after a re-extract and
+  re-index.
+- **Extension name formats.** The naming styles place one token at a fixed spot, so a
+  convention that fixes the whole name could not be expressed: `{0}.CTSO` for every
+  element extension, and a CoC-class token chosen by the type of the object extended
+  (`CTSO_{0}Cls_Extension`, `CTSO_{0}Dbt_Extension` for tables, `CTSO_{0}Frm_Extension`
+  for forms). New settings `EXTENSION_ELEMENT_NAME_FORMAT`, `EXTENSION_CLASS_NAME_FORMAT`,
+  `EXTENSION_CLASS_NAME_FORMAT_TABLE`, `EXTENSION_CLASS_NAME_FORMAT_FORM` (`{0}` = the
+  extended object, `_Extension` always appended to class formats) and
+  `EXTENSION_NAME_FORMAT_UNDEFINED` (`ask` | `class-format`). Create, the modify lookup,
+  `prepare`, `generate_object`, the cross-model suggestion and `validate_object_naming`
+  apply them. The extended object's type comes from the call (`[ExtensionOf(<kind>Str(…))]`,
+  `properties.baseObjectType`, `validate_object_naming(baseObjectType)`), never from
+  its name or the index, so the write-only companion and the shared server produce the
+  same name. Cases no format defines (form data sources/controls, views, entities, maps …,
+  or no type given) are answered with "ask the user for the name and call again with an
+  explicit name" by default. Empty (the default) = names exactly as before.
+- **Cross-references from a SQLite export of DYNAMICSXREFDB (`D365FO_XREF_SQLITE_PATH`).**
+  A server without the C# bridge (a shared read-only server on Linux) answered
+  `find_references` with a name-based scan of X++ method bodies: no metadata references
+  (table fields using an EDT, form data sources, relations), no type scoping, and "inconclusive"
+  for EDTs, forms, queries, views and reports. With `D365FO_XREF_SQLITE_PATH` naming a SQLite
+  copy of the cross-reference database (tables `Modules`, `Names`, `References` with the
+  source ids, a `NOCASE` index on `Names.Path`, indexes on `References.TargetId`/`SourceId`,
+  and `meta.schema = '1'`), `find_references` and the CoC-extension, event-handler and
+  API-usage lookups answer from that file with the bridge's queries and result shapes. The
+  bridge still comes first when it has the database. Every query is bounded: 500 rows per
+  target shape as the bridge, totals counted up to 20,000 (shown as `20000+`), event and
+  caller scans up to 20,000 references, with "more available" in the answer. A file whose
+  export left out the references without a source name (about a third of a full xref, from
+  test code; no tool can show them) and says so in `meta.refs_without_source_removed` has its
+  totals read from the `TargetId` index instead: exact up to 500,000, so for any real target,
+  and without a `Names` lookup per reference. The file is
+  opened read-only and immutable on first use (no lock, journal or WAL files; no extension
+  loading), revalidated when it is replaced, and refused with a logged reason when it is
+  missing, has no `meta` table, another schema or kind, or lacks the indexes; the server then
+  falls back exactly as before, and `find_references` says why the file was refused (without
+  its path, which only the log and `doctor` show) and that the server's operator can fix it. A
+  query on the file that fails is reported as that, with the server log as the place to look.
+  The `_Source:` line names the file and its export date; `get_workspace_info` and `doctor`
+  show it too. `npm run xref:bench -- <file>` measures it.
+- **`find_references` in write-only mode: the hybrid companion answers from
+  `DYNAMICSXREFDB`.** In the hybrid deployment the shared read-only server has the
+  symbol index but no C# bridge, so its `find_references` can only search X++ code by
+  name; the local write-only companion has the bridge and the developer's
+  cross-reference database, but did not publish the tool. It now does (it joins
+  `ALWAYS_TOOLS`). There it answers from the bridge only: a typed name is scoped to
+  its container, an untyped name or `Owner.member` goes to the bridge, which expands
+  it across containers itself, and labels and AOT paths are passed as given. Where
+  full mode would run the name-based scan, the companion has nothing to scan (its
+  index is an empty stub), so it says so and points to the shared server's
+  `find_references` instead: a bare method name without its owner, no rows for a bare
+  name, no bridge, no cross-reference database, or a failed query. A zero for
+  `Owner.method` is reported as "0 on the owner itself", with the headline saying that
+  methods added by `[ExtensionOf]` classes were not searched (the xref DB records them
+  under the extension class, and only the index knows those classes) and naming the
+  explicit path. Full and read-only modes are unchanged. Clients that see both
+  servers' `find_references` can hide one in their tool picker.
+- **`add-menu-item-to-menu` on a `menu-extension`, with `parentMenuElement`.** The
+  cross-model write guard sends an agent that wants an item in a standard menu to a
+  menu extension, and create wrote one, but every modify on it was refused with
+  "not supported by the bridge", so the extension could not be filled. The op now
+  writes an `<AxMenuExtensionElement>` with `<Parent>` and a
+  `<MenuElement i:type="AxMenuElementMenuItem">`, in the shape of the shipped
+  extensions (Display without `MenuItemType`), appended to the root `<Elements>`.
+  `parentMenuElement` names the submenu of the base menu, nested ones by their plain name;
+  omitted, the item goes on the top level. A submenu the extension adds itself takes the
+  item inside its own `<Elements>`, as shipped extensions do. A submenu that is neither in
+  the base menu nor added by this or another indexed extension of it is refused with the
+  list of those that are. The index holds no menus, so the base menu is read from disk,
+  from whichever model of the package roots has it (`OrganizationAdministration` is in
+  ApplicationSuite\Foundation); when it cannot be read, the item is written with a
+  warning. The same item under the same parent again is a skip.
+  XML only, no bridge change; `menu` is unchanged, except that the AxMenu fallback now
+  escapes the item name.
+- **`add-submenu`, and items into a submenu of your own menu.** No operation wrote a
+  submenu, and the `menu-navigation` knowledge topic told agents to hand-write one with a
+  `<SubMenu>` field that no shipped file has. `add-submenu` (`submenuName`,
+  `submenuLabel`, `parentMenuElement`) writes an inline `AxMenuElementSubMenu` with an
+  empty `<Elements />`: on a `menu-extension` as a root entry with `<Parent>`, or nested in
+  a submenu the extension adds; on a `menu` (a menu of your own model) in the root or in a
+  submenu of that menu. A name already used anywhere in the menu, by a submenu or by a
+  menu item, is refused (element names are unique in a menu, and a duplicate fails the
+  build); the same submenu under the same parent again is a skip.
+  `add-menu-item-to-menu` takes `parentMenuElement` on a `menu` too, through the XML
+  writer, since the C# op has no parent. That writer also no longer inserts before the
+  first `</Elements>` in the file, which in a menu whose first element is a submenu put the
+  item inside that submenu, and it skips an item already in the target collection. An
+  item placed where another element of the menu already has its name (the same item in a
+  second submenu, or an item the base menu of an extension already holds) was written
+  with that name and failed the build; it is now named `<item>1`, `<item>2`, … with
+  `MenuItemName` unchanged, as shipped menus do, and the reply says so. On a
+  `menu-extension` this reads the base menu and its other extensions for a top-level item
+  too. The knowledge topic now shows the inline shape, `AxMenuElementMenuReference` for menu
+  objects, and the two operations instead of hand-written XML.
+
+### Changed
+- **`object_source` replaces `form_source`; rebuild the database after upgrading.** This
+  version neither writes nor reads `form_source` (added in 1.22.0). Until a database is
+  rebuilt from a fresh extract, forms on a host without AOT files have no stored copy, as
+  before 1.22.0. On Azure, run the data pipelines before the App Service restarts on the
+  new version (order in SETUP_AZURE.md). An old `form_source` table is left in place and
+  ignored.
+
 ### Fixed
+- **`search` put an extension's base object in front of its name.** The exact-match line
+  prefixes the owner to tell same-named members apart, and an extension's index row
+  carries its base object as owner, so a menu extension read
+  `OrganizationAdministration.OrganizationAdministration.ContosoExtension` and a class
+  extension `SalesTable.SalesTableContoso_Extension`, as if it were a member of
+  `SalesTable`. The workspace-aware listing (`includeWorkspace` with `workspacePath`)
+  had the same prefix. Extensions are now named alone, with their type, in both;
+  members keep the owner.
+- **KW001 missed the later names of a declaration list and sized-string
+  parameters.** `int a, count;` and `void f(str 20 select)` passed, although a probe
+  class showed xppc rejecting both ("'identifier' expected", "invalid name for a
+  parameter"). A reserved word as a `for`, `using` or `catch` variable was already
+  caught, but the fix called it a parameter; it now says loop variable / variable.
+- **`extension_info(mode="coc", method=…)` counted classes that wrap nothing as wrappers.**
+  "Found 12 extension class(es) wrapping "validateWrite"" listed 12 classes for `SalesTable`
+  where 2 wrap it: the filter also kept every class with an empty wrap list, a leftover from
+  when the list held every base method a class called. The bridge sends a list for every
+  class, so empty means "wraps nothing". The count now covers only the classes whose list
+  names the method (case-insensitive). The other extension classes still follow, grouped by
+  extended element as before, under "Other extension classes of <object> (no wrap of "<m>"
+  recorded): N". A class with no list at all (an older bridge) goes under "wraps unknown"
+  and is not counted. The filesystem fallback of the index path had the same clause and
+  gets the same split. Without a method filter the output is unchanged; the index path's
+  database rows still include classes with an empty list, because there it can mean unknown.
+- **Label file descriptors and the `.rnrproj` were written with LF line endings.** Visual
+  Studio writes both with CRLF. `labels(action="create")` wrote the `AxLabelFile\<Id>_<lang>.xml`
+  descriptor of a newly added language with LF (and a trailing newline VS doesn't write), so the
+  first save in VS showed every line as changed. Every `.rnrproj` update (adding an object,
+  removing one, adding label files) rebuilt the whole project file with LF.
+
+## [1.22.0] — 2026-10-30
+
+### Added
+- **Forms can be read from the database alone, and `find_references` lists the forms that
+  use a table.** The index stores each form's original XML (gzipped, table `form_source`,
+  about +37 MB for a full standard install), so on a host with no AOT files and no bridge,
+  such as the Azure read-only instance, `get_object_info` renders a form from the stored
+  copy and `options={include:"xml"}` returns its whole XML, paged. A stored copy is
+  labelled with the time it was written and is never used for a form this machine knows
+  was deleted. For a table target, the `find_references` fallback lists the forms that bind
+  it as a datasource (base forms only; form extensions, views, maps and code inside forms
+  are not covered). Form JSON now carries the XML as `raw` and roughly triples in size;
+  stored copies appear after a re-extract and re-index (pipeline order in SETUP_AZURE.md).
+- **`d365fo_file(action="modify", operations[], atomic: true)` restores the file when an
+  operation fails.** A batch stops at the first failure and keeps what applied before it
+  ("4/13 operation(s) applied, failed at #5"), leaving the object half-changed. With
+  `atomic: true` it writes back each changed file's bytes from before the call,
+  refreshes the provider and the index, and reports "0/N operation(s) applied (K rolled
+  back)". The default is unchanged, and its failure text now mentions the option.
+  An extension the batch had to create first, because an operation named one that did
+  not exist, is not removed: it is left as created, empty and in the project, and the
+  reply says so and names the delete that removes it.
+  `atomic` is a top-level batch option, not published in the schema (which sits at its
+  token budget), and it is not passed on to the operations.
+- **`naming.prefixSource=as-given`: the server renames nothing** (#1134). `none` dropped
+  the prefix but still rewrote every extension's token to the model name, so a team whose
+  token is an abbreviation (`VendTable.ABC` in model `ContosoCore`) got `VendTable.ContosoCore`
+  and `VendTableTable_ABC_ContosoCore_Extension`. With `as-given` (env
+  `EXTENSION_PREFIX_SOURCE=as-given`) every name is written as passed: objects, members,
+  extension elements and classes, with no prefix, suffix or token, and nothing inferred
+  from the model. A name that cannot be an AOT name is refused with the reason instead of
+  completed (an element extension without `<Base>.<Token>`, a class extension not ending
+  in `_Extension`, invalid characters, more than 81 characters). `validate_object_naming`
+  and `prepare` check only that structure. The prompt's CoC naming rule,
+  `get_workspace_info`, `doctor` and the cross-model refusal point to the project's
+  instruction file. `generate_object` says its derived class names carry no token. See
+  [Names exactly as given](docs/CUSTOM_EXTENSIONS.md#names-exactly-as-given).
+
+### Fixed
+- **Kernel EDTs were refused as "does not exist"** (#1179). `RecId`, `UserId`,
+  `DataAreaId`, `ValidFromDateTime`, `TimeOfDay` and the other EDTs the X++ runtime
+  defines have no `AxEdt` file, so the bridge's field guard refused `add-field` with
+  "extended data type 'UserId' does not exist — nothing was written",
+  `generate_object(scaffold)` refused to write such a table, `validate_code(references)`
+  reported `<ExtendedDataType>UserId` as an error, and `get_object_info` advised indexing a
+  file that cannot exist. Fields on `TimeOfDay`, `FieldId`, `TableId` … were also typed
+  String. One evidence-based list (`src/knowledge/kernelEdts.ts`, 83 names: every EDT
+  shipped fields or EDTs use that `readEdt` cannot resolve, with the base type all their
+  fields agree on) now answers those paths, mirrored in the bridge and kept equal by a
+  parity test. The bridge also writes `Time` fields and EDTs, which it could not before.
+- **`update_symbol_index` left a changed form's datasources and patterns stale.** It wrote
+  only the form's symbol row; it now writes everything the full build writes for a form,
+  and removing a form removes its datasource, pattern and stored-XML rows.
+- **Re-adding a table element that exists failed the call or the batch.** The bridge's
+  table `AddField`, `AddIndex`, `AddFieldGroup`, `AddFieldToFieldGroup` and
+  `AddRelation` added without checking the name, so an element that existed failed
+  inside the SDK ("already exists among elements") and stopped the `operations[]` batch
+  it was in. Table create always writes the five Auto field groups, so a follow-up
+  `add-field-group AutoReport` always collided. Each now answers as a skip, nothing
+  written, with the reason and the operation that changes the element. The index,
+  field-group and relation wrappers report it as "⏭️ NOT written" (the field paths
+  already did). The XML index fallback's "✅ already present" is a skip too, and the
+  valid-time-state and relation-property follow-ups no longer run after a skip. An
+  `add-field-group` with `fields` on a group that exists puts the missing fields into
+  it instead of dropping them, so `add-field-group AutoReport` with fields does what it
+  asked for.
+- **An EDT that extends an enum EDT had no enum.** The base-type inference from
+  `extends` left enum parents alone, so `extends: "NoYesId"` wrote a string EDT. And
+  neither writer could set the enum at all: the bridge's `SetAxEdtProperty` had no
+  `enumType` case (reported unsupported) and `generateAxEdtXml` never wrote
+  `<EnumType>`. An enum parent now gives `edtType: Enum` and the parent's `enumType`
+  (bridge `readEdt`, then the index chain), an explicit `edtType: Enum` without an enum
+  gets the parent's, and both writers write `<EnumType>` after `<TableReferences />`,
+  as all 1,512 shipped children of enum EDTs do.
+- **A value the bridge rejected was written anyway by the XML template.** When a bridge
+  create threw, create fell back to the template, also when the bridge had validated a
+  value and refused it ("'RegularTable' is not a valid TableType"). The template wrote
+  the same value unchecked, and the invalid object reached disk with only a "Written by
+  the local XML template" note. Such rejections (`-32602` with "is not a valid" or
+  "Invalid …") now stop the create with the bridge's message. Other bridge failures,
+  such as a model its provider does not know, still fall back as before, and so does
+  the field EDT check: the provider reports kernel EDTs (`RecId`, `UserId`,
+  `ValidFromDateTime`, …) as missing, so its "does not exist" is not proof that the
+  input is wrong. Such a rejection also no longer
+  gets the dispatcher's "bridge errored … re-run once the bridge is healthy" note: the
+  bridge answered, it is the input that was wrong.
+- **`undo` and `delete` left the element's compiler-metadata copy behind.** The copy at
+  `<Package>\XppMetadata\<Model>\<AxType>\<Name>.xml` was removed only by the phantom
+  prune of this server's incremental build, so a Visual Studio build or a packaging step
+  in between kept the deleted element in the manifests. Both now remove the copy when
+  they remove the source, by the prune's own rule, and drop the copy's type folder if
+  that left it empty.
+- **`undo` deleted a whole object that was merely uncommitted.** Inside a git work tree,
+  any untracked file was deleted, so an undo after a bad modify of an object from an
+  earlier session (common where objects are committed only at PR time) removed the
+  object itself, with no backup to restore and its `.rnrproj` entry left dangling. An
+  untracked file is now deleted only when this session created it, the rule the
+  non-git path already applied. Otherwise undo refuses and says why. The tables, forms
+  and report objects `generate_object(scaffold)` writes to disk are now recorded as
+  created too, so undo can still delete them (it could not outside git before).
+- **TTS001 warned on replace-code fragments and never reached extension classes.** The
+  write-time check counted `ttsbegin`/`ttscommit` in the text sent, so adding a line
+  after `ttsbegin;` in a balanced method warned "ttsbegin × 1, ttscommit × 0". For a
+  `replace-code`, TTS001 now stays only when the edit changes the balance between
+  `oldCode` and `newCode`. Separately, a method sent to an extension class was wrapped in
+  a synthetic class header whose line the rebase dropped, together with the TTS001 that
+  sat on it. That violation is now kept on line 1 of the code sent.
+- **COC004 reported `next` inside `try`, `finally` or `using` as conditional.** Any
+  block deeper than the method body counted as conditional, so CoC methods the compiler
+  accepts (`next insert()` inside `try … finally`, `return next insertFromForm()` inside
+  `using`) were refused as SYS10028 errors. Only blocks whose header branches or loops
+  (`if`, `else`, `while`, `for`, `do`, `switch`, `case`, `default`, `catch`) now make
+  `next` conditional, also when the header spans several lines (`if (a` / `&& b)` / `{`).
+  Across 3,193 shipped CoC classes that call `next`, COC004 fell from 189 hits to about
+  120. The rest are `[Replaceable]` base methods and data source overrides, which need a
+  lookup of the target method.
+- **A multi-line `replace-code` always missed in the bridge.** The bridge matches with
+  `Contains` against method source read through `IMetadataProvider`, which keeps the
+  file's CRLF, while clients send `oldCode` with LF. Every multi-line edit therefore
+  fell through to the XML writer with a "bridge declined" note (168 of 176 in one
+  project's sessions, against 3 of 181 single-line ones). `oldCode` and `newCode` now
+  reach the bridge in the line endings of the file on disk, which also keeps inserted
+  code in the file's own style.
+- **An already-applied `replace-code` counted as applied in a batch.** Its "no change
+  needed" answer returned before the outcome was marked skipped, so `operations[]`
+  reported it in "N/N operation(s) applied" and in the "verified on disk" trailer for a
+  write that never happened. It is now counted as skipped, as a bridge skip is.
+- **Every modify warned "overwrite: IGNORED" although nobody passed it.** MCP clients
+  send the schema's published defaults, so `overwrite: false` arrived on each call and
+  the silent-drop guard answered "not a recognised d365fo_file parameter … Re-run with
+  the correct parameter name(s)" after a call that had succeeded, once per entry in a
+  batch. A parameter whose value equals its published default is no longer reported.
+  A real value the operation cannot use (`overwrite: true` on modify) still is.
+- **`validate_code` accepted any value on a known enum; no check for an update on a
+  buffer never selected for update; prefix inference followed a minority prefix**
+  (#1164). `PurchStatus::NoSuchStatus` passed as verified once `PurchStatus` existed.
+  The references check now reads the value names from the enum's XML and from every
+  indexed `AxEnumExtension` of it (plus, for packages shipped without XML, the compiled
+  `bin\<Package>_AxEnumExtension.md`) and reports `unknown-enum-value` as an error.
+  Over the 312,533 `Enum::Value` uses in shipped X++ it raised 30, every one a .NET enum
+  of the same name brought in by a `using` directive, so a source with such a directive
+  gets a warning instead; a namespace-qualified `A.B.Enum::Value` and an enum whose XML
+  is not on this machine are not checked. New rule SEL011 warns on `buf.update()` /
+  `buf.delete()` when every select of `buf` since its declaration lacks `forupdate`,
+  `pessimisticlock` and `optimisticlock` — 20 hits over 1.1M shipped CDATA blocks,
+  all code paths that throw if reached. And the regular-object sample prefix inference
+  reads was the model's first 60 names in (type, name) order, so in a 3,800-object
+  `xyz` model with 69 `xyz3PL` names (digits sort first) inference answered `xyz3PL`;
+  the sample is now drawn as eight short runs spread over the model's rows.
 - **`add-method` and `remove-method` failed on a data entity.** The bridge has no
   data-entity arm for either, so `d365fo_file` modify returned "add-method not supported
   for objectType 'data-entity' via bridge (use XML fallback)" and applied nothing — the
@@ -38,13 +379,90 @@ those are called out explicitly below.
   applies, and read back before the reply says it landed. `replace-code` already fell back.
   A multi-method `add-method` also stops at the first refusal and reports it, instead of
   summarising a failed write as "Added N methods".
-- **`run_systest_class` could not find, or ran a stale, `SysTestConsole`** (#1143).
-  Current platforms ship the runner as `Bin\SysTestConsole.17.0.exe`; the tool looked
-  only for `SysTestConsole.exe`, so on an install without it no test could run, and on
-  an upgraded box that still has one it ran that leftover — on a 7.0.7858 VM it was
-  7.0.7452 from December 2024, beside a 17.0 build matching xppc. The highest versioned
-  `SysTestConsole.<version>.exe` now wins, the plain name is the fallback, and the
-  login and binding-redirect diagnoses read and name the `.config` of the binary that ran.
+- **`find_references` called the owner of a field or method "not a class".** The hint for
+  a form or table name passed as a class also checked the owner of every `Owner.member`
+  target, so `SalesTable.SalesId` as a field, or `SalesTable.initFromSalesQuotationTable`
+  as a method, came back with "⚠️ Type Mismatch: … is not a **class**" when no class was
+  asked for. The hint now runs only for a name looked up as a class.
+- **Labels were not compiled (on labelc 7.0.8199.32), behind a green build.** The build
+  passed the located csc and SDK tool folders as `-CompilerPath` / `-SdkToolsPath`;
+  that labelc lists both in its usage text but does not parse them, so it printed the
+  usage text, compiled nothing and exited 0, and new labels kept being reported as
+  unknown. The folders now go first on labelc's own PATH, which every labelc version
+  searches. A labelc run that reports no compilation result is now a failure instead
+  of a success.
+- **`run_systest_class` lost the result of a class with failing tests.** SysTestConsole
+  exits non-zero when a test fails, and the tool took that for a runner error: it never
+  read the XML result the run had written, replied `❌ Tests failed:` with the raw
+  console log, and the 5,000-char response cap cut that log mid-stack-trace — on a
+  43-test class with two failures, the counts and the second failure never arrived, and
+  the eval oracle scored the run as one that never ran. A run that wrote results is now
+  reported as `❌ Tests FAILED` from the XML: the counts, then each failure with its
+  message, then the passing tests, the path of the result file and the raw log last.
+  The tool has its own 12,000-char cap, and its truncation note no longer suggests
+  paging parameters it does not have.
+- **A default argument that is a call renamed the method on class create.** The class
+  split named each method after the identifier before the last `(` of its signature,
+  so `void run(TransDate _from = dateNull())` was written as a method named `dateNull`.
+  For methods inside the class body, a signature over several lines also lost its
+  attribute and every line above that call, with no error. The name and the method start
+  now come from the `(` that matches the signature's last `)`.
+- **An EDT that extends a real, integer or date EDT was created as a string EDT.** With
+  `extends` but no `edtType`, both the bridge and the XML template fell back to
+  `AxEdtString`, so `extends: "AmountCur"` wrote a string EDT extending a real one and
+  every field built on it was mistyped. The base type now comes from the parent EDT
+  (bridge first, then the symbol index). String and enum parents, and parents that
+  cannot be resolved, are left to the writers as before. `edtType` in the `AxEdt*` form
+  (`AxEdtReal`) also reaches the bridge as `Real` instead of falling through to a string.
+- **`find_references` blamed "this server mode" for a missing setting.** Whenever it fell
+  back to the name-based search it said "the cross-reference bridge is unavailable in this
+  server mode". On a traditional VM the usual cause is a running bridge with no
+  cross-reference database configured, since no XPP config names DYNAMICSXREFDB there.
+  The reply now tells three cases apart. A bridge that is still starting says so and asks for
+  a retry, rather than reporting a configuration problem (#826). A bridge that is not
+  connected says so. A bridge running without a cross-reference database says that, with a
+  separate line on how to configure one: `D365FO_XREF_DB_NAME` (usually DYNAMICSXREFDB),
+  `D365FO_XREF_DB_SERVER` when SQL Server is on another machine, where to set them, and to
+  restart the server. Label where-used gives the same reason and advice. For a type the
+  name-based search cannot serve (EDT, form, query, view, report), a failed query is now told
+  to check the bridge log and a disconnected bridge how to get it running, instead of both
+  being told to set `bridge.xrefDbName`. `doctor` now gives
+  the same advice. It used to name only the config file, although the `env` block of
+  `.mcp.json` takes precedence.
+- **Writes without a configured `projectPath` landed in an arbitrary project.** The
+  solution-folder scan returned the first `.rnrproj` whose file name contained the model
+  name, in directory order. In a solution with one project per feature area of a model
+  every project matched, so every create, modify and label write registered into the
+  alphabetically first one, and an exact `<Model>.rnrproj` lost to a shallower substring
+  match. The scan now returns `<Model>.rnrproj` wherever it sits, or the only project that
+  matches, and otherwise no project, as `autoDetectProject` already does when several
+  projects share a model. The log names the count and asks for `projectPath`, and the
+  create reply says how many projects matched instead of "Could not find .rnrproj".
+- **`replace-code` refused an edit that `methodName` made unambiguous.** The bridge
+  replaces only inside the named method, but the file-level preflight and the direct-XML
+  fallback counted `oldCode` over the whole file: a line such as `ttsbegin;` that also
+  occurs in another method was refused with "matches 2 times … or scope the call with
+  methodName", although the call already had one. Both now count only inside the named
+  method, the class declaration for `classDeclaration`, or the control or data source
+  override for `Owner.method`. The fallback also no longer edits a different method
+  when the named one does not contain `oldCode`, and `newCode` already present in another
+  method no longer turns the edit of the named one into "Nothing to do".
+- **`add-enum-value` without a value collided with the enum's first member.** The op
+  documents that the next available value is assigned, but the dispatcher sent 0 and the
+  bridge wrote it, so the new member duplicated the first one (the member without a
+  `<Value>`). xppc reports "Duplicate value '0' detected", and only on a full build. A new
+  member of an enum now gets one past the highest value in its XML. Enum extensions keep
+  0, which writes no `<Value>`: the platform numbers the members of an extensible enum,
+  and most shipped extensions (219 of 278) carry none.
+- **KW001 missed reserved-word names on EDT, table and class types and on parameters.**
+  The rule only matched declarations whose type was a primitive (`int from;`), so
+  `TransDate from;`, `CustTable outer;` and a parameter `(AmountMST sum)` reached the
+  build, where xppc names the token after the word instead of the word. It now takes any
+  type and also checks parameters. Statements whose first word is reserved (`return
+  count;`) and `order by` lists (`asc`, `desc`) are skipped. Across 95,753 shipped and
+  ISV class, table and form files it reports nothing. It did find one: the `args-object`
+  knowledge example declared `MyOrderTable order;`, and `order` is reserved, so the
+  example is now `orderTable`.
 - **An incremental build silently removed a data entity's OData actions.** xppc's
   `-incremental` mode rewrites the `bin\Dynamics.AX.<Package>.ODataExtends.runtime`
   entry of every entity it recompiles without its actions, and the AOS reads them from
@@ -59,6 +477,33 @@ those are called out explicitly below.
 - **A write said an object outside every `.rnrproj` "will not compile".** xppc compiles
   the whole model folder, project or not; the message now says the object compiles but no
   project shows it in Visual Studio.
+- **`run_bp_check` ignored `D365FO_PACKAGE_PATH` and its own `packagePath`.** With no XPP
+  config it took the metadata root from the drive scan, which finds
+  PackagesLocalDirectory. On a single-root VM whose metadata lives elsewhere (a repo
+  folder with the standard packages linked in) xppbp then failed with "No module with
+  the name … could be found under the source path". The root is now resolved as
+  `build_d365fo_project` resolves it: `D365FO_PACKAGE_PATH` before the drive scan, and an
+  explicit `packagePath` over both.
+- **`run_systest_class` could not find, or ran a stale, `SysTestConsole`** (#1143).
+  Current platforms ship the runner as `Bin\SysTestConsole.17.0.exe`; the tool looked
+  only for `SysTestConsole.exe`, so on an install without it no test could run, and on
+  an upgraded box that still has one it ran that leftover — on a 7.0.7858 VM it was
+  7.0.7452 from December 2024, beside a 17.0 build matching xppc. The highest versioned
+  `SysTestConsole.<version>.exe` now wins, the plain name is the fallback, and the
+  login and binding-redirect diagnoses read and name the `.config` of the binary that ran.
+  The debugger-prompt and per-method notes name that binary too. A versioned runner that
+  cannot start (an assembly missing from `Bin`, or a `.config` that cannot log in) hands
+  over to the plain one, and the reply says so: on another 7.0.7858 VM the 17.0 runner
+  lacks `System.ValueTuple 4.0.3.0` and has the unconfigured template, while the plain
+  one beside it runs green.
+- **A map listed no fields or method signatures, and most maps no mapped tables.**
+  `get_object_info` on an AxMap now renders its declaration, fields and method
+  signatures; map methods are indexed (search with `type: "map"`, `get_method_source`,
+  and the SQLite body fallback when the XML is unreachable). Table-to-map bindings were
+  read only from the map's own `<Mappings>`, which holds 147 of the shipped AOT's
+  bindings; the other 1,913 are declared by the tables and are now indexed too. Re-extract
+  metadata and rebuild the index to pick them up, or run
+  `scripts/backfill-map-mappings.mjs` against an existing index.
 - **`bpCheck` and `dbSync` were lost when a build was collected by a later call.**
   A build that outlives its wait window (`wait: false`, or past `waitTimeoutMs`) is
   collected by another call, usually with the model name alone, and that call's

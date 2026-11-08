@@ -19,14 +19,17 @@ import { ProjectFileManager, ProjectFileFinder, registerFileInActiveProject } fr
 import { verifyWrittenFile, renderWriteVerification, runInlineBpCheck, membershipOf, renderBatchEditHint } from './inlineWriteVerification.js';
 import { validateWrittenXpp } from './inlineXppValidation.js';
 import { createPhaseTimer } from '../../utils/phaseTimer.js';
-import { registerCustomModel } from '../../utils/modelClassifier.js';
-import { COC_BASE_SYMBOL_TYPES, inferExtendedBase, normalizeObjectName } from '../../utils/objectNaming.js';
+import { isAsGivenNamingMode, registerCustomModel } from '../../utils/modelClassifier.js';
+import {
+  COC_BASE_SYMBOL_TYPES, asGivenNameProblem, formatNameProblemAsGiven, inferExtendedBase, normalizeObjectName,
+  resolveFormattedExtensionName,
+} from '../../utils/objectNaming.js';
 import { lookupSymbolsNocase } from '../../utils/symbolLookup.js';
 import { PackageResolver } from '../../utils/packageResolver.js';
 import { crossModelWriteRefusal, standDownNotice } from '../../utils/crossModelWriteGuard.js';
 import { resolveAnchorModel } from './writeAnchorGuard.js';
 import { xppMethodSourceForXml } from '../../utils/xppFormat.js';
-import { bridgeValidateAfterWrite, canBridgeCreate, bridgeCreateObject, bridgeCreateSmartTable, isBridgeFailure, describeBridgeFailure } from '../../bridge/index.js';
+import { bridgeValidateAfterWrite, canBridgeCreate, bridgeCreateObject, bridgeCreateSmartTable, isBridgeFailure, describeBridgeFailure, rejectedBridgeInput } from '../../bridge/index.js';
 import type { BridgeFailure } from '../../bridge/index.js';
 import * as debouncedRefresh from '../../bridge/debouncedRefresh.js';
 import { subscriberAccessLevelValue } from '../../utils/subscriberAccessLevel.js';
@@ -42,6 +45,7 @@ import { validateFormExtensionControlShape, buildFormExtensionShapeError } from 
 import { gateOnReferenceErrors } from './resolveReferences.js';
 import { normalizeD365Xml } from '../../utils/d365XmlNormalizer.js';
 import { resolveEdtBaseType, resolveEdtEnumType, heuristicEdtBaseType, isEnumName, bridgeEdtBaseType } from '../smart/generateSmartTable.js';
+import { withEdtTypeFromExtends, bridgeEdtBaseTypeName } from './edtBaseTypeFromExtends.js';
 import { recordCreatedArtifact } from '../../workspace/createdArtifactLedger.js';
 import { resolveOrCreateLabelRef, type AutoLabelTarget } from './createLabel.js';
 import { isRawLabelText } from '../../utils/labelReference.js';
@@ -977,10 +981,16 @@ export async function handleCreateD365File(
     // tells "SalesTable + Mcp + CreditHold" — a name that already carries the token —
     // apart from a base that merely contains it. See ApplyObjectPrefixOptions.extendedBase.
     const statedBaseClass = (args.properties as Record<string, unknown> | undefined)?.baseClass;
+    const extensionOf = parseExtensionOfAttribute(args.sourceCode ?? args.xmlContent ?? '');
+    // The extended object's TYPE selects the class name format (EXTENSION_CLASS_NAME_FORMAT_*):
+    // from the [ExtensionOf(<kind>Str(…))] the caller wrote, else as stated. Never from the name.
+    const statedBaseType = (args.properties as Record<string, unknown> | undefined)?.baseObjectType;
+    const extendedBaseType =
+      extensionOf?.baseKind ?? (typeof statedBaseType === 'string' && statedBaseType ? statedBaseType : undefined);
     // With neither, the index stands in — the same inference prepare and
     // validate_object_naming use, so the name they predict is the name written.
     const extendedBase =
-      parseExtensionOfAttribute(args.sourceCode ?? args.xmlContent ?? '')?.baseObjectName ??
+      extensionOf?.baseObjectName ??
       (typeof statedBaseClass === 'string' && statedBaseClass ? statedBaseClass : undefined) ??
       inferExtendedBase(args.objectName, actualModelName, n => {
         try {
@@ -990,12 +1000,34 @@ export async function handleCreateD365File(
           return false;
         }
       });
+    // naming.prefixSource=as-given: the name is final, so one that cannot be a
+    // valid AOT name is refused with the reason instead of repaired (#1134).
+    const formatOptions = { extendedBase, baseType: extendedBaseType };
+    const asGivenProblem = isAsGivenNamingMode()
+      ? asGivenNameProblem(args.objectName, args.objectType) ??
+        formatNameProblemAsGiven(args.objectName, args.objectType, formatOptions)
+      : null;
+    if (asGivenProblem) {
+      return {
+        content: [{ type: 'text', text: `❌ Not created: ${asGivenProblem}` }],
+        isError: true,
+      };
+    }
+    // A configured name format that cannot name this extension stops the write:
+    // no format for the case (the user is asked), or a format that is wrong.
+    const formatted = resolveFormattedExtensionName(args.objectName, args.objectType, formatOptions);
+    if (formatted.kind === 'ask' || formatted.kind === 'invalid') {
+      return {
+        content: [{ type: 'text', text: `❌ Not created: ${formatted.message}` }],
+        isError: true,
+      };
+    }
     const finalObjectName = normalizeObjectName(
       args.objectName,
       args.objectType,
       actualModelName,
       (note: string) => console.error(`[create_d365fo_file] ${note}`),
-      { extendedBase },
+      formatOptions,
     );
     if (finalObjectName !== args.objectName) {
       console.error(`[create_d365fo_file] Applied naming: ${args.objectName} → ${finalObjectName}`);
@@ -1357,6 +1389,11 @@ export async function handleCreateD365File(
     // same ✅ as one the bridge performed.
     let bridgeFailure: BridgeFailure | null = null;
 
+    // Both writers below default an EDT to a string one; its parent decides instead.
+    if (args.objectType === 'edt') {
+      args.properties = await withEdtTypeFromExtends(args.properties, context?.bridge, context?.symbolIndex?.getReadDb?.());
+    }
+
     if (!args.xmlContent && !skipBridgeForEnum && context?.bridge && actualModelName && canBridgeCreate(args.objectType)) {
       try {
         // Settle any rebuild an earlier write in this session scheduled but did not
@@ -1524,7 +1561,7 @@ export async function handleCreateD365File(
         // edtType:"Real", extends:"AmountCur" — the written XML came back i:type="AxEdtString".
         if (args.objectType === 'edt' && bridgeParams.properties && 'edtType' in bridgeParams.properties) {
           const { edtType, ...rest } = bridgeParams.properties;
-          bridgeParams.properties = { ...rest, BaseType: edtType };
+          bridgeParams.properties = { ...rest, BaseType: bridgeEdtBaseTypeName(edtType) as string };
         }
 
         // For plain 'table' creates, prefer the bridge's BP-smart path
@@ -1613,7 +1650,7 @@ export async function handleCreateD365File(
                       );
                       projectMsg = `\n✅ Added to project: ${path.basename(detectedPath)}`;
                     } else {
-                      projectMsg = `\n⚠️ Could not find .rnrproj for model '${actualModelName}' in ${solutionPathToUse}`;
+                      projectMsg = `\n⚠️ ${await ProjectFileFinder.describeNoProject(solutionPathToUse, actualModelName)}`;
                     }
                   } catch (projErr) {
                     projectMsg = `\n⚠️ Could not add to project: ${projErr}`;
@@ -1745,7 +1782,7 @@ export async function handleCreateD365File(
                   );
                   projectMsg = `\n✅ Added to project: ${path.basename(detectedPath)}`;
                 } else {
-                  projectMsg = `\n⚠️ Could not find .rnrproj for model '${actualModelName}' in ${solutionPathToUse}`;
+                  projectMsg = `\n⚠️ ${await ProjectFileFinder.describeNoProject(solutionPathToUse, actualModelName)}`;
                 }
               } catch (projErr) {
                 projectMsg = `\n⚠️ Could not add to project: ${projErr}`;
@@ -1809,6 +1846,20 @@ export async function handleCreateD365File(
       } catch (bridgeErr) {
         console.error(`[create_d365fo_file] Bridge create failed, falling back to XML: ${bridgeErr}`);
       }
+    }
+
+    // The bridge validated a value and rejected it: the template would write the
+    // same value unchecked, so stop here instead of falling back.
+    const rejectedInput = bridgeFailure ? rejectedBridgeInput(bridgeFailure) : null;
+    if (rejectedInput) {
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Nothing was written — the bridge rejected an input value for ${args.objectType} ` +
+            `"${finalObjectName}": ${rejectedInput}\nCorrect the value and create it again.`,
+        }],
+        isError: true,
+      };
     }
 
     // A view's <DataSource> must name the referenced QUERY'S ROOT DATASOURCE, not
@@ -2155,9 +2206,8 @@ export async function handleCreateD365File(
           console.error(
             `[create_d365fo_file] No .rnrproj found in solution directory`
           );
-          projectMessage = `\n⚠️ Could not find .rnrproj file for model '${actualModelName}' in solution directory.\n` +
-            `Searched in: ${solutionPathToUse}\n` +
-            `Please specify projectPath parameter explicitly or add it to .mcp.json.\n`;
+          projectMessage =
+            `\n⚠️ ${await ProjectFileFinder.describeNoProject(solutionPathToUse, actualModelName)}\n`;
         } else {
           console.error(
             `[create_d365fo_file] Found project file: ${detectedPath}`

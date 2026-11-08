@@ -9,6 +9,9 @@ import * as fs from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { p } from '../ui.js';
 import { serializeValue, settingByPath } from '../../config/settings.js';
+import { xrefSetupAdvice } from '../../config/xrefSetup.js';
+import { SqliteXrefProvider } from '../../xref/sqliteXrefProvider.js';
+import { xrefSqliteCounting } from '../../xref/xrefSource.js';
 import { bridgeFreshness, type BridgeFreshness } from '../bridgeSources.js';
 import { bridgeBuildCommand, cliCommand, dataRoot, installMode, isWindows, paths, repoRoot } from '../context.js';
 import { commandExists } from '../exec.js';
@@ -349,7 +352,18 @@ export function checkPrefixResolution(
   label: string,
   pinned = false,
   noPrefix = false,
+  asGiven = false,
 ): CheckResult[] {
+  // naming.prefixSource=as-given (#1134): the server renames nothing, so there is
+  // no prefix or token to check — the convention lives in the instruction file.
+  if (asGiven) {
+    return [{
+      severity: 'ok',
+      message: `${label}: names as given (naming.prefixSource=as-given) — nothing is prefixed or renamed, ` +
+        `extensions included; the convention is the one in the project's instruction file` +
+        (configuredPrefix ? ` (naming.prefix "${configuredPrefix}" is not applied)` : ''),
+    }];
+  }
   // naming.prefixSource=none: no prefix by decision (#1085), so there is nothing
   // to infer, pin or warn about — only what the server does instead.
   if (noPrefix) {
@@ -653,8 +667,37 @@ export function checkXrefConfigured(store: SettingsStore): CheckResult | null {
   return {
     severity: 'info',
     message: 'Cross-reference database not configured — find_references uses a name-based search instead of DYNAMICSXREFDB',
-    fix: 'set bridge.xrefDbName to DYNAMICSXREFDB (and bridge.xrefDbServer if it is not localhost), then restart the server',
+    fix: xrefSetupAdvice(s => s),
   };
+}
+
+/**
+ * The xref SQLite file (D365FO_XREF_SQLITE_PATH), opened the way the server opens
+ * it: read-only, validated, then closed. Null when none is configured.
+ */
+export function checkXrefSqlite(store: SettingsStore): CheckResult | null {
+  // Same precedence as the server: the real environment (an .mcp.json `env` block) first.
+  const file = process.env.D365FO_XREF_SQLITE_PATH?.trim() || readPath(store, settingByPath('index.xrefSqlitePath')!, '');
+  if (!file) return null;
+  const provider = new SqliteXrefProvider(file, () => { /* the check reports it */ });
+  try {
+    const st = provider.status();
+    if (st.state === 'ok') {
+      return {
+        severity: 'ok',
+        message:
+          `Cross-reference SQLite file: exported ${st.exportedAt ?? '(unknown)'}, ${st.modules} modules, ` +
+          `totals ${xrefSqliteCounting(st)} (${file})`,
+      };
+    }
+    return {
+      severity: 'warn',
+      message: `Cross-reference SQLite file not usable — ${st.reason} (${file}); find_references falls back to a name-based search`,
+      fix: 'point D365FO_XREF_SQLITE_PATH (index.xrefSqlitePath) at a complete DYNAMICSXREFDB export with meta.schema 1, or unset it',
+    };
+  } finally {
+    provider.close();
+  }
 }
 
 /**
@@ -754,6 +797,7 @@ export async function doctorCommand(): Promise<void> {
   ).trim().toLowerCase();
   for (const r of checkPrefixResolution(
     configuredPrefix, detection.modelName, names, 'Naming', prefixSource === 'config', prefixSource === 'none',
+    prefixSource === 'as-given',
   )) emit(r);
 
   // C# bridge: the only write path; Windows-only.
@@ -785,6 +829,8 @@ export async function doctorCommand(): Promise<void> {
   } else {
     emit({ severity: 'info', message: `C# bridge skipped (Windows-only) — platform is ${process.platform}` });
   }
+  const xrefSqlite = checkXrefSqlite(root.store);
+  if (xrefSqlite) emit(xrefSqlite);
 
   // Instances
   const instances = listInstances();

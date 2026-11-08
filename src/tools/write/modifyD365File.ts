@@ -72,6 +72,7 @@ import {
   findIgnoredParams, renderIgnoredParamsWarning, findMissingMutationParams,
   paramCorrectionCandidates, canonicalParamForAlias, D365FO_FILE_OP_SPECS,
 } from '../specs/d365foFileOpSpecs.js';
+import { isPublishedDefault } from '../specs/opSpecs.js';
 import { lookupSymbolNocase } from '../../utils/symbolLookup.js';
 import { isValidModuleReferenceName } from '../../metadata/modelDescriptor.js';
 import { decodeXmlEntitiesFromXppSource } from '../../utils/xmlEscape.js';
@@ -84,11 +85,16 @@ import {
 import { resolveAnchorModel } from './writeAnchorGuard.js';
 import { resolveOrCreateLabelRef, type AutoLabelTarget } from './createLabel.js';
 import { isRawLabelText } from '../../utils/labelReference.js';
+import { readFileEol, withEol } from '../../utils/eolUtils.js';
+import { methodScopedLines } from '../../utils/methodSourceSpans.js';
+import { nextEnumValue } from '../../utils/axEnumProperties.js';
 // The direct-XML writers moved to their own module; this file dispatches to them.
 import {
   directXmlReplaceCode,
   directXmlModifyProperty,
   directXmlAddMenuItemToMenu,
+  directXmlAddMenuItemToMenuExtension,
+  directXmlAddSubmenu,
   viaXmlFallback,
   directXmlAddControl,
   coerceNoYesFlag,
@@ -357,37 +363,42 @@ export function preflightReplaceCode(
   content: string,
   oldCode: string,
   newCode: string,
+  methodName?: string,
 ): ReplaceCodeVerdict | null {
   const normOld = oldCode.replace(/\r\n/g, '\n');
   const normNew = newCode.replace(/\r\n/g, '\n');
   if (normOld.length === 0) return null;
 
-  const hits = occurrenceLines(content, normOld);
+  // Both the match count and the already-applied check look where the bridge acts: newCode
+  // in ANOTHER method is not this edit being done, and must not turn it into a no-op.
+  const inScope = (needle: string) => methodScopedLines(content, needle, methodName) ?? occurrenceLines(content, needle);
+  const hits = inScope(normOld);
+  const newHits = normNew.length > 0 ? inScope(normNew) : [];
 
   if (hits.length === 0) {
     // Not an error here — the bridge may still reach source this file-level view
     // cannot (form control overrides). But if the intended result is already
     // present, say THAT instead of letting "oldCode not found" imply the opposite.
-    if (normNew.length > 0 && content.includes(normNew)) {
+    if (newHits.length > 0) {
       return {
         kind: 'noop',
         message:
           `Nothing to do — the file already contains newCode ` +
-          `(line ${occurrenceLines(content, normNew)[0]}), and oldCode is not present. ` +
+          `(line ${newHits[0]}), and oldCode is not present. ` +
           `This edit has already been applied; do not retry it.`,
       };
     }
     return null;
   }
 
-  if (normNew.includes(normOld) && content.includes(normNew)) {
+  if (normNew.includes(normOld) && newHits.length > 0) {
     return {
       kind: 'noop',
       message:
         `Nothing to do — this edit is already applied, and repeating it would nest the text.\n` +
         `   oldCode  : ${JSON.stringify(normOld)}\n` +
         `   newCode  : ${JSON.stringify(normNew)}\n` +
-        `newCode is already in the file at line ${occurrenceLines(content, normNew)[0]}, and oldCode is a ` +
+        `newCode is already in the file at line ${newHits[0]}, and oldCode is a ` +
         `substring of it — so the ${hits.length} "match(es)" found ARE the newCode occurrence(s). ` +
         `Applying it would produce ${JSON.stringify(normNew.replace(normOld, normNew))}.\n` +
         `If you meant a different edit, pass a full-line oldCode with enough surrounding text to be unambiguous.`,
@@ -400,8 +411,8 @@ export function preflightReplaceCode(
       message:
         `⛔ replace-code refused — oldCode matches ${hits.length} times (lines ${hits.join(', ')}).\n` +
         `The bridge replaces EVERY occurrence, so this would edit all ${hits.length} of them. ` +
-        `Extend oldCode with surrounding lines until it identifies exactly one site, or scope the call ` +
-        `with methodName="<method>".`,
+        `Extend oldCode with surrounding lines until it identifies exactly one site` +
+        (methodName ? ` inside ${methodName}.` : `, or scope the call with methodName="<method>".`),
     };
   }
 
@@ -532,7 +543,7 @@ export const ModifyD365FileArgsSchema = z.object({
     'remove-diagnostic-suppression', 'add-diagnostic-suppression',
     'add-module-reference', 'remove-module-reference',
     'add-enum-value', 'modify-enum-value', 'remove-enum-value',
-    'add-display-method', 'add-table-method', 'add-menu-item-to-menu',
+    'add-display-method', 'add-table-method', 'add-menu-item-to-menu', 'add-submenu',
     'add-query-range', 'remove-query-range',
     'report-design',
   ]).describe(
@@ -598,6 +609,12 @@ export const ModifyD365FileArgsSchema = z.object({
     'Type of menu item to add: display (form), action (class), output (report). ' +
     'Used with add-menu-item-to-menu. Defaults to display.'
   ),
+  parentMenuElement: z.string().optional().describe(
+    'Submenu the item or submenu goes under (plain name, e.g. "Inquiries"). Used with add-menu-item-to-menu ' +
+    'and add-submenu; omit it for the top level.'
+  ),
+  submenuName: z.string().optional().describe('Name of the submenu to add. Used with add-submenu.'),
+  submenuLabel: z.string().optional().describe('Label id of the new submenu (e.g. "@MyModel:Rentals"). Used with add-submenu.'),
 
   // For add-control (form-extension only)
   controlName: z.string().optional().describe(
@@ -1234,12 +1251,22 @@ export interface ModifyOutcome {
    */
   createExtensionFirst?: { objectType: string; objectName: string };
   /**
+   * Set by the dispatcher once it has created that extension. An atomic batch restores
+   * a file to its bytes before the batch's first write to it, which for a file this
+   * call created is the empty extension, not "nothing": the rollback has to say so.
+   */
+  createdExtension?: { objectType: string; objectName: string; filePath: string };
+  /**
    * The bridge declined this operation and wrote nothing (an element of that
    * name is already there). The call did not fail, so it is not counted as a
    * failure — but it must not be counted as applied either, which is what
    * "3/3 operation(s) applied" did for three writes that never landed.
    */
   skipped?: boolean;
+  /** Set by an atomic operations[] batch: capture the target's bytes before the write. */
+  captureOriginal?: boolean;
+  /** The target's raw bytes before this operation (null: unreadable), when captureOriginal. */
+  originalBytes?: Buffer | null;
 }
 
 export async function modifyD365FileTool(
@@ -1281,7 +1308,7 @@ async function runModify(
     // told it was dropped. Measured on the NORMALISED keys, so a key that has
     // just been corrected is not also reported as ignored.
     const rawArgs = normalized.args;
-    const providedKeys = Object.keys(rawArgs).filter(k => rawArgs[k] !== undefined);
+    const providedKeys = Object.keys(rawArgs).filter(k => rawArgs[k] !== undefined && !isPublishedDefault(k, rawArgs[k]));
     const ignoredParams = findIgnoredParams(String(args.operation), providedKeys);
     const ignoredParamsWarning = renderIgnoredParamsWarning(String(args.operation), ignoredParams);
 
@@ -1916,6 +1943,7 @@ async function runModify(
      */
     const preImage: string | null = await timer.time('pre-write image',
       async () => readForMatching(actualFilePath).catch(() => null));
+    if (outcome?.captureOriginal && outcome.originalBytes === undefined) outcome.originalBytes = await fs.readFile(actualFilePath).catch(() => null);
     let _bridgeRetried = false;
     const addMethodOrXml = (methodName: string, source: string) =>
       addMethodWithXmlFallback(context.bridge, objectType, objectName, actualFilePath, methodName, source);
@@ -2259,10 +2287,10 @@ async function runModify(
             if (enumSet && !enumSet.success) {
               // Undo the half-written field. Two calls are not atomic, and what
               // they can leave behind — an AxTableFieldEnum with no enum — is a
-              // field the caller did not ask for. Worse, the bridge's AddField
-              // does not check for an existing field, so an agent that reads
-              // "failed" and simply repeats the call ends up with the field
-              // twice. Rolling back restores the pre-call state, which is the
+              // field the caller did not ask for. (AddField now skips a field that
+              // exists, so a repeat no longer adds it twice, and the skip guard
+              // above keeps this rollback off an existing field.) Rolling back
+              // restores the pre-call state, which is the
               // only state a failed operation may leave.
               const undone = await bridgeRemoveField(context.bridge, objectName, args.fieldName);
               bridgeResult = {
@@ -2406,8 +2434,8 @@ async function runModify(
             if (xmlFallbackResult) bridgeResult = viaXmlFallback(xmlFallbackResult);
           }
           // Valid-time-state key/mode live outside what the bridge's AddIndex knows —
-          // stamp them into the on-disk XML once the index exists (either path).
-          if (bridgeResult?.success) {
+          // stamp them into the on-disk XML once the index exists (either path, not a skip).
+          if (bridgeResult?.success && !bridgeResult.skipped) {
             const vtsResult = await directXmlSetIndexValidTimeState(
               actualFilePath,
               (args as any).indexName,
@@ -2517,7 +2545,7 @@ async function runModify(
           // The on-disk writer stays as the fallback for an OLD bridge binary, which
           // ignores the new params without complaint; it no-ops when the properties are
           // already present, so the bridge path costs one file read.
-          if (bridgeResult?.success && !(bridgeResult as any).propertiesWritten) {
+          if (bridgeResult?.success && !bridgeResult.skipped && !(bridgeResult as any).propertiesWritten) {
             const relProps = await directXmlEnsureRelationProperties(
               actualFilePath,
               (args as any).relationName,
@@ -2769,11 +2797,13 @@ async function runModify(
           const beforeContent = await readForMatching(actualFilePath);
           if (beforeContent !== null) {
             replaceCodeBefore = beforeContent;
-            const verdict = preflightReplaceCode(beforeContent, args.oldCode!, args.newCode!);
+            const verdict = preflightReplaceCode(beforeContent, args.oldCode!, args.newCode!, args.methodName);
             if (verdict?.kind === 'refuse') throw new Error(verdict.message);
             if (verdict?.kind === 'noop') {
               // An already-correct file is a success; "oldCode not found" would
-              // read as "the file is still wrong" and invite a retry.
+              // read as "the file is still wrong" and invite a retry. Nothing was
+              // written, so a batch must count it as skipped, not applied.
+              if (outcome) outcome.skipped = true;
               return {
                 content: [{
                   type: 'text',
@@ -2785,14 +2815,15 @@ async function runModify(
             }
           }
 
-          // Try bridge first
+          // Try bridge first, in the file's own line endings: it matches with Contains.
+          const eol = await readFileEol(actualFilePath);
           bridgeResult = await bridgeReplaceCode(
             context.bridge,
             objectType,
             objectName,
             args.methodName,
-            args.oldCode!,
-            args.newCode!,
+            withEol(args.oldCode!, eol),
+            withEol(args.newCode!, eol),
           );
 
           // Fallback: if bridge returns null (unsupported type or not connected)
@@ -2803,6 +2834,7 @@ async function runModify(
             const xmlFallbackResult = await directXmlReplaceCode(
               actualFilePath, args.oldCode!, args.newCode!,
               describeBridgeFallbackReason(context.bridge, objectType, 'replace-code', bridgeResult),
+              args.methodName,
             );
             if (xmlFallbackResult) {
               bridgeResult = viaXmlFallback(xmlFallbackResult);
@@ -2825,7 +2857,7 @@ async function runModify(
             context.bridge,
             objectName,
             (args as any).enumValueName,
-            (args as any).enumValueInt ?? 0,
+            (args as any).enumValueInt ?? (objectType === 'enum' ? nextEnumValue(await readForMatching(actualFilePath)) : 0),
             (args as any).enumValueLabel,
             (args as any).enumValueCountryRegionCodes,
           );
@@ -3137,7 +3169,13 @@ async function runModify(
         break;
       }
       case 'add-menu-item-to-menu': {
-        if ((args as any).menuItemToAdd) {
+        // No bridge path for a menu extension, and the AxMenu fallback below writes the wrong shape into one.
+        if ((args as any).menuItemToAdd && objectType === 'menu-extension') {
+          bridgeResult = viaXmlFallback(await directXmlAddMenuItemToMenuExtension(actualFilePath, args as any, symbolIndex));
+        } else if ((args as any).menuItemToAdd && (args as any).parentMenuElement) {
+          // The C# op has no parent: an item into a submenu of a menu is XML only.
+          bridgeResult = viaXmlFallback(await directXmlAddMenuItemToMenu(actualFilePath, (args as any).menuItemToAdd, (args as any).menuItemToAddType ?? 'display', (args as any).parentMenuElement));
+        } else if ((args as any).menuItemToAdd) {
           bridgeResult = await bridgeAddMenuItemToMenu(
             context.bridge,
             objectName,
@@ -3157,6 +3195,11 @@ async function runModify(
             }
           }
         }
+        break;
+      }
+      case 'add-submenu': {
+        // No C# op adds a submenu: XML only, on a menu and a menu extension alike.
+        if ((args as any).submenuName) bridgeResult = viaXmlFallback(await directXmlAddSubmenu(actualFilePath, args as any, symbolIndex));
         break;
       }
       default:
@@ -3396,7 +3439,7 @@ async function runModify(
 
     // The offline rule set on the same text. The object's <Declaration> supplies
     // the class header a method snippet lacks; without it, fewer rules apply.
-    const xppRuleNote = writtenXpp ? validateWrittenXpp(writtenXpp, afterContent) : '';
+    const xppRuleNote = writtenXpp ? validateWrittenXpp(writtenXpp, afterContent, operation === 'replace-code' ? args.oldCode : undefined) : '';
 
     const changedLinesNote = replaceCodeBefore !== null && afterContent !== null
       ? renderChangedLines(replaceCodeBefore, afterContent)

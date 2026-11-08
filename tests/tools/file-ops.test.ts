@@ -110,6 +110,7 @@ vi.mock('../../src/utils/modelClassifier', async (importOriginal) => {
     registerCustomModel: vi.fn(),
     resolveObjectPrefix: vi.fn(() => ''),
     isNoPrefixMode: vi.fn(() => false),
+    isAsGivenNamingMode: vi.fn(() => false),
     applyObjectPrefix: vi.fn((name: string) => name),
     getObjectSuffix: vi.fn(() => ''),
     applyObjectSuffix: vi.fn((name: string) => name),
@@ -916,6 +917,62 @@ describe('create_d365fo_file', () => {
     expect(sentParams.properties.BaseType).toBe('Real');
     expect(sentParams.properties.edtType).toBeUndefined();
     expect(sentParams.properties.Extends ?? sentParams.properties.extends).toBe('AmountCur');
+  });
+
+  it('edt create takes the base type from the EDT it extends when edtType is omitted', async () => {
+    // extends:"AmountCur" alone reached CreateEdt with no BaseType and was written as
+    // AxEdtString — a string EDT extending a real one, and every field on it mistyped.
+    const createObject = vi.fn(async () => ({
+      success: true,
+      filePath: 'K:\\PackagesLocalDirectory\\MyPackage\\MyModel\\AxEdt\\MyRebateAmount.xml',
+      api: 'IMetaEdtProvider.Create',
+    }));
+    const readEdt = vi.fn(async (name: string) => ({ name, baseType: 'Real' }));
+    const ctx = buildContext();
+    (ctx as any).bridge = { isReady: true, metadataAvailable: true, createObject, readEdt, validateObject: vi.fn(async () => null) };
+
+    const result = await handleCreateD365File(
+      req('create_d365fo_file', {
+        objectType: 'edt',
+        objectName: 'MyRebateAmount',
+        modelName: 'Contoso',
+        packageName: 'Contoso',
+        packagePath: 'K:\\PackagesLocalDirectory',
+        addToProject: false,
+        properties: { label: '@Contoso:RebateAmount', extends: 'MyTestAmountCurParent' },
+      }),
+      ctx,
+    );
+
+    expect((result as any).isError).toBeFalsy();
+    expect(readEdt).toHaveBeenCalledWith('MyTestAmountCurParent');
+    expect(createObject.mock.calls[0][0].properties.BaseType).toBe('Real');
+  });
+
+  it('edt create accepts edtType in the AxEdt* form the XML uses', async () => {
+    // The C# switch knows `real`, not `axedtreal` — the prefixed spelling fell through to AxEdtString.
+    const createObject = vi.fn(async () => ({
+      success: true,
+      filePath: 'K:\\PackagesLocalDirectory\\MyPackage\\MyModel\\AxEdt\\MyRebatePct.xml',
+      api: 'IMetaEdtProvider.Create',
+    }));
+    const ctx = buildContext();
+    (ctx as any).bridge = { isReady: true, metadataAvailable: true, createObject, validateObject: vi.fn(async () => null) };
+
+    await handleCreateD365File(
+      req('create_d365fo_file', {
+        objectType: 'edt',
+        objectName: 'MyRebatePct',
+        modelName: 'Contoso',
+        packageName: 'Contoso',
+        packagePath: 'K:\\PackagesLocalDirectory',
+        addToProject: false,
+        properties: { label: '@Contoso:RebatePct', extends: 'Percent', edtType: 'AxEdtReal' },
+      }),
+      ctx,
+    );
+
+    expect(createObject.mock.calls[0][0].properties.BaseType).toBe('Real');
   });
 
   it('blocks form-extension create when xmlContent uses the malformed control shape', async () => {
@@ -1823,6 +1880,103 @@ describe('modify_d365fo_file', () => {
     expect(writtenContent).not.toContain('AxMenuFunctionItem');
     expect(writtenContent).toContain('<MenuItemName>ContosoRentEquipmentTable</MenuItemName>');
     expect(writtenContent).toContain('<MenuItemType>Display</MenuItemType>');
+  });
+
+  it('add-menu-item-to-menu on a menu-extension bypasses the bridge and writes the extension shape', async () => {
+    // The C# AddMenuItemToMenu reads an AxMenu and cannot resolve "Base.Suffix"; the
+    // AxMenu fallback would write a bare <AxMenuElement> into the extension. Neither runs.
+    const fsMod = await import('fs/promises');
+    const extXml =
+      `<?xml version="1.0" encoding="utf-8"?>\n` +
+      `<AxMenuExtension xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="Microsoft.Dynamics.AX.Metadata.V1">\n` +
+      `\t<Name>ContosoMain.ContosoExtension</Name>\n` +
+      `\t<Customizations />\n` +
+      `\t<Elements />\n` +
+      `\t<MenuElementModifications />\n` +
+      `\t<PropertyModifications />\n` +
+      `</AxMenuExtension>`;
+    (fsMod.readFile as any).mockResolvedValue(extXml);
+
+    const addMenuItemToMenu = vi.fn();
+    (ctx as any).bridge = { isReady: true, metadataAvailable: true, addMenuItemToMenu, refreshProvider: vi.fn() };
+
+    const result = await modifyD365FileTool(
+      req('modify_d365fo_file', {
+        objectType: 'menu-extension',
+        objectName: 'ContosoMain.ContosoExtension',
+        operation: 'add-menu-item-to-menu',
+        menuItemToAdd: 'ContosoRentEquipmentTable',
+        menuItemToAddType: 'action',
+        filePath: 'K:\\PackagesLocalDirectory\\MyPackage\\MyModel\\AxMenuExtension\\ContosoMain.ContosoExtension.xml',
+      }),
+      ctx,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(addMenuItemToMenu).not.toHaveBeenCalled();
+    expect(result.content[0].text).toContain("applied via this server's XML writer");
+    const written = (fsMod.writeFile as any).mock.calls.find((c: any[]) =>
+      c[0].includes('ContosoMain.ContosoExtension.xml'),
+    );
+    expect(written).toBeDefined();
+    const writtenContent: string = written[1];
+    expect(writtenContent).toContain('<AxMenuExtensionElement xmlns="">');
+    expect(writtenContent).toContain('i:type="AxMenuElementMenuItem"');
+    expect(writtenContent).toContain('<MenuItemType>Action</MenuItemType>');
+    expect(writtenContent).not.toContain('<AxMenuElement ');
+  });
+
+  it('add-submenu on a menu-extension and an item into a submenu of a menu never call the bridge', async () => {
+    // Neither has a C# op: MetadataWriteService adds no submenus, and its
+    // AddMenuItemToMenu takes no parent. Both go straight to the XML writers.
+    const fsMod = await import('fs/promises');
+    const extXml =
+      `<?xml version="1.0" encoding="utf-8"?>\n` +
+      `<AxMenuExtension xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="Microsoft.Dynamics.AX.Metadata.V1">\n` +
+      `\t<Name>ContosoMain.ContosoExtension</Name>\n\t<Customizations />\n\t<Elements />\n` +
+      `\t<MenuElementModifications />\n\t<PropertyModifications />\n</AxMenuExtension>`;
+    const menuXml =
+      `<?xml version="1.0" encoding="utf-8"?>\n` +
+      `<AxMenu xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="Microsoft.Dynamics.AX.Metadata.V1">\n` +
+      `\t<Name>ContosoRentMenu</Name>\n\t<Elements>\n` +
+      `\t\t<AxMenuElement xmlns="" i:type="AxMenuElementSubMenu">\n\t\t\t<Name>ContosoSetup</Name>\n\t\t\t<Elements />\n\t\t</AxMenuElement>\n` +
+      `\t</Elements>\n</AxMenu>`;
+    const addMenuItemToMenu = vi.fn();
+    (ctx as any).bridge = { isReady: true, metadataAvailable: true, addMenuItemToMenu, refreshProvider: vi.fn() };
+
+    (fsMod.readFile as any).mockResolvedValue(extXml);
+    const sub = await modifyD365FileTool(
+      req('modify_d365fo_file', {
+        objectType: 'menu-extension',
+        objectName: 'ContosoMain.ContosoExtension',
+        operation: 'add-submenu',
+        submenuName: 'ContosoRentals',
+        submenuLabel: '@ContosoRental:Rentals',
+        filePath: 'K:\\PackagesLocalDirectory\\MyPackage\\MyModel\\AxMenuExtension\\ContosoMain.ContosoExtension.xml',
+      }),
+      ctx,
+    );
+    expect(sub.isError).toBeFalsy();
+    expect(sub.content[0].text).toContain("applied via this server's XML writer");
+    const writtenExt = (fsMod.writeFile as any).mock.calls.find((c: any[]) => c[0].includes('ContosoMain.ContosoExtension.xml'));
+    expect(writtenExt[1]).toContain('i:type="AxMenuElementSubMenu"');
+
+    (fsMod.readFile as any).mockResolvedValue(menuXml);
+    const item = await modifyD365FileTool(
+      req('modify_d365fo_file', {
+        objectType: 'menu',
+        objectName: 'ContosoRentMenu',
+        operation: 'add-menu-item-to-menu',
+        menuItemToAdd: 'ContosoRentEquipmentTable',
+        parentMenuElement: 'ContosoSetup',
+        filePath: 'K:\\PackagesLocalDirectory\\MyPackage\\MyModel\\AxMenu\\ContosoRentMenu.xml',
+      }),
+      ctx,
+    );
+    expect(item.isError).toBeFalsy();
+    expect(addMenuItemToMenu).not.toHaveBeenCalled();
+    const writtenMenu = (fsMod.writeFile as any).mock.calls.find((c: any[]) => c[0].includes('ContosoRentMenu.xml'));
+    expect(writtenMenu[1]).toMatch(/<Name>ContosoSetup<\/Name>\r?\n\t\t\t<Elements>\r?\n\t\t\t\t<AxMenuElement xmlns="" i:type="AxMenuElementMenuItem">/);
   });
 
   it('add-control on a form-extension bypasses the bridge and writes the XML directly', async () => {

@@ -13,6 +13,7 @@ import * as path from 'path';
 import { getConfigManager, fallbackPackagePath } from './configManager.js';
 import { resolveDbPathLocally } from './metadataResolver.js';
 import { findD365FileOnDisk } from './objectFileLookup.js';
+import { readIndexedXml, symbolTypesFor } from './indexedXmlLookup.js';
 
 /**
  * Locate the base form XML on disk, trying DB path → remapped path → filesystem scan.
@@ -82,7 +83,69 @@ export async function findBaseObjectXml(
 
   // 2. Filesystem scan using model from config
   const diskPath = await findD365FileOnDisk(objectType, objectName);
-  if (diskPath) return tryRead(diskPath);
+  if (diskPath) {
+    const content = await tryRead(diskPath);
+    if (content) return content;
+  }
 
+  // 2b. A type the index build never extracts has no symbols row, so steps 1 and 3
+  //     cannot find it, and step 2 looks in the configured model only — a STANDARD
+  //     object of that type would never be read. Look in every model of every
+  //     package root instead (~3,000 probes, ~200 ms on a full PackagesLocalDirectory).
+  const unindexedFolder = UNINDEXED_AOT_FOLDERS[objectType];
+  if (unindexedFolder) {
+    const found = await findInAnyPackage(unindexedFolder, objectName);
+    if (found) {
+      const content = await tryRead(found);
+      if (content) return content;
+    }
+  }
+
+  // 3. The copy the index stored (database-only hosts), after every file probe so a
+  //    local edit since indexing wins. Never for a file this host knows is deleted.
+  try {
+    const found = await readIndexedXml(symbolIndex.getReadDb(), objectName, symbolTypesFor(objectType));
+    if (found) return found.xml;
+  } catch { /* ignore */ }
+
+  return null;
+}
+
+/**
+ * Object types scripts/extract-metadata.ts does not extract, so the symbol index
+ * has no row for a shipped one: an AxMenu (OrganizationAdministration, …) is
+ * reachable only on disk.
+ */
+const UNINDEXED_AOT_FOLDERS: Record<string, string> = { menu: 'AxMenu' };
+
+/**
+ * `<root>/<package>/<model>/<axFolder>/<name>.xml` under every configured package
+ * root, every model folder included (package == model is not the rule: AxMenu
+ * OrganizationAdministration is in ApplicationSuite\Foundation). First hit wins,
+ * in root order.
+ */
+async function findInAnyPackage(axFolder: string, objectName: string): Promise<string | null> {
+  const cm = getConfigManager();
+  await cm.ensureLoaded();
+  const roots = [...new Set([
+    await cm.getCustomPackagesPath(),
+    (await cm.getDevEnvironmentType()) === 'ude' ? await cm.getMicrosoftPackagesPath() : null,
+    cm.getPackagePath() || fallbackPackagePath(),
+  ].filter((r): r is string => !!r))];
+  for (const root of roots) {
+    let packages: string[];
+    try { packages = await fs.readdir(root); } catch { continue; }
+    const hits = await Promise.all(packages.map(async pkg => {
+      let models: string[];
+      try { models = await fs.readdir(path.join(root, pkg)); } catch { return null; }
+      for (const model of models) {
+        const candidate = path.join(root, pkg, model, axFolder, `${objectName}.xml`);
+        try { await fs.access(candidate); return candidate; } catch { /* next */ }
+      }
+      return null;
+    }));
+    const hit = hits.find(h => h);
+    if (hit) return hit;
+  }
   return null;
 }
