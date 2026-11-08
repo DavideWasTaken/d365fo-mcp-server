@@ -12,7 +12,8 @@ name: Sync upstream
 #    and approve pull requests" in the repository settings.
 #
 # Secrets: UPSTREAM_SYNC_TOKEN (Contents + Workflows write on this fork; needed
-# when upstream edits .github/workflows).
+# when upstream edits .github/workflows). With Pull requests write too, it opens
+# the PR, so the PR's CI runs at once.
 
 on:
   schedule:
@@ -176,6 +177,9 @@ jobs:
           VERIFIED: ${{ steps.verify.outcome }}
           DRY_RUN: ${{ inputs.dry_run_from != '' }}
           GH_TOKEN: ${{ github.token }}
+          # A PR opened with GITHUB_TOKEN starts no workflow, so its CI would never
+          # run; opened with this token, it does.
+          PR_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
         run: |
           set -euo pipefail
           short=${UPSTREAM_SHA:0:7}
@@ -234,8 +238,13 @@ jobs:
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           } > "$RUNNER_TEMP/sync/pr.md"
           previous=$(open_sync_prs)
-          if url=$(gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$branch" \
-                --title "Sync upstream $short (needs review)" --body-file "$RUNNER_TEMP/sync/pr.md"); then
+          create_pr() {
+            gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "Sync upstream $short (needs review)" --body-file "$RUNNER_TEMP/sync/pr.md"
+          }
+          # Without Pull requests write on UPSTREAM_SYNC_TOKEN, fall back to
+          # GITHUB_TOKEN: the PR opens, but its CI starts only on the next push.
+          if url=$( { [ -n "$PR_TOKEN" ] && GH_TOKEN="$PR_TOKEN" create_pr; } || create_pr); then
             for n in $previous; do
               gh pr close "$n" -R "$GITHUB_REPOSITORY" --delete-branch -c "Superseded by $url." || true
             done
