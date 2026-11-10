@@ -15,7 +15,7 @@ import { compileModelLabels, type CompileLabelsResult } from '../write/compileLa
 import { pruneStaleCompilerMetadata } from './compilerMetadataPrune.js';
 import { describeMissingODataActions, scanODataActions, type MissingODataActions } from './odataActionGuard.js';
 import { recordBuild } from '../../utils/buildMarker.js';
-import type { ProgressReporter } from '../../utils/progressReporter.js';
+import { monotonicProgress, type ProgressReporter, startProgressHeartbeat } from '../../utils/progressReporter.js';
 import { restartAosRuntime, type RuntimeRestartResult } from './aosRuntime.js';
 import { localAosUrl } from './aosWebConfig.js';
 
@@ -308,6 +308,37 @@ interface AutoFullBuildReason {
   missing: MissingODataActions[];
 }
 
+<<<<<<< HEAD
+=======
+const asksFor = (v: unknown): boolean => v === true || v === 'true';
+
+type PostBuildRequest = { bpCheck?: boolean; dbSync?: boolean | string[]; deploy?: boolean; projectPath?: string; packagePath?: string };
+
+/**
+ * The start's scope wins over a collecting `dbSync: true`, but tables a collecting
+ * call names are added to the start's list, never dropped: that call reads the
+ * sync section as covering them.
+ */
+function mergeDbSync(started: PostBuildRequest['dbSync'], collecting: unknown): unknown {
+  if (started === true) return true;
+  if (!Array.isArray(started)) return collecting;
+  return Array.isArray(collecting) ? [...new Set([...started, ...collecting])] : started;
+}
+
+/** What the build asked for, plus what the collecting call adds; the start's dbSync scope wins. */
+function postBuildParams(started: PostBuildRequest | undefined, collecting: any): PostBuildRequest & Record<string, unknown> {
+  if (!started) return collecting ?? {};
+  return {
+    ...collecting,
+    bpCheck: started.bpCheck || asksFor(collecting?.bpCheck),
+    dbSync: mergeDbSync(started.dbSync, collecting?.dbSync),
+    deploy: started.deploy || asksFor(collecting?.deploy),
+    projectPath: collecting?.projectPath ?? started.projectPath,
+    packagePath: collecting?.packagePath ?? started.packagePath,
+  };
+}
+
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
 // A restart may affect every model hosted by this local AOS. Keep a durable
 // reservation shared by MCP processes using this temp directory until the
 // outcome has been saved. Never reap it by age. It is released without a human
@@ -514,10 +545,23 @@ export async function hasSourceChangesSince(
   since: number,
   budgetMs = 3000,
 ): Promise<boolean> {
+  return (await scanSourceChanges(modelDir, since, budgetMs)) !== 'unchanged';
+}
+
+/**
+ * hasSourceChangesSince with "could not tell" kept apart from "changed": 'unknown' when the time
+ * budget ran out or a subtree could not be read. A caller for which a wrong "changed" is costly
+ * (attaching to a running build, while xppc loads the disk) can then decide differently.
+ */
+export async function scanSourceChanges(
+  modelDir: string,
+  since: number,
+  budgetMs = 3000,
+): Promise<'changed' | 'unchanged' | 'unknown'> {
   const deadline = Date.now() + budgetMs;
   const stack: string[] = [modelDir];
   while (stack.length > 0) {
-    if (Date.now() > deadline) return true;
+    if (Date.now() > deadline) return 'unknown';
     const dir = stack.pop()!;
     let entries;
     try {
@@ -528,11 +572,11 @@ export async function hasSourceChangesSince(
       // XppMetadata, which a build creates and a full build deletes, so its
       // mtime moves during every such build — and `since` is now the build's
       // START, so that would make every result look stale.
-      if (dir !== modelDir && (await stat(dir)).mtimeMs > since) return true;
+      if (dir !== modelDir && (await stat(dir)).mtimeMs > since) return 'changed';
       entries = await readdir(dir, { withFileTypes: true });
     } catch {
       // Unreadable subtree: can't prove it is unchanged.
-      return true;
+      return 'unknown';
     }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
@@ -542,11 +586,11 @@ export async function hasSourceChangesSince(
         continue;
       }
       try {
-        if ((await stat(full)).mtimeMs > since) return true;
+        if ((await stat(full)).mtimeMs > since) return 'changed';
       } catch { /* vanished mid-scan — ignore */ }
     }
   }
-  return false;
+  return 'unchanged';
 }
 
 /**
@@ -1485,8 +1529,14 @@ async function renderFinishedBuildResult(
   dataDir?: string,
   /** The collecting call's arguments: only used to say they cannot add post-build actions. */
   params?: any,
+<<<<<<< HEAD
   /** True when this call collects a result saved by an earlier build. */
   collected = false,
+=======
+  context?: any,
+  /** Keeps the client informed during a post-build deployment, which takes minutes. */
+  onProgress?: ProgressReporter,
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
 ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
   const succeeded  = finalState.status === 'succeeded';
   const workflow = finalState.restartWorkflow;
@@ -1557,6 +1607,43 @@ async function renderFinishedBuildResult(
     });
   }
 
+<<<<<<< HEAD
+=======
+  // "compile, then check best practices" was the second most common pair in the
+  // sampled sessions (10 build -> run_bp_check hand-offs). Opt-in, and only on a
+  // green build: when the compile failed, the compiler errors ARE the answer and
+  // a BP report on half-built metadata is noise.
+  const postParams = postBuildParams(finalState.postBuildRequest, params);
+  const bpSection = workflow ? workflow.bpSection ?? ''
+    : succeeded ? await withHeartbeat(onProgress, `🔍 ${targetModel} built; running the best-practice check`,
+      () => runPostBuildBpCheck(postParams, targetModel, context, `${finalState.logFile}.bp.txt`)) : '';
+  // Same shape, same reason, for the database sync: a table change is not
+  // finished until AxDB is synchronised, and that sync always follows a
+  // successful build. Gated on `succeeded` for the same reason bpCheck is —
+  // syncing metadata the compiler just rejected is worse than not syncing.
+  // On UDE a deployment replaces the local sync: there is no local database, and the sync
+  // runs in the environment as part of the deployment (dbSync = Release package, full sync).
+  const deploying = !workflow && asksFor(postParams.deploy);
+  // What this render does, for a call that waited on the same build but did not render it
+  // (resultCollectedElsewhere): it runs whatever it asked for that is not in this list.
+  if (finalState.jobId) {
+    recordPostBuildRan(finalState.jobId, {
+      succeeded,
+      bpCheck: workflow ? !!workflow.request.bpCheck : asksFor(postParams.bpCheck),
+      dbSync: syncScope(workflow ? workflow.request.dbSync : postParams.dbSync),
+      deploy: deploying,
+    });
+  }
+  const sync = workflow ? workflow.sync ?? { section: '', failed: false } : succeeded && !deploying
+    ? await withHeartbeat(onProgress, `🗄️ ${targetModel} built; synchronizing the database`,
+      () => runPostBuildDbSync(postParams, targetModel, context))
+    : { section: '', failed: false };
+  const deployment = deploying && succeeded
+    ? await runPostBuildDeploy(postParams, targetModel, `${finalState.logFile}.deploy.log`, onProgress)
+    : { section: '', failed: false };
+  const syncSection = sync.section + deployment.section;
+
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
   return {
     content: [{
       type: 'text',
@@ -1569,11 +1656,12 @@ async function renderFinishedBuildResult(
     }],
     // A failed sync is an error even though the compile passed: the caller asked
     // for "build and sync", and half of that did not happen.
-    ...((!succeeded || sync.failed || runtimeWarning) ? { isError: true } : {}),
+    ...((!succeeded || sync.failed || deployment.failed || runtimeWarning) ? { isError: true } : {}),
   };
 }
 
 /**
+<<<<<<< HEAD
  * Fork: printed with a green build that did not restart the AOS. A compile does
  * not prove the running AOS loaded the new objects, and testing against it
  * would exercise the old ones.
@@ -1585,6 +1673,49 @@ function runtimeRestartGuidance(): string {
     'IIS Express instance hosting this environment through its normal launcher. A stopped W3SVC ' +
     'does not identify or restart an IIS Express host. Compilation does not prove deployment or runtime availability; ' +
     'verify the objects after the restart. This tool has not restarted the host.\n';
+=======
+ * Runs a post-build step that reports no progress of its own, sending a heartbeat meanwhile.
+ * build_d365fo_project reports its own progress, so the dispatcher's heartbeat does not cover
+ * it, and a minutes-long BP check or sync would otherwise outlast a client's request timeout.
+ */
+async function withHeartbeat<T>(onProgress: ProgressReporter | undefined, message: string, step: () => Promise<T>): Promise<T> {
+  const stop = onProgress ? startProgressHeartbeat(onProgress, message, PROGRESS_INTERVAL_MS) : undefined;
+  try {
+    return await step();
+  } finally {
+    stop?.();
+  }
+}
+
+/**
+ * Deployment of the model's package to its UDE environment, after a successful build, when
+ * `deploy: true` (udeDeploy.ts). `dbSync` (true or a list) selects a Release package with a full
+ * sync; the deployment cannot sync a table list, so a list syncs everything too.
+ */
+async function runPostBuildDeploy(
+  params: any,
+  targetModel: string,
+  logFile: string,
+  onProgress?: ProgressReporter,
+): Promise<{ section: string; failed: boolean }> {
+  try {
+    const deploy = await import('./udeDeploy.js');
+    const check = await deploy.checkDeployPrerequisites(getConfigManager(), params);
+    if (!check.ok) return { section: `\n\n--- Deployment (deploy) — FAILED, the build did not ---\n❌ ${check.message.replace(/ Nothing was built\./, ' Nothing was deployed.')}`, failed: true };
+    const paths = await deploy.udePackagePaths();
+    if (!paths) return { section: '\n\n--- Deployment (deploy) — FAILED, the build did not ---\n❌ The XPP config names no packages folders. Nothing was deployed.', failed: true };
+    const fullSync = params?.dbSync === true || params?.dbSync === 'true' || Array.isArray(params?.dbSync);
+    const result = await deploy.deployModelToUde({
+      modelName: targetModel, ...paths, dataverse: check.dataverse, fullSync, logFile, onProgress,
+    });
+    const listNote = Array.isArray(params?.dbSync)
+      ? '\nℹ️ A deployment syncs the whole database; the dbSync table list was not used to narrow it.'
+      : '';
+    return { section: result.section + (result.failed ? '' : listNote), failed: result.failed };
+  } catch (e: any) {
+    return { section: `\n\n⚠️ deploy requested but could not run: ${e?.message ?? e}`, failed: true };
+  }
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
 }
 
 /**
@@ -1905,18 +2036,53 @@ function shareDeliveredResult(state: BuildJobState, result: Promise<BuildToolRes
   const jobId = state.jobId;
   if (jobId) {
     deliveredResults.set(jobId, result);
-    result.catch(() => {}); // the caller that rendered it gets the rejection
-    setTimeout(() => deliveredResults.delete(jobId), DELIVERED_RESULT_TTL_MS).unref();
+    // Kept for a while after the render FINISHES, not after it starts: a render that deploys
+    // with a full sync takes about 20 minutes, and its waiters read both maps only then.
+    result.catch(() => {}).finally(() => {
+      setTimeout(() => {
+        deliveredResults.delete(jobId);
+        postBuildRanByJob.delete(jobId);
+      }, DELIVERED_RESULT_TTL_MS).unref();
+    });
   }
   return result;
 }
 
 /**
+<<<<<<< HEAD
  * Renders a finished state for a waiter once, sharing the result with other
  * waiters on the same job. Fork: the state is not consumed (see activeBuildJobs).
  */
 async function deliverFinishedState(
   state: BuildJobState,
+=======
+ * The calls of this process waiting on a build, by jobId, from when they start waiting until
+ * they return. Until then one of them may render the build or run steps of its own on its result
+ * (runRemainingPostBuild), reading the package's bin. buildAgainAfterRunningBuild waits for all
+ * of them before a new compile rewrites bin — including a call that has not yet noticed the
+ * build finished, and steps a call has not reached yet.
+ */
+const callsOnJob = new Map<string, Set<Promise<void>>>();
+
+/** Registers a call waiting on `jobId`; the returned function ends that registration. */
+function joinBuildJob(jobId: string | undefined): () => void {
+  if (!jobId) return () => {};
+  let leave!: () => void;
+  const done = new Promise<void>(resolve => { leave = resolve; });
+  const calls = callsOnJob.get(jobId) ?? new Set<Promise<void>>();
+  callsOnJob.set(jobId, calls);
+  calls.add(done);
+  return () => {
+    leave();
+    calls.delete(done);
+    if (calls.size === 0 && callsOnJob.get(jobId) === calls) callsOnJob.delete(jobId);
+  };
+}
+
+/** Consumes a finished state and renders it once, sharing the result with other waiters. */
+function deliverFinishedState(
+  state: BuildJobState, customPackagesPath: string,
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
   render: () => Promise<BuildToolResult>,
 ): Promise<BuildToolResult> {
   // Looked up and registered without an await in between, so two waiters that
@@ -1928,6 +2094,7 @@ async function deliverFinishedState(
   return shareDeliveredResult(state, render());
 }
 
+<<<<<<< HEAD
 /** The result another waiter on `jobId` got in this process, with a note saying so. */
 async function sharedResult(jobId: string | undefined): Promise<BuildToolResult | undefined> {
   const shared = jobId ? deliveredResults.get(jobId) : undefined;
@@ -1941,25 +2108,237 @@ async function sharedResult(jobId: string | undefined): Promise<BuildToolResult 
 }
 
 /** What a waiter answers when the build it waited on was cleared or replaced. */
+=======
+/** A dbSync scope: true (the project's), a table list, or undefined when no sync. */
+type SyncScope = true | string[] | undefined;
+
+function syncScope(value: unknown): SyncScope {
+  if (value === true || value === 'true') return true;
+  if (Array.isArray(value)) return value.filter((t): t is string => typeof t === 'string');
+  return undefined;
+}
+
+/** The part of `asked` that `ran` did not cover. */
+function remainingSync(asked: SyncScope, ran: SyncScope): SyncScope {
+  if (asked === undefined || ran === true) return undefined;
+  if (ran === undefined || asked === true) return asked;
+  const done = new Set(ran.map(t => t.toLowerCase()));
+  const left = asked.filter(t => !done.has(t.toLowerCase()));
+  return left.length > 0 ? left : undefined;
+}
+
+type StepResult = { section: string; failed: boolean };
+
+/** The post-build steps one render of a build ran (see renderFinishedBuildResult). */
+interface PostBuildRan {
+  succeeded: boolean;
+  bpCheck: boolean;
+  /** The sync scope — in the environment when `deploy`, else the local SyncEngine run. */
+  dbSync: SyncScope;
+  deploy: boolean;
+  /**
+   * Steps that calls which attached to this build started after it (runRemainingPostBuild), by
+   * step key: a second such call that needs the same step waits for this one rather than
+   * running it again — two deployments, or two BP checks writing one report file.
+   */
+  started: Map<string, Promise<StepResult>>;
+}
+
+/** By jobId, for as long as the shared result is kept (shareDeliveredResult removes it). */
+const postBuildRanByJob = new Map<string, PostBuildRan>();
+
+function recordPostBuildRan(jobId: string, ran: Omit<PostBuildRan, 'started'>): void {
+  postBuildRanByJob.set(jobId, { ...ran, started: new Map() });
+}
+
+/**
+ * Runs the post-build steps a call asked for that the call which rendered the build did not
+ * run. Only the rendering call runs post-build steps, with ITS request (merged with what the
+ * build was started with), so a call that attached to the running build with other options —
+ * `deploy: true` onto someone's plain build — would otherwise get the shared result without
+ * them, and test code that was never deployed. Steps the render already ran are not repeated,
+ * and one that another such call already started is waited for, not run again (ran.started).
+ */
+async function runRemainingPostBuild(
+  params: any, ran: PostBuildRan, targetModel: string, logFile: string, context: any, onProgress?: ProgressReporter,
+): Promise<{ section: string; failed: boolean; ranHere: string[] }> {
+  const none = { section: '', failed: false, ranHere: [] as string[] };
+  if (!ran.succeeded || !params) return none;
+  const ranHere: string[] = [];
+  let section = '';
+  let failed = false;
+  /** Runs the step under `key`, or joins the run another waiting call started; registered before any await. */
+  const step = async (label: string, keys: string[], run: () => Promise<StepResult>) => {
+    const existing = keys.map(k => ran.started.get(k)).find(Boolean);
+    const result = existing ?? run();
+    if (!existing) ran.started.set(keys[0], result);
+    const { section: text, failed: stepFailed } = await result;
+    section += text;
+    failed ||= stepFailed;
+    ranHere.push(existing ? `${label}, run by another call waiting on this build` : label);
+  };
+
+  if (asksFor(params.bpCheck) && !ran.bpCheck) {
+    await step('bpCheck', ['bpCheck'], async () => ({
+      section: await withHeartbeat(onProgress, `🔍 ${targetModel} built; running the best-practice check`,
+        () => runPostBuildBpCheck(params, targetModel, context, `${logFile}.bp.txt`)),
+      failed: false,
+    }));
+  }
+  const asked = syncScope(params.dbSync);
+  if (asksFor(params.deploy)) {
+    // A deployment without sync does not satisfy a request for one with it; one with sync
+    // satisfies both.
+    if (!ran.deploy || (asked !== undefined && ran.dbSync === undefined)) {
+      const withSync = asked !== undefined;
+      await step(withSync ? 'deploy with dbSync' : 'deploy', withSync ? ['deploy:sync'] : ['deploy', 'deploy:sync'],
+        () => runPostBuildDeploy(params, targetModel, `${logFile}.deploy.log`, onProgress));
+    }
+  } else {
+    // A sync that ran in the environment, as part of a deployment, is not a local one.
+    const left = remainingSync(asked, ran.deploy ? undefined : ran.dbSync);
+    if (left !== undefined) {
+      await step('dbSync', [`dbSync:${JSON.stringify(left)}`], () =>
+        withHeartbeat(onProgress, `🗄️ ${targetModel} built; synchronizing the database`,
+          () => runPostBuildDbSync({ ...params, dbSync: left }, targetModel, context)));
+    }
+  }
+  return { section, failed, ranHere };
+}
+
+/** What a waiter answers when the build it waited on was consumed by another call. */
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
 async function resultCollectedElsewhere(
   jobId: string | undefined, last: BuildJobState, targetModel: string,
+  params?: any, context?: any, onProgress?: ProgressReporter,
 ): Promise<BuildToolResult> {
+<<<<<<< HEAD
   const shared = await sharedResult(jobId);
   if (shared) return shared;
+=======
+  const shared = jobId ? deliveredResults.get(jobId) : undefined;
+  if (shared) {
+    try {
+      const result = await shared;
+      const ran = jobId ? postBuildRanByJob.get(jobId) : undefined;
+      const extra = ran
+        ? await runRemainingPostBuild(params, ran, targetModel, last.logFile, context, onProgress)
+        : { section: '', failed: false, ranHere: [] as string[] };
+      // No record of what the render ran: the steps only this call asked for are unknown.
+      const unknown = ran ? { text: '', isError: false } : unconfirmedSteps(params, last);
+      const note = 'ℹ️  Another call waiting on this build collected its result first. This is that same ' +
+        'result — nothing was recompiled. Post-build steps that call ran are not repeated' +
+        (extra.ranHere.length > 0 ? `; the ones only this call asked for ran now (${extra.ranHere.join(', ')}).` : '.') +
+        '\n\n';
+      return {
+        ...result,
+        content: [{ type: 'text', text: note + (result.content[0]?.text ?? '') + extra.section + unknown.text }],
+        ...(result.isError || extra.failed || unknown.isError ? { isError: true } : {}),
+      };
+    } catch { /* say what this call knows on its own */ }
+  }
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
   const tailLog = await readLogTail(last.logFile);
+  const unknown = unconfirmedSteps(params, last);
   return {
     content: [{
       type: 'text',
       text: [
         `ℹ️  The build of ${targetModel} is no longer tracked: another call collected its result ` +
           `(possibly in another MCP server process), or the build was cleared or replaced.`,
-        `Its result cannot be shown here. Call build_d365fo_project again to get a result of your own.`,
+        `Its result cannot be shown here. Call build_d365fo_project again to get a result of your own.` +
+          unknown.text,
         ``,
         `--- Latest log ---`,
         tailLog,
       ].join('\n'),
     }],
+    ...(unknown.isError ? { isError: true } : {}),
   };
+}
+
+/**
+ * The post-build steps a call asked for that nothing confirms ran — when the build it waited on
+ * was rendered by a call whose record of steps is not available here (another process). The
+ * steps the build was STARTED with did run (every render merges that request); a missing
+ * deploy or sync, which the next step relies on, makes the result an error.
+ */
+function unconfirmedSteps(params: any, last: BuildJobState): { text: string; isError: boolean } {
+  const stored = last.restartWorkflow?.request ?? last.postBuildRequest;
+  const asked = [
+    ...(asksFor(params?.bpCheck) && !stored?.bpCheck ? ['bpCheck'] : []),
+    ...(remainingSync(syncScope(params?.dbSync), syncScope(stored?.dbSync)) !== undefined ? ['dbSync'] : []),
+    ...(asksFor(params?.deploy) && !(stored as PostBuildRequest | undefined)?.deploy ? ['deploy'] : []),
+  ];
+  if (asked.length === 0) return { text: '', isError: false };
+  return {
+    text: `\n\n⚠️ Not confirmed: ${asked.join(', ')}, which this call asked for, may not have run. Call ` +
+      'build_d365fo_project again with them before relying on it.',
+    isError: asked.some(s => s !== 'bpCheck'),
+  };
+}
+
+/**
+ * A build of this model is running, but its sources changed after it started, so it may not
+ * compile them. Attaching would hand this call that build's result as its own — the same
+ * "green for a tree nobody compiled" that finishedResultStillDescribesDisk prevents for a
+ * finished build. Two compiles of one model cannot run at once, so: wait for the running build,
+ * give its own callers a moment to collect it, then compile again in this call.
+ *
+ * The wait for the running build and the new build each get the full wait window.
+ */
+async function buildAgainAfterRunningBuild(
+  running: BuildJobState, targetModel: string, customPackagesPath: string,
+  params: any, context: any, onProgress: ProgressReporter | undefined, timeoutMs: number, startedAt: number,
+): Promise<BuildToolResult> {
+  await buildLog('INFO', `sources of ${targetModel} changed after the running build (PID ${running.pid}) started; ` +
+    'waiting for it, then building again');
+  const prior = await waitForBuildCompletion(targetModel, customPackagesPath, timeoutMs, onProgress, startedAt, running.jobId);
+  if (prior.outcome === 'timeout') {
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    return {
+      content: [{
+        type: 'text',
+        text: `⏳ Model: ${targetModel} — a build that started before your latest changes is still running ` +
+          `(PID: ${running.pid}, ${elapsed}s). It may not include them, so nothing has been compiled for them yet; ` +
+          'this call would compile again once it finishes.\n\n' +
+          `Call build_d365fo_project again (with a larger waitTimeoutMs) to wait for it and compile.`,
+      }],
+    };
+  }
+  if (prior.outcome === 'orphaned' && prior.state && !prior.state.restartWorkflow) {
+    // Its process died without a result: clear it, or the next call reports that death
+    // instead of compiling.
+    await clearOwnedBuildState(prior.state, customPackagesPath);
+  } else {
+    // Let the callers waiting on the earlier build collect it (they poll every second) before
+    // the next call, finding its sources out of date, clears it.
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const read = await readBuildStateForWait(targetModel, customPackagesPath);
+      if (read === 'gone' || (read && read.jobId !== running.jobId)) break;
+      await new Promise(r => setTimeout(r, 250));
+    }
+  }
+  // Collected means its render has only STARTED: the BP check, sync or deployment it runs, and
+  // the steps other waiting calls run on its result afterwards, read the package's bin, which a
+  // new compile rewrites. Wait for every call of this process on that build (callsOnJob), and
+  // for its render when a call that did not wait on it collected it. Calls in other processes
+  // are not known here.
+  const render = running.jobId ? deliveredResults.get(running.jobId) : undefined;
+  const calls = running.jobId ? [...(callsOnJob.get(running.jobId) ?? [])] : [];
+  if (render || calls.length > 0) {
+    await withHeartbeat(onProgress, `🔨 ${targetModel}: waiting for the earlier build's post-build steps`, async () => {
+      await render?.catch(() => {});
+      await Promise.allSettled(calls);
+    });
+  }
+  const fresh = await buildProjectTool(params, context, onProgress);
+  // Whatever that call did — compiled, or reported why it could not — it did it for the sources
+  // as they are now.
+  const note = `ℹ️  A build of ${targetModel} that started before your latest changes was running. It was left ` +
+    'to finish, and this call then requested a build of the current sources:\n\n';
+  return { ...fresh, content: [{ type: 'text', text: note + (fresh.content[0]?.text ?? '') }] };
 }
 
 /** One-line "what is happening right now" for a progress notification. */
@@ -2022,7 +2401,17 @@ function renderWaitTimeoutGuidance(elapsedSec: number, timeoutMs: number, state?
 // force/start race with reserving a restart, including across MCP processes.
 type BuildToolResult = { content: Array<{ type: string; text: string }>; isError?: boolean };
 
-export const buildProjectTool = async (params: any, context: any, onProgress?: ProgressReporter): Promise<BuildToolResult> => {
+export const buildProjectTool = async (params: any, context: any, reportProgress?: ProgressReporter): Promise<BuildToolResult> => {
+  // One increasing progress value for the whole call: the compile wait, post-build steps and a
+  // compile-again each count seconds from their own start (see monotonicProgress).
+  const onProgress = reportProgress && monotonicProgress(reportProgress);
+  // A deployment that cannot happen is refused before the compile, and the sign-in happens now
+  // rather than after a build of several minutes. Outside the admission lock: a sign-in in the
+  // browser can take minutes, and that lock holds up every build start, of every model.
+  if (asksFor(params?.deploy)) {
+    const refusal = await deployRefusal(params, onProgress);
+    if (refusal) return { content: [{ type: 'text', text: `❌ ${refusal}` }], isError: true };
+  }
   let result!: ReturnType<typeof buildProjectInternal>;
   let released = '';
   await withOperationLock('build-aos-admission', async () => {
@@ -2036,6 +2425,21 @@ export const buildProjectTool = async (params: any, context: any, onProgress?: P
   if (!released || !response.content[0]) return response;
   return { ...response, content: [{ ...response.content[0], text: released + response.content[0].text }, ...response.content.slice(1)] };
 };
+
+/** Why `deploy` cannot run, or undefined once the prerequisites hold and the user is signed in. */
+async function deployRefusal(params: any, onProgress?: ProgressReporter): Promise<string | undefined> {
+  try {
+    const configManager = getConfigManager();
+    await configManager.ensureLoaded();
+    const { checkDeployPrerequisites, signInForDeploy } = await import('./udeDeploy.js');
+    const check = await checkDeployPrerequisites(configManager, params);
+    if (!check.ok) return check.message;
+    return await withHeartbeat(onProgress, '🔑 Signing in to the Dataverse environment for the deployment',
+      () => signInForDeploy(check.dataverse));
+  } catch (error: any) {
+    return `deploy could not be prepared: ${error?.message ?? error}. Nothing was built.`;
+  }
+}
 
 const buildProjectInternal = async (params: any, context: any, onProgress: ProgressReporter | undefined, releaseAdmission: () => void): Promise<BuildToolResult> => {
   const dataDir: string | undefined = context?.symbolIndex?.dataDir;
@@ -2246,11 +2650,20 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
         // a client's absolute request timeout can be shorter than any build.
         const waitForFinish = params.wait === true;
         if (waitForFinish) {
+          // The scan reads the whole model tree: not while holding admission, which every
+          // build start of every model waits on.
           releaseAdmission();
+          // Sources changed since that build started: its result would not be this call's.
+          // Measured from the start, as for a finished build: xppc reads sources during the compile.
+          const sourcesAt = new Date(existingState.sourcesAsOf ?? existingState.startTime).getTime();
+          const sources = Number.isFinite(sourcesAt)
+            ? await scanSourceChanges(path.join(customPackagesPath, targetModel), sourcesAt)
+            : 'unknown';
           const timeoutMs = resolveWaitTimeoutMs(params);
           // A malformed startTime must not leak NaN into a progress payload.
           const stateStartedAt = new Date(existingState.startTime).getTime();
           const startedAt = Number.isFinite(stateStartedAt) ? stateStartedAt : Date.now();
+<<<<<<< HEAD
           const wait = await waitForBuildCompletion(
             targetModel, customPackagesPath, timeoutMs, onProgress, startedAt, existingState.jobId,
           );
@@ -2258,21 +2671,64 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
             const finished = wait.state;
             return await deliverFinishedState(finished,
               () => renderFinishedBuildResult(finished, targetModel, dataDir, params));
+=======
+          if (sources === 'changed') {
+            return await buildAgainAfterRunningBuild(
+              existingState, targetModel, customPackagesPath, params, context, onProgress, timeoutMs, startedAt,
+            );
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
           }
-          if (wait.outcome === 'gone') {
-            return await resultCollectedElsewhere(existingState.jobId, wait.state ?? existingState, targetModel);
-          }
-          const tailLog = await readLogTail(existingState.logFile);
-          if (wait.outcome === 'orphaned') {
-            if (wait.state && !wait.state.restartWorkflow) await clearOwnedBuildState(wait.state, customPackagesPath);
+          // Could not tell (the scan ran out of time while xppc loads the disk, or a folder could
+          // not be read): compiling again would double a large model's build on a guess, so attach,
+          // and say the result may not cover edits made after that build started.
+          const attachNote = sources === 'unknown'
+            ? `ℹ️  A build of ${targetModel} started at ${existingState.startTime} was already running, and whether ` +
+              'its sources changed since could not be checked in time. This is that build\'s result: build again if ' +
+              'you edited files after it started.\n\n'
+            : '';
+          const withAttachNote = (result: BuildToolResult): BuildToolResult => attachNote
+            ? { ...result, content: [{ type: 'text', text: attachNote + (result.content[0]?.text ?? '') }] }
+            : result;
+          const leaveJob = joinBuildJob(existingState.jobId);
+          try {
+            const wait = await waitForBuildCompletion(
+              targetModel, customPackagesPath, timeoutMs, onProgress, startedAt, existingState.jobId,
+            );
+            if (wait.outcome === 'finished' && wait.state) {
+              const finished = wait.state;
+              return withAttachNote(await deliverFinishedState(finished, customPackagesPath,
+                () => renderFinishedBuildResult(finished, targetModel, dataDir, params, context, onProgress)));
+            }
+            if (wait.outcome === 'gone') {
+              return withAttachNote(await resultCollectedElsewhere(
+                existingState.jobId, wait.state ?? existingState, targetModel, params, context, onProgress));
+            }
+            const tailLog = await readLogTail(existingState.logFile);
+            if (wait.outcome === 'orphaned') {
+              if (wait.state && !wait.state.restartWorkflow) await clearOwnedBuildState(wait.state, customPackagesPath);
+              return {
+                content: [{
+                  type: 'text',
+                  text: `❌ Build process (PID: ${existingState.pid}) disappeared without reporting a result.\n\nModel: ${targetModel}\n\nRe-run with force: true to start a clean build.\n\n--- Log ---\n${tailLog}`,
+                }],
+                isError: true,
+              };
+            }
+            // Timed out — emit a "still running" snapshot so the caller can choose
+            // to extend the wait window with another call.
             return {
               content: [{
                 type: 'text',
-                text: `❌ Build process (PID: ${existingState.pid}) disappeared without reporting a result.\n\nModel: ${targetModel}\n\nRe-run with force: true to start a clean build.\n\n--- Log ---\n${tailLog}`,
+                text:
+                  `⏳ ${modelLine} (PID: ${existingState.pid}, running ${elapsed}s; wait timeout reached)\n\n` +
+                  renderWaitTimeoutGuidance(elapsed, timeoutMs, wait.state) + '\n\n' +
+                  `--- Latest log ---\n${tailLog}`,
               }],
-              isError: true,
             };
+          } finally {
+            leaveJob();
           }
+<<<<<<< HEAD
           // Timed out — emit a "still running" snapshot so the caller can choose
           // to extend the wait window with another call.
           return {
@@ -2284,6 +2740,8 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
                 `--- Latest log ---\n${tailLog}`,
             }],
           };
+=======
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
         }
         return {
           content: [{
@@ -2348,8 +2806,23 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       // that no longer describes the disk is discarded.
       if (!stillCurrent) await clearBuildState(targetModel, customPackagesPath);
       if (stillCurrent) {
+<<<<<<< HEAD
         releaseAdmission();
         const result = await renderFinishedBuildResult(existingState, targetModel, dataDir, params, true);
+=======
+        // Admission is still held here, so write directly rather than through
+        // consumeFinishedState, which takes it.
+        if (existingState.restartWorkflow && !existingState.resultDelivered) {
+          await writeBuildState({ ...existingState, resultDelivered: true }, customPackagesPath);
+        }
+        // Shared before the state is cleared: a call still waiting on this
+        // build finds the result the moment it sees the state gone.
+        const result = await shareDeliveredResult(existingState, (async () => {
+          if (!existingState.restartWorkflow) await clearBuildState(targetModel, customPackagesPath);
+          releaseAdmission();
+          return renderFinishedBuildResult(existingState, targetModel, dataDir, params, context, onProgress);
+        })());
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
         // Say plainly that nothing was compiled just now, so a reader can never
         // mistake a collected result for a fresh one.
         const collected =
@@ -2474,6 +2947,18 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       tool: 'xppc.exe',
       startTime: jobStartedAt,
       sourcesAsOf: jobStartedAt,
+<<<<<<< HEAD
+=======
+      ...(params.restartAos !== true && (asksFor(params.bpCheck) || params.dbSync === 'true' || params.dbSync === true || Array.isArray(params.dbSync) || asksFor(params.deploy))
+        ? { postBuildRequest: {
+            bpCheck: asksFor(params.bpCheck),
+            dbSync: Array.isArray(params.dbSync) ? [...params.dbSync] : asksFor(params.dbSync),
+            deploy: asksFor(params.deploy),
+            projectPath: params.projectPath,
+            packagePath: params.packagePath,
+          } }
+        : {}),
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
       logFile: jobLogFile,
       status: 'running',
       phase: 'preparing',
@@ -2553,6 +3038,7 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
     if (waitForFinish) {
       const timeoutMs = resolveWaitTimeoutMs(params);
       const startedAt = new Date(initState.startTime).getTime();
+<<<<<<< HEAD
       const wait = await waitForBuildCompletion(
         targetModel, customPackagesPath, timeoutMs, onProgress, startedAt, initState.jobId,
       );
@@ -2568,41 +3054,68 @@ const buildProjectInternal = async (params: any, context: any, onProgress: Progr
       const tailLog = await readLogTail(wait.state?.logFile ?? jobLogFile);
       if (wait.outcome === 'orphaned') {
         if (wait.state && !wait.state.restartWorkflow) await clearOwnedBuildState(wait.state, customPackagesPath);
+=======
+      // Registered for the job while it waits: see callsOnJob.
+      const leaveJob = joinBuildJob(initState.jobId);
+      try {
+        const wait = await waitForBuildCompletion(
+          targetModel, customPackagesPath, timeoutMs, onProgress, startedAt, initState.jobId,
+        );
+        if (wait.outcome === 'finished' && wait.state) {
+          const finished = wait.state;
+          return await deliverFinishedState(finished, customPackagesPath,
+            () => renderFinishedBuildResult(finished, targetModel, dataDir, params, context, onProgress));
+        }
+        if (wait.outcome === 'gone') {
+          return await resultCollectedElsewhere(initState.jobId, wait.state ?? initState, targetModel, params, context, onProgress);
+        }
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        const tailLog = await readLogTail(wait.state?.logFile ?? jobLogFile);
+        if (wait.outcome === 'orphaned') {
+          if (wait.state && !wait.state.restartWorkflow) await clearOwnedBuildState(wait.state, customPackagesPath);
+          return {
+            content: [{
+              type: 'text',
+              text: [
+                `❌ ${modeLabel} process (PID: ${pid}) disappeared after ${elapsed}s without reporting a result.`,
+                ``,
+                `Target: ${targetModel}`,
+                `Log:    ${jobLogFile}`,
+                ``,
+                `Re-run with force: true to start a clean build.`,
+                ``,
+                `--- Latest log ---`,
+                tailLog,
+              ].join('\n'),
+            }],
+            isError: true,
+          };
+        }
+        // Timed out — leave the build running so a follow-up call can collect it.
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
         return {
           content: [{
             type: 'text',
             text: [
+<<<<<<< HEAD
               `❌ ${modeLabel} process (PID: ${wait.state?.pid || pid || 'pending'}) disappeared after ${elapsed}s without reporting a result.`,
+=======
+              `⏳ ${modeLabel} still running after ${elapsed}s (wait window of ${Math.round(timeoutMs / 1000)}s reached, build continues in background)`,
+>>>>>>> 289cfc304d0f20ce35e96389324acefdafc5d861
               ``,
               `Target: ${targetModel}`,
               `Log:    ${jobLogFile}`,
               ``,
-              `Re-run with force: true to start a clean build.`,
+              renderWaitTimeoutGuidance(elapsed, timeoutMs, wait.state),
               ``,
               `--- Latest log ---`,
               tailLog,
             ].join('\n'),
           }],
-          isError: true,
         };
+      } finally {
+        leaveJob();
       }
-      // Timed out — leave the build running so a follow-up call can collect it.
-      return {
-        content: [{
-          type: 'text',
-          text: [
-            `⏳ ${modeLabel} still running after ${elapsed}s (wait window of ${Math.round(timeoutMs / 1000)}s reached, build continues in background)`,
-            ``,
-            `Target: ${targetModel}`,
-            `Log:    ${jobLogFile}`,
-            ``,
-            renderWaitTimeoutGuidance(elapsed, timeoutMs, wait.state),
-            ``,
-            `--- Latest log ---`,
-            tailLog,
-          ].join('\n'),
-        }],
-      };
     }
 
     // Fork default: return while preparation/compilation continues in the background.
