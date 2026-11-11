@@ -49,6 +49,7 @@ import { normalizeD365Xml } from '../../utils/d365XmlNormalizer.js';
 import {
   entityAddDataSource, entityAddFieldBindingError, entityAddField, modifyFieldOp, ENTITY_AND_FIELD_ZOD_PARAMS,
 } from './dataEntityOps.js';
+import { formStructureOp, FORM_STRUCTURE_ZOD_PARAMS } from './formStructureOps.js';
 import {
   upsertFormExtensionControlProperty, resolveControlPropertyTarget,
 } from '../../utils/formExtensionControlModifications.js';
@@ -63,6 +64,7 @@ import {
 } from '../analysis/validateFormPattern.js';
 import { validateEdtExtensionChange } from '../../utils/edtExtensionValidator.js';
 import { upsertWrittenFileIntoIndex } from './inlineIndexUpsert.js';
+import { applySecurityReferenceOperation, securityReferenceTypeRefusal } from './securityReferences.js';
 import { verifyWrittenFile, renderWriteVerification, runInlineBpCheck, membershipOf, renderBatchEditHint, verifyFormElementOrder } from './inlineWriteVerification.js';
 import { lintXppSelect } from '../../utils/xppSelectLint.js';
 import { validateWrittenXpp } from './inlineXppValidation.js';
@@ -82,7 +84,7 @@ import {
 import {
   crossModelWriteRefusal, standDownNotice, baseObjectOf, type ExistingExtension,
 } from '../../utils/crossModelWriteGuard.js';
-import { resolveAnchorModel } from './writeAnchorGuard.js';
+import { resolveAnchorModel, resolveModelDependency } from './writeAnchorGuard.js';
 import { resolveOrCreateLabelRef, type AutoLabelTarget } from './createLabel.js';
 import { isRawLabelText } from '../../utils/labelReference.js';
 import { readFileEol, withEol } from '../../utils/eolUtils.js';
@@ -91,7 +93,7 @@ import { nextEnumValue } from '../../utils/axEnumProperties.js';
 // The direct-XML writers moved to their own module; this file dispatches to them.
 import {
   directXmlReplaceCode,
-  directXmlModifyProperty,
+  directXmlModifyProperty, directXmlSetBpAccessProperty, directXmlSetRelationOnDelete,
   directXmlAddMenuItemToMenu,
   directXmlAddMenuItemToMenuExtension,
   directXmlAddSubmenu,
@@ -517,7 +519,7 @@ export const ModifyD365FileArgsSchema = z.object({
     'menu-item-display', 'menu-item-action', 'menu-item-output',
     'menu-item-display-extension', 'menu-item-action-extension', 'menu-item-output-extension',
     'menu', 'menu-extension',
-    'security-privilege', 'security-duty', 'security-role',
+    'security-privilege', 'security-duty', 'security-role', 'security-duty-extension', 'security-role-extension',
     'ignore-diagnostic-list',
     'model-descriptor',
   ]).describe('Type of D365FO object'),
@@ -539,11 +541,11 @@ export const ModifyD365FileArgsSchema = z.object({
     'add-data-source',
     'modify-property',
     'add-control', 'remove-control',
-    'add-entry-point', 'remove-entry-point',
+    'add-entry-point', 'remove-entry-point', 'add-duty', 'remove-duty', 'add-privilege', 'remove-privilege',
     'remove-diagnostic-suppression', 'add-diagnostic-suppression',
     'add-module-reference', 'remove-module-reference',
     'add-enum-value', 'modify-enum-value', 'remove-enum-value',
-    'add-display-method', 'add-table-method', 'add-menu-item-to-menu', 'add-submenu',
+    'add-display-method', 'add-table-method', 'add-menu-item-to-menu', 'add-submenu', 'move-control', 'wrap-controls',
     'add-query-range', 'remove-query-range',
     'report-design',
   ]).describe(
@@ -705,8 +707,9 @@ export const ModifyD365FileArgsSchema = z.object({
   fieldLabel: z.string().optional().describe('Field label'),
   fieldHelpText: z.string().optional().describe('Field help text (modify-field).'),
   fieldEnumType: z.string().optional().describe('Enum name for an enum-typed field. On add-field this replaces fieldType entirely — it writes AxTableFieldEnum + EnumType and needs no EDT. Also settable later with modify-field.'),
+  fieldEnumValues: z.array(z.unknown()).optional().describe('add-field: values of the enum created when fieldEnumType does not exist (names or {name,label}).'),
   fieldStringSize: z.string().optional().describe('String size to set on the field (modify-field, for string-typed fields).'),
-  ...ENTITY_AND_FIELD_ZOD_PARAMS,
+  ...ENTITY_AND_FIELD_ZOD_PARAMS, ...FORM_STRUCTURE_ZOD_PARAMS,
   fields: z.array(z.object({
     name: z.string(),
     edt: z.string().optional(),
@@ -764,6 +767,7 @@ export const ModifyD365FileArgsSchema = z.object({
   relationCardinality: z.string().optional().describe('Cardinality on local side: ZeroMore | ZeroOne | ExactlyOne (default: ZeroMore).'),
   relatedTableCardinality: z.string().optional().describe('Cardinality on related side: ZeroMore | ZeroOne | ExactlyOne (default: ExactlyOne).'),
   relationshipType: z.string().optional().describe('Relationship type: Association | Composition | Aggregation | Link | Specialization (default: Association).'),
+  relationOnDelete: z.string().optional().describe('OnDelete for add-relation: None | Restricted | Cascade | CascadeRestricted. On a relation that already exists (table or table-extension) it sets only OnDelete.'),
 
   // For add-delete-action / remove-delete-action (table)
   deleteActionTable: z.string().optional().describe(
@@ -824,6 +828,10 @@ export const ModifyD365FileArgsSchema = z.object({
     'add-entry-point: permissions the <Grant> carries. "view"/"read" grant Read; "maintain" grants ' +
     'Correct+Create+Delete+Read+Update (plus Invoke on a ServiceOperation). Defaults to "view".'
   ),
+
+  // For add-/remove-duty and add-/remove-privilege (security role, duty, their extensions).
+  dutyName: z.string().optional().describe('add-duty / remove-duty: REQUIRED — the duty to reference, by AOT name.'),
+  privilegeName: z.string().optional().describe('add-privilege / remove-privilege: REQUIRED — the privilege to reference, by AOT name.'),
 
   // For remove-diagnostic-suppression (ignore-diagnostic-list).
   diagnosticPath: z.string().optional().describe(
@@ -946,7 +954,8 @@ export const ModifyD365FileArgsSchema = z.object({
   propertyPath: z.string().optional().describe(
     'Property name to set. ' +
     'For tables (AxTable): TableGroup, TitleField1, TitleField2, TableType (TempDB/RegularTable/InMemory), ' +
-    'CacheLookup, ClusteredIndex, PrimaryIndex, SaveDataPerCompany, Label, HelpText, Extends, SystemTable. ' +
+    'CacheLookup, ClusteredIndex, PrimaryIndex, SaveDataPerCompany, Label, HelpText, Extends, SystemTable, ' +
+    'OperationalDomain, SubscriberAccessLevel (also on menu items; values in the modify-property op-spec). ' +
     'For table-extensions (AxTableExtension): properties are stored inside <PropertyModifications> as ' +
     '<AxPropertyModification> entries. Supported: Label, HelpText, TableGroup, CacheLookup, TitleField1, TitleField2, ' +
     'ClusteredIndex, PrimaryIndex, SaveDataPerCompany, TableType, SystemTable, ' +
@@ -1333,8 +1342,8 @@ async function runModify(
 
     // Decode XML entities in X++ payloads. An AI that copied entity-encoded code (an
     // SSRS <Text> block, or escaped doc comments like "/// &lt;summary&gt;") sends
-    // &lt;/&gt;/&amp;/&quot;/&apos;; the serializer would otherwise write them literally
-    // into the source. No-op for clean X++ — literal <, >, && and " are not entities.
+    // &lt;/&gt;/&amp;/&quot;/&apos;. Real X++ round-trips unchanged: a doc comment's
+    // P&amp;L and markup in string literals stay as written (see utils/xmlEscape.ts).
     if (args.sourceCode) args.sourceCode = decodeXmlEntitiesFromXppSource(args.sourceCode);
     if ((args as any).methodCode) (args as any).methodCode = decodeXmlEntitiesFromXppSource((args as any).methodCode);
     if (args.newCode) args.newCode = decodeXmlEntitiesFromXppSource(args.newCode);
@@ -1366,6 +1375,9 @@ async function runModify(
         };
       }
     }
+
+    const securityRefusal = securityReferenceTypeRefusal(String(args.operation), args.objectType);
+    if (securityRefusal) return { content: [{ type: 'text', text: securityRefusal }], isError: true };
 
     // Grounding enforcement: modifying an extension changes the behaviour of an
     // existing base object — when GROUNDING_ENFORCE=true the model must prove
@@ -1741,7 +1753,8 @@ async function runModify(
           `To extend a standard object, create an extension instead:\n` +
           `  • Table: d365fo_file(action="create", objectType="table-extension", objectName="${objectName}.${configuredModel || 'YourModel'}Extension")\n` +
           `  • Class: d365fo_file(action="create", objectType="class-extension", objectName="${objectName}_Extension")\n` +
-          `  • Form:  d365fo_file(action="create", objectType="form-extension", objectName="${objectName}.${configuredModel || 'YourModel'}Extension")`
+          `  • Form:  d365fo_file(action="create", objectType="form-extension", objectName="${objectName}.${configuredModel || 'YourModel'}Extension")\n` +
+          `  • Role / duty: objectType="security-role-extension" / "security-duty-extension", same objectName form`
         );
       }
     }
@@ -1786,6 +1799,7 @@ async function runModify(
       activeModel,
       toolSwitchedModel: getConfigManager().getToolProjectSwitch()?.forcedModel ?? null,
       action: 'modify' as const,
+      dependency: await resolveModelDependency(owningModel, activeModel, filePath),
       existingExtensions: findExtensionsInModel(
         symbolIndex,
         baseObjectOf(objectName, objectType),
@@ -2346,7 +2360,7 @@ async function runModify(
         break;
       }
       case 'modify-field': {
-        if (args.fieldName) bridgeResult = await modifyFieldOp(context.bridge, objectName, actualFilePath, args as any);
+        if (args.fieldName) bridgeResult = await modifyFieldOp(context.bridge, objectName, actualFilePath, args as any, symbolIndex);
         break;
       }
       case 'rename-field': {
@@ -2509,6 +2523,8 @@ async function runModify(
         break;
       }
       case 'add-relation': {
+        const onDel = (args as any).relationOnDelete && (args as any).relationName ? await directXmlSetRelationOnDelete(actualFilePath, objectName, (args as any).relationName, (args as any).relationOnDelete) : null;
+        if (onDel) { if (!onDel.success) return { content: [{ type: 'text', text: onDel.message }], isError: true }; bridgeResult = viaXmlFallback(onDel); break; }
         if ((args as any).relationName && (args as any).relatedTable) {
           // relationConstraints is documented as [{ fieldName, relatedFieldName }], but the
           // bridge/C# WriteRelationConstraint deserializes the JSON keys { field, relatedField }.
@@ -2560,6 +2576,8 @@ async function runModify(
               };
             }
           }
+          const newOnDel = bridgeResult?.success && (args as any).relationOnDelete ? await directXmlSetRelationOnDelete(actualFilePath, objectName, (args as any).relationName, (args as any).relationOnDelete) : null;
+          if (newOnDel && bridgeResult) bridgeResult = { ...bridgeResult, success: newOnDel.success, message: `${bridgeResult.message}\n${newOnDel.message}` };
         }
         break;
       }
@@ -2664,6 +2682,9 @@ async function runModify(
       }
       case 'modify-property': {
         if (args.propertyPath && args.propertyValue !== undefined) {
+          // OperationalDomain / SubscriberAccessLevel on a table or menu item: XML only, never the bridge.
+          const bpWrite = await directXmlSetBpAccessProperty(actualFilePath, objectType, objectName, args.propertyPath, args.propertyValue);
+          if (bpWrite) { if (!bpWrite.success) return { content: [{ type: 'text', text: bpWrite.message }], isError: true }; bridgeResult = viaXmlFallback(bpWrite); break; }
           const own = await directXmlModifyControlProperty(actualFilePath, objectType, objectName, args.propertyPath, String(args.propertyValue), (args as { controlName?: string }).controlName);
           if (own) { bridgeResult = viaXmlFallback(own); break; } // a control this file defines (own form, or one an extension adds)
           // ── Form extension targeting a BASE-FORM control ─────────────────────
@@ -2978,6 +2999,13 @@ async function runModify(
         }
         break;
       }
+      case 'add-duty': case 'remove-duty': case 'add-privilege': case 'remove-privilege': {
+        // Security objects have no bridge write path at all (see the writer).
+        bridgeResult = viaXmlFallback(await applySecurityReferenceOperation(actualFilePath, operation, args, {
+          objectType, symbolIndex, baseNames: baseObjectNameCandidates(objectName, modelName),
+        }));
+        break;
+      }
       case 'remove-diagnostic-suppression': {
         // Not an AOT object at all — no bridge write path exists (see the writer).
         const diagnosticPath = (args as any).diagnosticPath;
@@ -3197,6 +3225,7 @@ async function runModify(
         }
         break;
       }
+      case 'move-control': case 'wrap-controls': bridgeResult = await formStructureOp(operation, objectType, actualFilePath, args as any); break;
       case 'add-submenu': {
         // No C# op adds a submenu: XML only, on a menu and a menu extension alike.
         if ((args as any).submenuName) bridgeResult = viaXmlFallback(await directXmlAddSubmenu(actualFilePath, args as any, symbolIndex));
@@ -3752,6 +3781,9 @@ async function missingExtensionVerdict(
   let baseFound: string | null = null;
   for (const candidate of baseObjectNameCandidates(objectName, modelName)) {
     baseFound = await resolveD365FileByName(symbolIndex, baseType, candidate, undefined, packagePath);
+    // The name lookup reads security types in the configured model only, and the
+    // base of a role extension is usually Microsoft's: ask the index as well.
+    if (!baseFound && baseType.startsWith('security-')) baseFound = await findBaseObjectXml(baseType, candidate, symbolIndex);
     if (baseFound) break;
   }
   // Nothing to extend — fall through to the ordinary "file not found" answer,

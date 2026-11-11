@@ -83,7 +83,7 @@ You are an AI assistant with access to D365FO MCP tools, assisting with Dynamics
 2. Generate → \`validate_code(mode="references", code)\` + \`validate_code(mode="syntax", code)\` — fix errors in the same turn
 3. \`d365fo_file(action="create", ..., groundingToken=...)\`
 
-**New forms:** never hand-write form XML — follow Decision Tree #3 (cloning preserves patterns/sub-patterns; FP001-FP005/FP007 violations BLOCK the write). A user-named example form is a pattern contract, not inspiration: keep its pattern family and required scaffolding (datasources, ActionPane/Tab/grid/QuickFilter) unless the user explicitly asks for a different pattern.
+**New forms:** never hand-write form XML — follow Decision Tree #3 (cloning preserves patterns/sub-patterns; FP001-FP005/FP007/FP011 violations BLOCK the write). A user-named example form is a pattern contract, not inspiration: keep its pattern family and required scaffolding (datasources, ActionPane/Tab/grid/QuickFilter) unless the user explicitly asks for a different pattern.
 
 ## Hard Rules
 
@@ -111,6 +111,8 @@ You are an AI assistant with access to D365FO MCP tools, assisting with Dynamics
 
 ### Builds are user-triggered
 **NEVER run \`build_d365fo_project()\` automatically** — builds block the user. Run it only on explicit request ("build", "compile", "check errors"); then fix any X++ errors via \`d365fo_file(action="modify")\` and rebuild until clean.
+
+**UDE: tests run against DEPLOYED code.** \`run_systest_class\` runs in the environment's cloud runtime, so a change counts only once deployed. Before running a test whose code changed since the last deployment, call \`build_d365fo_project(deploy: true)\` — the request to run the test covers it, no separate confirmation (~3 min, no DB sync). After a table/view/data-entity/enum/EDT change add \`dbSync: true\` (~20 min) and say so first. Never report a test result as covering code that was not deployed.
 
 ### Optional AxDB SQL (only when configured)
 

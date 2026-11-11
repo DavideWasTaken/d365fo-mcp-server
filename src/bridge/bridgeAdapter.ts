@@ -1547,6 +1547,8 @@ const BRIDGE_MODIFY_OPS = new Set([
   // schema. Both this set AND XML_ONLY_MODIFY_PAIRS have to name it; either alone
   // still returns false. (eval case L2-object-delete-and-entry-point-cleanup)
   'remove-control', 'add-entry-point', 'remove-entry-point',
+  // The duty and privilege lists of a role or duty: XML-only for the same reason.
+  'add-duty', 'remove-duty', 'add-privilege', 'remove-privilege',
   // AxIgnoreDiagnosticList is not an AOT object at all — MetadataWriteService has
   // no concept of it — so this is XML-only for the same structural reason as the
   // two above.
@@ -1559,6 +1561,9 @@ const BRIDGE_MODIFY_OPS = new Set([
   // No C# op adds a submenu: served by a direct-XML writer on a menu (already in
   // BRIDGE_MODIFY_TYPES) and, through XML_ONLY_MODIFY_PAIRS, on a menu extension.
   'add-submenu',
+  // No C# op changes a control's parent: an AxForm's control tree is restructured by a
+  // direct-XML writer (formRestructure.ts; form is already in BRIDGE_MODIFY_TYPES).
+  'move-control', 'wrap-controls',
   // No C# op exists for query ranges on entities — served entirely by a
   // direct-XML writer (data-entity is already in BRIDGE_MODIFY_TYPES).
   'add-query-range', 'remove-query-range',
@@ -1599,6 +1604,10 @@ const BRIDGE_MODIFY_TYPES = new Set([
 const XML_ONLY_MODIFY_PAIRS: Record<string, ReadonlySet<string>> = {
   'add-entry-point': new Set(['security-privilege']),
   'remove-entry-point': new Set(['security-privilege']),
+  'add-duty': new Set(['security-role', 'security-role-extension']),
+  'remove-duty': new Set(['security-role', 'security-role-extension']),
+  'add-privilege': new Set(['security-role', 'security-role-extension', 'security-duty', 'security-duty-extension']),
+  'remove-privilege': new Set(['security-role', 'security-role-extension', 'security-duty', 'security-duty-extension']),
   'remove-diagnostic-suppression': new Set(['ignore-diagnostic-list']),
   'add-diagnostic-suppression': new Set(['ignore-diagnostic-list']),
   'add-module-reference': new Set(['model-descriptor']),

@@ -28,6 +28,374 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
+### Added
+- **`d365fo_file(action="modify", operation="modify-property")` sets OperationalDomain and
+  SubscriberAccessLevel on existing tables and menu items.** Menu items had no writer for
+  either (the bridge's setter has no case for them), and SubscriberAccessLevel holds child
+  elements no scalar writer can express, so the BP warnings on existing objects could not
+  be fixed with the tool. Both are now written on the XML for `table`,
+  `menu-item-action`, `menu-item-display` and `menu-item-output`, in canonical element
+  order, replacing an existing element. SubscriberAccessLevel takes `NoAccess`, `Read`,
+  `All`, `None` or an explicit `Read=Allow,Create=Deny` list (`All` is new). The reply
+  names the value xppbp expects when the one written differs: SubscriberAccessLevel on
+  tables and on menu items that open a class, OperationalDomain on tables only (for menu
+  items xppbp requires one but names no value). A menu item on a form or report gets no
+  hint: xppbp decides from its data sources (all TempDB gives Local and No Access). The after-write check reads SubscriberAccessLevel's child elements, so a correct
+  write is no longer reported as "NOT in the file".
+- **`add-relation` takes `relationOnDelete` and sets OnDelete on a relation that already
+  exists, on a table or a table extension.** BPCheckMissingDeleteActions on an existing
+  relation had no fix: add-relation had no OnDelete parameter and add-delete-action is
+  table-only. `relationOnDelete` (None, Restricted, Cascade, CascadeRestricted) is written
+  after Cardinality and before RelatedTable, as in shipped metadata. When the relation
+  exists only its OnDelete changes. A new relation gets it after the add.
+- **New table fields get the EDT or base enum they need, created first.** A field with only
+  a primitive type drew BPErrorTableFieldNotDefinedUsingType, and a field naming an EDT or
+  enum that did not exist failed the build (the scaffold refused it). `d365fo_file` create
+  of a table, `add-field` on a table or table extension (single or in `operations[]`) and
+  `generate_object` scaffold of a table now create the missing EDT (base type from the
+  field, or implied by its name, with its label and string size) or enum (values from
+  `enumValues` / `fieldEnumValues`, each labelled). A primitive-only field reuses the EDT of
+  its name and base type or gets a new one named after the field. An Int64 `…RecId` EDT
+  extends RefRecId. The type takes the field's label and the field drops its copy
+  (BPErrorFieldLabelIsCopyOf…). The reply lists every type created. `autoCorrect=false`
+  writes the fields as passed. Nothing is created when the symbol index cannot be read.
+- **`run_bp_check` (and `build_d365fo_project` with `bpCheck: true`) reports the
+  OperationalDomain and SubscriberAccessLevel warnings the Azure DevOps build reports.** The
+  build pipeline restores newer Microsoft build packages whose BP rules check both properties
+  on tables and menu items. The xppbp on a UDE has no such rule, so a clean local check met
+  them for the first time in the pull request build. The check now adds them, with the
+  pipeline's monikers and messages, under a "Reproduced pipeline rules (not reported by this
+  xppbp)" heading, as detail lines the findings section and the build summary count. They
+  are added only when xppbp reported none of them and its rule assemblies (`bin\BPExtensions`)
+  do not name them, so a platform that ships the real rules keeps its own answer. A whole-model
+  run checks every table and menu item of the model, a targeted run only a requested table or
+  menu item. A finding in the model's suppression list is left out, as the pipeline leaves it
+  out. Checked against an ISV model's pipeline log: 646 of 646 warnings, same object, rule and
+  message, none extra.
+- **Label false positives are marked.** A `BPErrorUnknownLabel` for a label that exists in the
+  model's label files, and a `BPUnusedStrFmtArgument` in the same method on a placeholder that
+  label has, get a "Likely label false positives" note. xppbp reports them when it cannot read
+  the compiled label assembly, so the note tells the caller not to create the label again.
+- **`run_systest_class` runs tests on UDE, in the environment's cloud runtime.** A UDE
+  machine has no local AOS, so SysTestConsole cannot run there; the tool now sends the
+  tests where Visual Studio sends them, through the Dataverse environment the UDE belongs
+  to. It reads the test methods from the class (and from base classes in the same model),
+  uploads a test request naming the built module assembly, starts the run, waits for it
+  and reports per method from the `.trx` it gets back, which it also saves. Tests run
+  against the code DEPLOYED to the environment, and the reply says so. `testMethod` now
+  runs that one method alone (`Class::method` is accepted too); `[SysTestInactiveTest]`
+  methods are reported as skipped, and a requested method that gets no result counts as
+  failed. Set the new `environment.dataverseUrl` (`D365FO_DATAVERSE_URL`) to the Dataverse
+  URL (not the Finance and Operations one; `pac org list` shows it). The first run in a
+  server process opens a sign-in page in the browser, and calls running at the same time
+  share it; tokens are kept in memory only. Tenants that block Microsoft's sample
+  Dataverse client can set `environment.dataverseClientId`, and guests
+  `environment.dataverseTenant`. `setup` asks for the URL on UDE.
+- **`build_d365fo_project(deploy: true)` deploys the built model to its UDE environment,
+  so `run_systest_class` tests the new code.** Tests on UDE run against the code deployed
+  to the cloud runtime, and until now only Visual Studio could deploy it. After a
+  successful build the tool now deploys the package that holds the model, and only that
+  package, through the same Power Platform Tools library Visual Studio uses. It signs in
+  with the server's own Dataverse token, so there is no second sign-in. By default it
+  deploys a Dev package without a database sync (about 3 minutes). With `dbSync` as well,
+  it deploys a Release package with a full sync in the environment (about 20 minutes),
+  which a table, view, data entity, enum or EDT change needs; together with `deploy`,
+  `dbSync` runs in the environment instead of a local SyncEngine. Success is read from
+  the environment's status lines, and a failed deployment makes the result an error
+  while the build verdict stands. A deploy that cannot happen (not a UDE, no
+  `environment.dataverseUrl`, a failed sign-in, or `restartAos` given as well) is refused
+  before anything is compiled. Needs Power Platform Tools for Visual Studio (a UDE
+  prerequisite) and Windows PowerShell 5.1. The library is undocumented: when an update
+  changes it, the tool says which members are missing and uploads nothing. The system
+  prompt and `copilot-instructions.md` now tell agents to deploy before running changed
+  tests on UDE, and to announce a full sync. The `run_systest_class` replies about
+  undeployed code point to `deploy: true`. On UDE, `doctor` reports whether Power
+  Platform Tools is installed, so a missing prerequisite shows up before the first
+  deployment fails. To keep the tool list's size, the descriptions of `wait` and
+  `waitTimeoutMs` are shorter; what they mean is unchanged.
+- **Binary-only ISV models are indexed (signatures only).** A model shipped as compiled
+  output (`bin\*.netmodule`, no `AxClass`/`AxForm` XML) used to yield nothing: `search`,
+  `get_object_info`, `labels`, `security_info` and `validate_code(mode="references")` knew
+  none of its classes, so every call into the ISV came back `unknown-type` and agents
+  invented members. The new `BinaryModelExtractor` (net48, Windows) reads such models through
+  `CreateRuntimeProvider` and `npm run extract-binary-models` imports them: classes, tables,
+  EDTs and enums as signatures (X++ types, defaults, modifiers, attributes), forms, queries,
+  views, data entities, maps, menu items, security and extensions through the stock
+  `extract-metadata` parsers, label texts from the `Resources` satellite assemblies, and the
+  compiler's chain-of-command record, so `extension_info(mode="coc")` lists wraps of binary
+  extension classes. No method body or source is stored; entries say "binary ISV, signatures
+  only". The import refuses a model whose references mostly do not resolve against the
+  platform it was read with (`--force` overrides). `build-database` also indexes label texts
+  found under `<METADATA_PATH>/<Model>/AxLabelFile`. `BinaryModelExtractor --models` takes
+  names and masks by module or display name (`Contoso*,!ContosoDemo*`); `--no-aot` skips the
+  object XML and labels when only signatures are needed; `--kernel` also dumps the platform
+  kernel (`Common`, `xRecord`, `Object`, ...) as the model `Kernel`. See docs/BINARY_ISV_MODELS.md.
+- **`d365fo_file(action="modify")` changes the duties and privileges of roles and duties.**
+  After `create` nothing could change these lists: the only way was
+  `create(overwrite=true)` with the complete list or hand-written XML, and
+  `security-role-extension` and `security-duty-extension` were not modifiable at all. The
+  new operations are `add-duty` / `remove-duty` (`dutyName`; on `security-role` and
+  `security-role-extension`) and `add-privilege` / `remove-privilege` (`privilegeName`; on
+  those and on `security-duty` and `security-duty-extension`). They take one name each, so
+  several go in `operations[]`. An add appends to the list, and a reference already there
+  is skipped and reported (names compare case-insensitively). A name the symbol index
+  knows only as the other kind is refused with the operation to use; an unknown name is
+  warned about and still written, and on an index with no such objects (a write-only
+  companion) the reply says it could not check. An add on an extension warns when the base
+  role or duty already holds the reference. A remove collapses an emptied list to
+  `<Duties />` / `<Privileges />`, answers a name that is not there with the list that is,
+  and refuses a name listed twice. A modify of a missing role or duty extension whose
+  standard base is in the index now offers the one `create` call that does it, and the
+  refusal to modify a standard role or duty names the extension types.
+- **`modify-field` turns a data entity's mapped field into a computed field.**
+  `computedFieldMethod` rewrites the entity's own mapped field as
+  `AxDataEntityViewUnmappedField<Type>` (type, EDT and enum read from the source
+  table field; system fields such as `CreatedDateTime` known without it) and writes
+  its static method in the same edit: `sourceCode` when given, an existing method of
+  that name, or a generated `SysComputedColumn::returnField` over the field it was
+  mapped to. A key field is refused. This used to take a rewrite of the whole entity
+  with `create` + `overwrite`.
+- **`move-control` and `wrap-controls` on a form.** Converting a form to a standard
+  pattern changes its nesting: fields go into a FieldsFieldGroups group, groups become
+  FastTab pages of a Tab, a grid moves under a TabPage. No operation changed a
+  control's parent, so the whole form was rewritten through `create` + `overwrite`.
+  `move-control` moves an existing control, with its subtree, under another parent at a
+  position. `wrap-controls` puts existing controls of one parent into a new Group, TabPage
+  or Tab with Pattern (PatternVersion defaults to the newest the catalogue knows), Caption
+  and Style, written in the shipped element order (a property the type never carries is
+  refused). Moved controls keep their XML byte for byte, only re-indented. The design's
+  own Pattern and PatternVersion are set with `modify-property`.
+- **Form pattern oracles.** `npm run catalog:form-patterns` regenerates the platform
+  definitions and property defaults from a local D365FO install.
+  `npm run oracle:form-patterns -- verdicts` runs the platform's `PatternAnalyzer`
+  (Windows, read only) over `tests/fixtures/formPatterns` and records its verdicts,
+  which `tests/validation/platformPatternMatcher.test.ts` holds the validator to in
+  CI. `npm run oracle:form-sweep` validates every shipped form and fails on any
+  error.
+
+### Changed
+- **`build_d365fo_project` and `run_systest_class` are no longer marked as closed-world
+  tools.** Both reach the UDE environment's cloud runtime (a deployment, tests in the
+  cloud), so their annotations drop `openWorldHint: false` and fall back to MCP's
+  default, open-world. Clients that ask for confirmation or show a warning before
+  open-world tools may now do so for these two. Every other tool keeps
+  `openWorldHint: false`.
+
+### Fixed
+- **New tables and menu items get the OperationalDomain and SubscriberAccessLevel xppbp
+  expects.** Neither writer set OperationalDomain, the bridge's property setters know
+  neither property on a menu item, and a Staging or TempDB table kept Visual Studio's
+  Read=Allow. Every create therefore drew BPCheckTableOperationalDomain… /
+  BPCheckTableSubscriberAccessLevel… / BPCheckMenuItemOperationalDomain… /
+  BPCheckMenuItemSubscriberAccessLevel… warnings. `d365fo_file(action="create")`,
+  `generate_object(mode="scaffold")` for tables and the report scaffold now write the
+  values the checker names in its messages: on a table Local and No Access for TempDB,
+  InMemory and Staging, otherwise Company (or Shared with SaveDataPerCompany=No) and
+  Read. On a menu item Local and No Access for an Action item, Shared and Read for
+  Display on a form and for Output, Shared and every permission for Display on a class.
+  A Display item on a form whose data sources are all Local (TempDB) tables gets Local and
+  No Access, read from the form and its tables in the index.
+  `properties.operationalDomain` and `properties.subscriberAccessLevel` (now also
+  `"No Access"`) override them. The reply lists what was written and why.
+- **A new table no longer fails the field-level best-practice rules.** After every table
+  create the server now makes PrimaryIndex and alternate-key fields AllowEdit=No and
+  Mandatory=Yes (BPErrorTablePrimaryKeyEditable / …NotMandatory, staging tables
+  included), puts a field that is in no field group into AutoReport and fills an empty
+  AutoReport (BPErrorTableFieldNotInFieldGroup, BPErrorTableMissingGroupAutoReport),
+  adds the table relation a field's EDT describes, TempDB tables included, except on the
+  key field the EDT itself points at (BPErrorEDTNotMigrated,
+  BPUpgradeMetadataEDTRelation), and gives every relation
+  OnDelete (default Restricted, or `relations[].onDelete`) plus Cardinality,
+  RelatedTableCardinality and RelationshipType when missing (BPCheckMissingDeleteActions,
+  BPErrorTableRelationshipPropertiesCompleteness). An explicit AllowEdit=Yes or
+  Mandatory=No and fields with `ignoreEdtRelation` are left alone.
+- **EDT relations point at the right field.** The scaffold took the related field from
+  the EDT name and the table from `edt_metadata.reference_table`, which holds only the
+  legacy ReferenceTable property. A CustAccount field got no relation at all, and an EDT
+  whose key field is named differently got a wrong one. The EDT's own `<Relations>` (or
+  `<TableReferences>`) is now read, so CustAccount relates to CustTable.AccountNum.
+- **The smart table writers no longer add a delete action that blocks deleting the new
+  table's own rows.** Both the bridge's CreateSmartTable and the XML builder wrote a
+  Restricted delete action on the new table for every relation target, pointing at the
+  parent table. That stopped a row from being deleted while its parent existed and drew
+  "DeleteAction X has no explicit relation set" (BPUpgradeMetadataDeleteAction). The
+  builder no longer writes it, the create removes the bridge's, and the relation's
+  OnDelete=Restricted protects the parent instead. A delete action that names its
+  relation, or comes from your own `xmlContent`, is kept.
+- **On UDE, a tool call made right after the server starts no longer misses the custom
+  metadata folder.** The server marked the XPP config as loaded before reading it had
+  finished, so a call arriving during that read (in practice the first few seconds after
+  `initialize`, while the bridge was being set up) saw no config: the custom packages path
+  was empty, so e.g. `run_systest_class` reported "class not found" for a class in the
+  custom model, and the environment counted as traditional instead of UDE. If the tool call
+  won the race, the bridge itself was set up without the custom metadata folder for the
+  whole session. Every caller now waits for the same read; an XPP config that cannot be
+  read is logged and treated as missing.
+- **A build, DB sync, BP check or test run no longer waits 15 minutes and fails on a lock
+  whose owner died, when Windows has given that owner's process id to another process.**
+  An operation lock records its owner's process id, and a lock whose owner is running is
+  never taken over. When the owner died without releasing the lock (a crash, a killed
+  server) and the id went to a new process, the lock looked held, and every caller waited
+  the full `OPERATION_LOCK_TIMEOUT_MS` and failed with "Timeout waiting for filesystem
+  lock". A lock whose owner has not refreshed it for three heartbeats (3 minutes by
+  default) is now checked: if the process with that id started after the lock was taken,
+  it cannot be the owner, and the lock is taken over. A restarted server that got the
+  crashed one's id no longer waits on itself either. While the start time cannot be read,
+  the lock is kept as before.
+- **`run_systest_class` on UDE said it could not find SysTestConsole, as if a path were
+  wrong.** No path can make it work: SysTestConsole only runs tests against a local AOS,
+  and on UDE the AOS is hosted in the cloud, so even where it is found it stops with
+  "Failed to obtain app setting ... Common.HostingEnvironment" before any test runs. On
+  UDE the tool no longer looks for it and runs the tests in the cloud runtime instead
+  (see *Added*). A classic VM detected as UDE can set `environment.type` to
+  `traditional`; the UDE setup replies say so.
+- **`build_d365fo_project` could report a build that started before your latest edits as
+  this call's result.** A call that found a build of the same model running attached to
+  it, without checking whether sources had changed since it started, and returned its
+  "✅ Build succeeded" for code it may never have compiled. A finished build was already
+  checked this way. Now such a call waits for the running build and the post-build steps
+  run for it in this server process, lets the calls waiting on it collect it, and then
+  builds the current sources, saying so in the result. When the check cannot finish in
+  time (a large model while the compiler is reading it), the call attaches as before and
+  says the result may not cover edits made after that build started.
+- **A call that attached to a running build lost the post-build steps it asked for.**
+  Only the call that collects the result runs `bpCheck` and `dbSync`, with its own
+  options, so `dbSync: true` from a second call that attached to someone's plain build
+  synced nothing; its result only noted that post-build steps ran once, for the other
+  call. That call now runs the steps it asked for that the collecting call did not
+  (`deploy` included). It never repeats one that already ran, and when several waiting
+  calls need the same step, it runs once and they share its result. When the build was
+  collected in another server process, the steps that cannot be confirmed are named, and
+  a missing `dbSync` or `deploy` makes the result an error.
+- **`build_d365fo_project` went silent while it ran `bpCheck` or `dbSync`.** After the
+  compile the tool sent no progress notifications, so a long best-practice check or sync
+  could outlast a client's request timeout (about a minute in VS Code), and the client gave
+  up on a call that was still working. Now a heartbeat runs during those steps, and the
+  progress value keeps increasing across all phases of the call, as MCP requires.
+- **`search(scope="extensions")` returns every custom object, and `prefix` is the object
+  prefix (#1212).** The scope is described as "custom/ISV models only", but it returned only
+  extension-shaped rows (`*_Extension`, `Base.SuffixExtension` and their members). New custom
+  classes, tables and helpers never appeared, and `type:"class"` could not bring them back.
+  `prefix`, described as an object prefix (`ISV_`), was matched against the model name, so a
+  model whose name does not start with its object prefix returned nothing at all. Now the
+  scope returns every symbol in a custom model, and `type:"class-extension"` (or another
+  `*-extension` type) narrows it to extensions. `prefix` matches the object name or, for a
+  member, the object it belongs to, and anywhere in an extension-shaped name. A model name
+  that starts with `prefix` still matches, so existing calls keep working. Results put an
+  exact name first, then extension-shaped rows (the old result set), then names that start
+  with the query. `model IN (custom models)` stays the leading predicate, so the
+  `idx_symbols_model` seek is unchanged. Result captions say "custom models" instead of
+  "custom extensions".
+- **Menu checks on a write-only companion: the other extensions of the base menu.** The
+  parent check of `add-menu-item-to-menu` and `add-submenu` on a `menu-extension`, and the
+  element-name checks of both (a submenu name already in use is refused, a repeated item
+  is named `<item>N`), read the other extensions of the base menu from the index only. A
+  write-only companion has no index, so a parent another extension adds was refused
+  there, and a name one of them uses was written and failed the next build ("The name '…'
+  is not unique"). Without index rows they are now read from the package folders
+  (`<root>/<Package>/<Model>/AxMenuExtension/<BaseMenu>.*.xml`); backup copies a modify
+  leaves next to a file (`….xml.backup-…`) are not read. The scan is the one that finds a
+  standard base menu (`findAotFilesInAllPackages`), now shared and taking the
+  package/model folder list once per process, and matching file names in any casing.
+- **`get_object_info` for a form no longer prints an empty code block per method** when the
+  index holds method names but no source (a compiled form).
+- **The cross-model guard no longer advises an extension that cannot compile.** A write
+  into the workspace's test model (or any model built on the workspace model) was refused
+  with "Extend it from <workspace model> instead: create class-extension …". The test
+  model references the workspace model, never the reverse, so the workspace model cannot
+  see the class, and that extension would not compile. Agents followed the advice, failed,
+  and fell back to creating tests in the main model and moving them by hand. The guard now
+  reads both descriptors when it refuses: for a model whose `<ModuleReferences>` lists the
+  workspace model, it says an extension is impossible and why, names the model as the
+  workspace's test model when the workspace model lists it in `<InternalsVisibleTo>`, and
+  drops the "half-finished pieces are evidence of a mistake" line, which does not hold
+  there. It still refuses: the only route remains the user's
+  `D365FO_CROSS_MODEL_WRITE_MODELS`. For a shared model the workspace builds on, the
+  original case, nothing changes, and with no descriptor found the wording is as before.
+- **`labels(action="create")` writes only the languages the label file has.** Every
+  folder under the model's shared `LabelResources` was treated as a language of the
+  target file, so a sibling label file's `ja` added a `.ja.label.txt` and a
+  descriptor to a file that never had Japanese. Supplied translations and an explicit
+  `languages` scope still add a language.
+- **X++ source round-trips exactly through `add-method`, `replace-code` and `create`.**
+  Every XML entity in the source was decoded, so a doc comment's `P&amp;L` became a
+  bare `&` (malformed XML documentation, BPXmlDocMalformed) and markup in string
+  literals changed. The decode now runs only on a payload that arrived
+  entity-encoded as a whole (no literal angle bracket, and an entity outside any
+  string literal).
+- **`modify-property` on a form's Design replaces the property in a CRLF file.** The
+  "already there" match expected `\n`, so on a saved (CRLF) form a second `<Pattern>`,
+  `<PatternVersion>` or `<Style>` was added beside the old one, and the deserializer kept
+  the old one. An empty value now removes a Design property instead of writing an empty
+  element, and the post-write check finds a value whose element carries `xmlns=""` and
+  makes no value check for a removal (both were reported as "NOT in the file").
+- **Form pattern validation now follows the platform's own pattern definitions.**
+  `object_patterns(domain="form", action="validate")` and the `FORM_PATTERN_ENFORCE`
+  gate on `d365fo_file` create checked forms against a catalog curated from the
+  Microsoft Learn pages, and where it disagreed with the compiler it blocked forms
+  that compile and passed forms that do not: it knew `TaskSingle` (the platform
+  pattern is `Task`), wanted `FillText` 1.0 with a String (the platform has only
+  "UX7 1.0", which takes a StaticText or a String), thought `ToolbarList` 1.1 was
+  newest (1.2 is), took a Group for the TaskParentChild child part (it is a Tab
+  after a splitter group) and never checked the property values the compiler
+  requires (a CustomFilters group needs ViewEditMode Edit, a FillText child
+  HeightMode SizeToAvailable). The validator now reads every FormPatterns and
+  SubPatterns definition embedded in `Microsoft.Dynamics.AX.Metadata.Patterns.dll`,
+  generated into `src/knowledge/formPatterns/platform.generated.ts` together with
+  the metamodel default of every property they name, and interprets them the way
+  the platform's `PatternAnalyzer` does: exact name and version, parts with their
+  counts and order, OneOf alternatives, allowed sub-patterns per part, extension
+  controls identified by their extension name, and property values checked at
+  their default when the XML omits them. New rule **FP011** (error) reports a
+  required property value that is not met. FP009 (curated property hints) is
+  retired. Measured on the shipped forms: the platform's `PatternAnalyzer` accepts
+  all 26,810 patterned nodes of the 9,502 shipped forms, and the validator raises
+  zero errors on them.
+- **Generators no longer emit pattern names and versions the compiler rejects.**
+  The curated catalog now uses the platform names (`Task`, `LookupGridOnly` for the
+  basic lookup, `SectionTiles`, `SectionRelatedLinks` and the other workspace
+  sections it had as `Workspace_Tiles` and similar) and the platform's version
+  lists, and drops `SidePanel` and `Workspace_SummaryNumbers_UnboundFields`, which
+  are not patterns. The Dialog template sets ColumnsMode Fill on its
+  FieldsFieldGroups pages and writes their Caption where the deserializer reads it,
+  the Workspace template adds the required related-links section, the DetailsMaster
+  template always emits the required header title control, and the pattern
+  expander writes control elements in canonical order and the Design Style the
+  platform requires.
+- **The pattern expander builds from the platform definition, so every long-tail
+  pattern gets a deterministic scaffold.** `generate_smart_form` expands patterns
+  without a hand-written template through `expandPatternToXml`, which walked the
+  curated catalog structure and built forms the platform rejects for 22 patterns
+  (the Dialog, DropDialog, Lookup, FormPart, SimpleDetails and workspace variants,
+  `Wizard`, `AdvancedSelection`), so those fell back to a template or clone. It now
+  reads the platform definition of the declared pattern version: one control per
+  required part in definition order (a OneOf only when none of its alternatives is
+  optional), every Equals property rule the metamodel default does not already
+  meet, a caption for a Caption or Text that must not be empty, a grid's
+  DefaultAction pointed at the sibling default-action button, and for a
+  sub-pattern part the first named sub-pattern (FieldsFieldGroups when listed),
+  declared and expanded in turn. A `$Button` part whose rule sets Command becomes a
+  CommandButton, a QuickFilter targets the emitted grid. All catalog patterns the
+  platform defines now expand validator-clean, and the expander test's gap list is
+  empty. The datasource, grid-field and caption behaviour is unchanged.
+  `npm run oracle:form-expansions` (Windows) runs every expansion through the
+  platform's own PatternAnalyzer, with a negative control that must fail: all 27
+  are accepted. It found what the validator cannot see, now fixed: a plain
+  extension control's WidthMode written after its FormControlExtension (the
+  deserializer drops it), duplicate column names when a pattern has two grids, a
+  QuickFilter aimed at the first grid of the form instead of its own, and an empty
+  `<Controls />` on buttons and fields, which shipped forms never write.
+
+### Dependencies
+- **New:** `@azure/msal-node` 7.1.1, for the Dataverse sign-in above. Pure JavaScript, no
+  native add-ons; with `@azure/msal-common` and `jsonwebtoken` (and their `jws`, `semver`
+  and `lodash.*` helpers) it adds 16 packages to the lockfile and changes none.
+- **Lockfile refreshed with `npm update`.** Runtime: `@azure/msal-node` 7.2.1,
+  `@clack/prompts` 1.9.0, `@modelcontextprotocol/sdk` 1.32.2, `commander` 15.1.0, `dotenv`
+  18.0.10, `express` 5.3.0, `express-rate-limit` 8.7.4, `zod` 4.6.7. Dev: `@biomejs/biome`
+  2.6.6, `@types/node` 26.6.6, `vitest` and `@vitest/coverage-v8` 5.1.0. The ranges in
+  `package.json` are unchanged.
+
 ## [1.23.0] — 2026-11-05
 
 ### Added

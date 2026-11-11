@@ -21,8 +21,12 @@ import { normalizeD365Xml } from '../../utils/d365XmlNormalizer.js';
 import { insertFormExtensionControl } from '../../utils/formExtensionControlXml.js';
 import { removeFormControl } from '../../utils/formControlRemoval.js';
 import { findBaseObjectXml } from '../../utils/baseObjectXml.js';
+import { findAotFilesInAllPackages } from '../../utils/objectFileLookup.js';
 import { checkNewControlPosition, findFormControl, formDefinesControl, placeFormControl, type PlaceFormControlSpec } from '../../utils/formControlPlacement.js';
 import { addSecurityEntryPoint, removeSecurityEntryPoint } from '../xml/securityPrivilegeXml.js';
+import {
+  addSecurityReference, removeSecurityReference, SECURITY_REFERENCE_SHAPES, type SecurityReferenceKind,
+} from '../xml/securityDutyRoleXml.js';
 import { type AddSubmenuResult, addMenuExtensionItem, addMenuExtensionSubmenu, menuElementNames, menuSubmenuNames } from '../xml/menuExtensionXml.js';
 import { addMenuItem, addMenuSubmenu } from '../xml/menuXml.js';
 import { removeDiagnosticSuppression, addDiagnosticSuppression, emptySuppressionListXml } from '../../utils/ignoreDiagnosticListXml.js';
@@ -30,6 +34,8 @@ import { buildSuppressionXml } from '../../knowledge/bpMonikers/index.js';
 import { upsertAxTableProperty, upsertAxTableSubscriberAccessLevel, AX_TABLE_NON_EXISTENT_PROPERTIES } from '../../utils/axTablePropertyOrder.js';
 import { describeSubscriberAccessLevel, subscriberAccessLevelValue } from '../../utils/subscriberAccessLevel.js';
 import { upsertAxFormDesignProperty } from '../../utils/axFormDesignProperties.js';
+import { bpAccessPropertyOf, isBpAccessObjectType, setBpAccessProperty } from '../xml/bpAccessPropertyModify.js';
+import { setRelationOnDelete } from '../xml/tableBpDefaults.js';
 import { upsertFormControlProperty } from '../../utils/formControlPropertyXml.js';
 import { resolveControlPropertyTarget } from '../../utils/formExtensionControlModifications.js';
 import { buildAxDataEntityViewFieldXml } from '../xml/dataEntityViewExtensionXml.js';
@@ -40,6 +46,8 @@ import {
 import { escapeXml } from '../../utils/xmlEscape.js';
 import { methodSourceSpans, occurrencesInSpans } from '../../utils/methodSourceSpans.js';
 import { upsertTableFieldProperty } from '../xml/tableFieldPropertyEdit.js';
+import type { RestructureResult } from '../xml/formRestructure.js';
+import { convertEntityFieldToComputed, type ComputedFieldType } from '../xml/entityComputedField.js';
 import {
   addModuleReference, removeModuleReference, parseModuleReferences, invalidateModelVisibility,
 } from '../../metadata/modelDescriptor.js';
@@ -136,6 +144,67 @@ export const directXmlReplaceCode = serializedOnFile(async (
     console.error(`[modify_d365fo_file] directXmlReplaceCode failed: ${err}`);
     return null;
   }
+});
+
+/**
+ * add-relation with relationOnDelete on a relation the table or table extension
+ * ALREADY has: sets <OnDelete> in place (tools/xml/tableBpDefaults.ts) instead of
+ * adding a second relation. Null when there is no relation of that name, so the
+ * dispatcher adds it. A failure result means nothing was written.
+ */
+export const directXmlSetRelationOnDelete = serializedOnFile(async (
+  filePath: string,
+  objectName: string,
+  relationName: string,
+  onDelete: string,
+): Promise<{ success: boolean; message: string } | null> => {
+  const before = (await fs.readFile(filePath, 'utf-8')).replace(/^﻿/, '');
+  const outcome = setRelationOnDelete(before, relationName, onDelete);
+  if (!outcome) return null;
+  if (!outcome.ok) {
+    return { success: false, message: `❌ Could not set OnDelete on relation '${relationName}' of ${objectName}: ${outcome.error} Nothing was written.` };
+  }
+  if (outcome.changed) await writeFileAtomic(filePath, normalizeD365Xml(outcome.xml));
+  return {
+    success: true,
+    message: outcome.changed
+      ? `✅ Relation '${relationName}' on ${objectName}: OnDelete=${outcome.value}` +
+        `${outcome.previous ? ` (was ${outcome.previous})` : ''}, written via direct XML in canonical element order. File: ${filePath}`
+      : `ℹ️ Relation '${relationName}' on ${objectName} already has OnDelete=${outcome.value}, nothing written. File: ${filePath}`,
+  };
+});
+
+/**
+ * modify-property OperationalDomain / SubscriberAccessLevel on a table or menu
+ * item, written on the XML and never by the bridge (no menu item case there,
+ * child elements on SubscriberAccessLevel). See tools/xml/bpAccessPropertyModify.ts.
+ * Null when the request is not one of these, so the dispatcher carries on; a
+ * failure result means nothing was written.
+ */
+export const directXmlSetBpAccessProperty = serializedOnFile(async (
+  filePath: string,
+  objectType: string,
+  objectName: string,
+  propertyPath: string,
+  propertyValue: unknown,
+): Promise<{ success: boolean; message: string } | null> => {
+  const property = bpAccessPropertyOf(propertyPath);
+  if (!property || !isBpAccessObjectType(objectType)) return null;
+  const before = (await fs.readFile(filePath, 'utf-8')).replace(/^﻿/, '');
+  const outcome = setBpAccessProperty(before, property, propertyValue);
+  if (!outcome) return null;
+  if (!outcome.ok) {
+    return { success: false, message: `❌ Could not set ${property} on ${objectName}: ${outcome.error} Nothing was written.` };
+  }
+  if (outcome.changed) await writeFileAtomic(filePath, normalizeD365Xml(outcome.xml));
+  return {
+    success: true,
+    message:
+      `${outcome.changed ? '✅' : 'ℹ️'} ${outcome.written} on ${objectName} via direct XML ` +
+      `(${outcome.changed ? 'in canonical element order' : 'already in that state, nothing written'}). ` +
+      `File: ${filePath}` +
+      (outcome.bpNote ? `\n⚠️ ${outcome.bpNote}` : ''),
+  };
 });
 
 /**
@@ -387,24 +456,35 @@ function renamedElementNote(menuItemName: string, elementName: string): string {
       `base menu and extensions included), so this element is named '${fromXmlText(elementName)}'; it still opens '${menuItemName.trim()}'.`;
 }
 
-/** The XML of the OTHER indexed extensions of `baseMenu`. */
+/**
+ * The XML of the OTHER extensions of `baseMenu`. From the index, or — when it has
+ * none (a write-only companion) — from the package folders.
+ */
 async function otherExtensionXmls(baseMenu: string, self: string, symbolIndex: any): Promise<string[]> {
-  let names: string[];
+  const prefix = `${baseMenu.toLowerCase()}.`;
+  let names: string[] = [];
   try {
     const rows = symbolIndex.getReadDb()
       .prepare(`SELECT DISTINCT name FROM symbols WHERE type = 'menu-extension' AND name LIKE ?`)
       .all(`${baseMenu}.%`) as { name: string }[];
     // LIKE reads `_` as a wildcard, so the prefix is confirmed here.
-    names = rows.map(r => r.name).filter(n =>
-      n.toLowerCase().startsWith(`${baseMenu.toLowerCase()}.`) && n.toLowerCase() !== self.toLowerCase());
-  } catch {
-    return [];
+    names = rows.map(r => r.name).filter(n => n.toLowerCase().startsWith(prefix) && n.toLowerCase() !== self.toLowerCase());
+  } catch { /* no index */ }
+  let xmls: Array<string | null>;
+  if (names.length > 0) {
+    xmls = await Promise.all(names.map(n => findBaseObjectXml('menu-extension', n, symbolIndex).catch(() => null)));
+  } else {
+    // `.xml` at the end: a modify outside git leaves `<file>.xml.backup-<time>` next to it.
+    const files = await findAotFilesInAllPackages('AxMenuExtension', f => {
+      const lower = f.toLowerCase();
+      return lower.startsWith(prefix) && lower.endsWith('.xml') && lower !== `${self.toLowerCase()}.xml`;
+    }).catch(() => []);
+    xmls = await Promise.all(files.map(f => fs.readFile(f, 'utf-8').catch(() => null)));
   }
-  const xmls = await Promise.all(names.map(n => findBaseObjectXml('menu-extension', n, symbolIndex).catch(() => null)));
   return xmls.filter((x): x is string => !!x);
 }
 
-/** Submenus the OTHER indexed extensions of `baseMenu` add; a <Parent> may name one. */
+/** Submenus the OTHER extensions of `baseMenu` add; a <Parent> may name one. */
 async function otherExtensionSubmenus(baseMenu: string, self: string, symbolIndex: any): Promise<string[]> {
   return (await otherExtensionXmls(baseMenu, self, symbolIndex)).flatMap(menuSubmenuNames);
 }
@@ -434,7 +514,7 @@ async function checkExtensionParent(
     return {
       refusal:
         `Submenu '${parent}' is not in menu '${baseMenu}', nor added by ${extensionName} or another extension ` +
-        `of it in the index — nothing was written. A <Parent> naming no submenu fails the build.\n` +
+        `of it — nothing was written. A <Parent> naming no submenu fails the build.\n` +
         `   Submenus: ${known.length ? known.map(fromXmlText).join(', ') : '(none — omit parentMenuElement for the top level)'}`,
     };
   }
@@ -2189,6 +2269,135 @@ export const directXmlRemoveEntryPoint = serializedOnFile(async (
   }
 });
 
+/** Why a file that is not a role, duty or extension cannot take this reference. */
+function noSecurityReferenceList(
+  filePath: string,
+  kind: SecurityReferenceKind,
+  root: string | undefined,
+  operation: string,
+): string {
+  const { container, objectTypes } = SECURITY_REFERENCE_SHAPES[kind];
+  return (
+    `${filePath} is ${root ? `an ${root}` : 'not an AOT object'}, which has no <${container}> list — ` +
+    `nothing was written. ${operation} applies to objectType=${objectTypes.map(t => `"${t}"`).join(' | ')}.`
+  );
+}
+
+/**
+ * add-duty / add-privilege on a role, duty or extension, written straight to the XML.
+ *
+ * XML-only for the reason add-entry-point is: security objects have no bridge write
+ * path. The insert lives in securityDutyRoleXml.ts, next to the builders that write
+ * the same element. `note` is what the checks against the index found, reported
+ * ahead of the result the way add-module-reference reports an unknown module.
+ */
+export const directXmlAddSecurityReference = serializedOnFile(async (
+  filePath: string,
+  kind: SecurityReferenceKind,
+  name: string,
+  note: string,
+): Promise<{ success: boolean; message: string; skipped?: boolean }> => {
+  const operation = `add-${kind}`;
+  const { container } = SECURITY_REFERENCE_SHAPES[kind];
+  try {
+    const rawContent = await fs.readFile(filePath, 'utf-8');
+    const content = rawContent.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+
+    const outcome = addSecurityReference(content, kind, name);
+    switch (outcome.kind) {
+      case 'unsupported':
+        return { success: false, message: noSecurityReferenceList(filePath, kind, outcome.root, operation) };
+      case 'invalid-name':
+        return {
+          success: false,
+          message:
+            `${JSON.stringify(name)} is not an AOT object name (letters, digits and '_') — nothing was ` +
+            `written. ${operation} takes ONE name; send several as operations[] entries.`,
+        };
+      case 'no-collection':
+        return {
+          success: false,
+          message:
+            `${filePath} has no <${container}> element to add to — nothing was written. ` +
+            `An object written by this tool or by Visual Studio always has one; a hand-edited file may not.`,
+        };
+      case 'already-present':
+        return {
+          success: true,
+          skipped: true,
+          message: `ℹ️ '${outcome.existing}' is already in <${container}> — nothing written (idempotent). File: ${filePath}`,
+        };
+    }
+
+    await writeFileAtomic(filePath, normalizeD365Xml(outcome.xml));
+    console.error(`[modify_d365fo_file] ✅ directXmlAddSecurityReference: added '${outcome.added}' to ${filePath}`);
+    return { success: true, message: `${note}✅ '${outcome.added}' added to <${container}>. File: ${filePath}` };
+  } catch (err) {
+    // Real error, not null — see directXmlAddModuleReference.
+    console.error(`[modify_d365fo_file] directXmlAddSecurityReference failed: ${err}`);
+    return {
+      success: false,
+      message: `❌ Could not add '${name}' to ${filePath}: ${err instanceof Error ? err.message : err}`,
+    };
+  }
+});
+
+/**
+ * remove-duty / remove-privilege on a role, duty or extension, written straight to
+ * the XML. The inverse of directXmlAddSecurityReference, XML-only for the same reason.
+ *
+ * An extension only lists what it adds, so a reference the BASE object carries comes
+ * back as not-found here. The reply says so, because the name can look right.
+ */
+export const directXmlRemoveSecurityReference = serializedOnFile(async (
+  filePath: string,
+  kind: SecurityReferenceKind,
+  name: string,
+): Promise<{ success: boolean; message: string }> => {
+  const operation = `remove-${kind}`;
+  const { container } = SECURITY_REFERENCE_SHAPES[kind];
+  try {
+    const rawContent = await fs.readFile(filePath, 'utf-8');
+    const content = rawContent.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+
+    const outcome = removeSecurityReference(content, kind, name);
+    switch (outcome.kind) {
+      case 'unsupported':
+        return { success: false, message: noSecurityReferenceList(filePath, kind, outcome.root, operation) };
+      case 'not-found':
+        return {
+          success: false,
+          message:
+            `'${name}' is not in <${container}> in ${filePath} — nothing was removed.\n` +
+            (outcome.present.length > 0
+              ? `<${container}> lists: ${outcome.present.join(', ')}.`
+              : `<${container}> is empty.`) +
+            (outcome.root.endsWith('Extension')
+              ? ` An extension lists only what it adds: a reference of the base object cannot be removed here.`
+              : ''),
+        };
+      case 'ambiguous':
+        return {
+          success: false,
+          message:
+            `'${name}' is listed ${outcome.matches.length} times in <${container}> — refusing to guess, since ` +
+            `removing one copy leaves the access in place. Nothing was removed. Fix the duplicate by hand ` +
+            `first: ${outcome.matches.join(', ')}.`,
+        };
+    }
+
+    await writeFileAtomic(filePath, normalizeD365Xml(outcome.xml));
+    console.error(`[modify_d365fo_file] ✅ directXmlRemoveSecurityReference: removed '${outcome.removed}' from ${filePath}`);
+    return { success: true, message: `✅ '${outcome.removed}' removed from <${container}>. File: ${filePath}` };
+  } catch (err) {
+    console.error(`[modify_d365fo_file] directXmlRemoveSecurityReference failed: ${err}`);
+    return {
+      success: false,
+      message: `❌ Could not remove '${name}' from ${filePath}: ${err instanceof Error ? err.message : err}`,
+    };
+  }
+});
+
 /**
  * remove-diagnostic-suppression on an AxIgnoreDiagnosticList, written straight
  * to the XML.
@@ -2986,6 +3195,67 @@ export const directXmlSetTableFieldProperties = serializedOnFile(async (
     return { success: true, message: `✅ Field property set via direct XML (canonical order): ${done.join(', ')}. File: ${filePath}` };
   } catch (err) {
     console.error(`[modify_d365fo_file] directXmlSetTableFieldProperties failed: ${err}`);
+    return null;
+  }
+});
+
+/**
+ * move-control / wrap-controls on an AxForm (formRestructure.ts). XML only: the bridge
+ * has no operation that changes a control's parent. Nothing is written when the edit is
+ * refused or the control already sits where it was asked to.
+ */
+export const directXmlRestructureForm = serializedOnFile(async (
+  filePath: string,
+  edit: (xml: string) => RestructureResult,
+): Promise<{ success: boolean; message: string; skipped?: boolean }> => {
+  const raw = await fs.readFile(filePath, 'utf-8');
+  const r = edit(raw.replace(/^﻿/, ''));
+  if (!r.ok) return { success: false, message: `❌ ${r.message} — nothing was written. File: ${filePath}` };
+  if (r.changed) await writeFileAtomic(filePath, normalizeD365Xml(r.xml));
+  return {
+    success: true,
+    ...(r.changed ? {} : { skipped: true }),
+    message: `${r.changed ? '✅' : 'ℹ️'} ${r.detail}. File: ${filePath}` + r.warnings.map(w => `\n⚠️ ${w}`).join(''),
+  };
+});
+
+/**
+ * modify-field computedFieldMethod on a data-entity: the mapped field becomes a computed
+ * (unmapped) field and its method lands in the same write, so the entity is never left
+ * pointing at a method it does not have. `source` = null keeps an existing method of that name.
+ */
+export const directXmlMakeEntityFieldComputed = serializedOnFile(async (
+  filePath: string,
+  spec: { fieldName: string; methodName: string; type: ComputedFieldType; source: string | null },
+): Promise<{ success: boolean; message: string } | null> => {
+  try {
+    const raw = await fs.readFile(filePath, 'utf-8');
+    const content = raw.replace(/^﻿/, '').replace(/\r\n/g, '\n');
+    if (!/<AxDataEntityView[\s>]/.test(content)) return null;
+    const conv = convertEntityFieldToComputed(content, spec.fieldName, spec.methodName, spec.type);
+    if (!conv.ok) return { success: false, message: `❌ modify-field: ${conv.message} — nothing was written.` };
+    const has = locateSourceCodeMethods(conv.xml)?.methodSpans.some(s => s.name.toLowerCase() === spec.methodName.toLowerCase());
+    if (!has && spec.source === null) {
+      return { success: false, message: `❌ modify-field: the entity has no method '${spec.methodName}' and none was given — nothing was written.` };
+    }
+    let xml = conv.xml;
+    if (spec.source !== null) {
+      const m = upsertSourceCodeMethod(xml, spec.methodName, spec.source.replace(/\r\n/g, '\n'));
+      if (!m.ok) return { success: false, message: `❌ modify-field: ${m.message} — nothing was written.` };
+      xml = m.xml;
+    }
+    await writeFileAtomic(filePath, normalizeD365Xml(xml));
+    const t = spec.type;
+    return {
+      success: true,
+      message:
+        `✅ Field '${spec.fieldName}' is now a computed field (AxDataEntityViewUnmappedField${t.baseType}` +
+        `${t.edt ? `, EDT ${t.edt}` : ''}${t.enumType ? `, enum ${t.enumType}` : ''}) with ComputedFieldMethod ` +
+        `'${spec.methodName}' (${spec.source === null ? 'existing method kept' : has ? 'method replaced' : 'method added'}). ` +
+        `A computed field is read only: build the model and sync the database. File: ${filePath}`,
+    };
+  } catch (err) {
+    console.error(`[modify_d365fo_file] directXmlMakeEntityFieldComputed failed: ${err}`);
     return null;
   }
 });

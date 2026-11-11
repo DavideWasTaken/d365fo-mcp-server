@@ -69,9 +69,7 @@ Model + prefix auto-applied.`,
         properties: {
           type: 'object',
           additionalProperties: true,
-          description:
-            '[create] Per-objectType creation properties (label, fields[], extends, enumValues[], primaryTable, …) — ' +
-            'per the op-spec lookup above.'
+          description: '[create] Per-objectType properties, per the op-spec lookup above.'
         },
         addToProject: { type: 'boolean', description: 'Add to the ACTIVE .rnrproj — keep the default.', default: true },
         projectPath: {
@@ -100,23 +98,24 @@ Model + prefix auto-applied.`,
             'add-field-modification',
             'add-data-source', 'add-control', 'remove-control',
             'add-entry-point', 'remove-entry-point',
+            'add-duty', 'remove-duty', 'add-privilege', 'remove-privilege',
             'remove-diagnostic-suppression', 'add-diagnostic-suppression',
             'add-module-reference', 'remove-module-reference',
             'add-enum-value', 'modify-enum-value', 'remove-enum-value',
-            'add-menu-item-to-menu', 'add-submenu',
+            'add-menu-item-to-menu', 'add-submenu', 'move-control', 'wrap-controls',
             'modify-property',
             'add-query-range', 'remove-query-range',
             'report-design',
           ],
           description:
             '[modify] REQUIRED unless using operations[]. add-method also UPDATES in place; ' +
-            'replace-code is the surgical oldCode→newCode path.'
+            'replace-code: surgical oldCode→newCode.'
         },
         operations: {
           type: 'array',
           maxItems: 20,
           description:
-            '[modify|create] PREFERRED for 2+ edits to the SAME object — ONE call, not one per edit. ' +
+            '[modify|create] PREFERRED for 2+ edits to the SAME object — ONE call. ' +
             'On create they run against the just-created object, under the name it actually got. ' +
             'Entries are {operation, …op-spec params}; objectType/objectName/modelName stay top-level. ' +
             'Applied in order, stopped at the first failure, per-operation results back.',
